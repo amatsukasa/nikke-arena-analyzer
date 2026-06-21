@@ -38,9 +38,11 @@ export function proxy(request: NextRequest) {
   }
 
   // ダッシュボード閲覧: ゲートパス必須（ログイン済みならゲートパス不要）
+  /*
   if (!siteSession && !authToken) {
     return NextResponse.redirect(new URL("/gate", request.url));
   }
+  */
 
   return NextResponse.next();
 }

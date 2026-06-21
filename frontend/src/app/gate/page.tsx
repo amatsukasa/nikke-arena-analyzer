@@ -15,7 +15,8 @@ export default function GatePage() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/gate', {
+	/* gate機能をいったん無効化する*/
+      /*const response = await fetch('/api/auth/gate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -28,6 +29,7 @@ export default function GatePage() {
       if (!response.ok) {
         throw new Error(data.message || 'ロックの解除に失敗しました。');
       }
+      */
 
       router.push('/');
       router.refresh();
@@ -38,6 +40,7 @@ export default function GatePage() {
     }
   };
 
+  /*
   return (
     <div className="flex flex-col justify-center items-center min-h-screen bg-slate-950 text-slate-100 px-4">
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl text-center">
@@ -80,4 +83,5 @@ export default function GatePage() {
       </div>
     </div>
   );
+  */
 }
