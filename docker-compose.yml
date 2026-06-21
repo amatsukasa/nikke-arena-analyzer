@@ -20,14 +20,15 @@ services:
       dockerfile: Dockerfile
     container_name: nikke_arena_backend
     ports:
-      - "8000:8000"
+      - "8000:5000"
     volumes:
       - ./backend:/app
+      - /app/node_modules
     environment:
       - DATABASE_URL=postgresql://postgres:password@db:5432/nikke_arena
     depends_on:
       - db
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: npm start
     restart: unless-stopped
 
   frontend:
@@ -37,12 +38,10 @@ services:
     container_name: nikke_arena_frontend
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+    # No volumes mapping to avoid overwriting production build inside container
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
-    command: sh -c "rm -rf /app/.next && npm install && npm run dev"
+    command: npm start
     restart: unless-stopped
 
 volumes:
