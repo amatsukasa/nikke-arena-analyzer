@@ -27,6 +27,7 @@ export default function SecretLoginPage() {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include', // 追加
         body: JSON.stringify({ email, password }),
       });
 

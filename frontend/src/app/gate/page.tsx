@@ -1,87 +1,85 @@
-'use client';
+﻿"use client";
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Lock } from "lucide-react";
 
 export default function GatePage() {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError("");
     setLoading(true);
-
     try {
-	/* gate機能をいったん無効化する*/
-      /*const response = await fetch('/api/auth/gate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      // サーバーサイドで検証 → HttpOnly Cookie 発行（クライアント側での照合は行わない）
+      const res = await fetch("/api/auth/gate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
+        credentials: "include",
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'ロックの解除に失敗しました。');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.detail || "パスコードが正しくありません。");
+        return;
       }
-      */
-
-      router.push('/');
+      router.push("/");
       router.refresh();
-    } catch (err: any) {
-      setError(err.message || '通信エラーが発生しました。');
+    } catch {
+      setError("サーバーとの通信に失敗しました。");
     } finally {
       setLoading(false);
     }
   };
 
-  /*
   return (
-    <div className="flex flex-col justify-center items-center min-h-screen bg-slate-950 text-slate-100 px-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl text-center">
-        <div className="text-4xl mb-4">🔒</div>
-        <h1 className="text-2xl font-bold text-slate-100">閲覧制限</h1>
-        <p className="text-slate-400 text-sm mt-2 mb-6">
-          このサイトは現在、関係者向けのテスト公開中です。閲覧するにはパスコードを入力してください。
-        </p>
-        
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 rounded-3xl shadow-2xl p-8">
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-16 h-16 rounded-2xl bg-blue-500/20 ring-1 ring-blue-500/40 flex items-center justify-center mb-4">
+            <Lock size={32} className="text-blue-400" />
+          </div>
+          <h1 className="text-2xl font-black text-white">閲覧制限</h1>
+          <p className="text-slate-400 text-sm mt-2 text-center">
+            このサイトは現在、関係者向けのテスト公開中です。<br />
+            閲覧するにはパスコードを入力してください。
+          </p>
+        </div>
+
         {error && (
-          <div className="bg-red-950/50 border border-red-800 text-red-300 px-4 py-3 rounded-lg text-sm mb-6 text-left">
+          <div className="mb-4 p-3 bg-red-500/10 ring-1 ring-red-500/30 rounded-xl text-red-400 text-sm font-bold">
             {error}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="text-left">
-            <label className="block text-slate-300 text-sm font-medium mb-2" htmlFor="passcode">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="passcode" className="block text-sm font-bold text-slate-400 mb-2">
               パスコード
             </label>
             <input
               id="passcode"
               type="password"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-950 transition"
-              placeholder="パスコードを入力"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="パスコードを入力"
               required
-              disabled={loading}
+              className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-500"
             />
           </div>
           <button
             type="submit"
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-lg transition disabled:opacity-50"
             disabled={loading}
+            className="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-lg"
           >
-            {loading ? '検証中...' : 'ロック解除'}
+            {loading ? "確認中..." : "ロック解除"}
           </button>
         </form>
       </div>
     </div>
   );
-  */
 }

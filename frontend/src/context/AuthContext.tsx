@@ -97,6 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const response = await fetch(url, {
       ...options,
+      credentials: 'include',
       headers
     });
 
