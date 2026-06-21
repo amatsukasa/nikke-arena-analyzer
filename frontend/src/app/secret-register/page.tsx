@@ -27,7 +27,7 @@ export default function SecretRegisterPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password, invite_code: inviteCode }), // Pythonのスキーマ「invite_code」に合わせる
+        body: JSON.stringify({ email, password, inviteCode: inviteCode }),// invite_codeをバックエンドのinviteCodeに合わせる 
       });
 
       const contentType = response.headers.get('content-type');
