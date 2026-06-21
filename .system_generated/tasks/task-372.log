@@ -1,0 +1,8 @@
+git : �p� 'git' �́A�R�}�h�b�g�A�֐�A�X�N�v�g �t�@�C�A�܂�͑�\�ȃv�O�̖�O�Ƃ�ĔF�܂�B�O�
+�L�q�Ă�邱�Ƃ�m�F�A�p�X�܂܂�Ă�ꍇ�͂�̃p�X�Ƃ�m�F�Ă�A�Ď�s�Ă�B
+�ꏊ �s:1 �:1
++ git log -n 5
++ ~~~
+    + CategoryInfo          : ObjectNotFound: (git:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 

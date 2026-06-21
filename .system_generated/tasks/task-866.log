@@ -1,0 +1,6 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T02:46:42+09:00
+Prompt: Check task-863 (volume scanning) status
+
+[2026-06-20T02:45:52+09:00] Still waiting. Remaining time: 50s
+[2026-06-20T02:45:58+09:00] Timer cancelled: agent received a message during wait.

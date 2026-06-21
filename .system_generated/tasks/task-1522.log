@@ -1,0 +1,13 @@
+#11 DONE 1.2s
+#12 exporting to image
+#12 exporting layers
+#12 exporting layers 271.8s done
+#12 exporting manifest sha256:226f304559ca0e8977ddf53cd69867a100464ef6ae4c24dbb28539fdb55249e1 0.1s done
+#12 exporting config sha256:4e52886fce8b63ce5440542b64051e7d94cf53137c58d4a4fa7a95ee18dea6b0 0.1s done
+#12 exporting attestation manifest sha256:542d3430ec24c3ab8790e17cb0c2c6f14e3ec233ddb16ea2a329da8d4158cf1f 0.0s done
+#12 exporting manifest list sha256:c497dc50e461f0322830bb5b98c6b7350bd59dc701299b1ba053486f4036ceb5 0.0s done
+#12 naming to docker.io/library/nikke-backend-test:latest done
+#12 unpacking to docker.io/library/nikke-backend-test:latest
+#12 unpacking to docker.io/library/nikke-backend-test:latest 255.7s done
+#12 DONE 527.9s
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/m4zsrp6qnjzm1sx1f0lwj1r2t

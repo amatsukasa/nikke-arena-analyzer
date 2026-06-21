@@ -1,0 +1,19 @@
+4.612 
+4.612 To fix it:
+4.612 - Ensure this file has either a default or "proxy" function export.
+4.612 
+4.612 Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+4.612 
+4.612 
+4.612     at ignore-listed frames
+------
+Dockerfile:19
+--------------------
+  17 |     
+  18 |     # Next.js スタンドアロンビルド
+  19 | >>> RUN npm run build
+  20 |     
+  21 |     # ===== Stage 2: 本番実行 =====
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/p1rhtutnbz3rx4crp7mbx5jpz

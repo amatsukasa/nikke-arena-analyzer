@@ -1,0 +1,4 @@
+{
+  "summary":  "Python script to patch page.tsx by injecting zero-data warning screen when no tournaments exist.",
+  "updatedAt":  "2026-06-19T18:11:02.400619900Z"
+}

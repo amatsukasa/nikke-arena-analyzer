@@ -1,0 +1,16 @@
+#13 [runner 4/5] COPY --from=builder /app/.next/static ./.next/static
+#13 DONE 0.1s
+#14 [runner 5/5] COPY --from=builder /app/public ./public
+#14 DONE 0.1s
+#15 exporting to image
+#15 exporting layers
+#15 exporting layers 1.9s done
+#15 exporting manifest sha256:2a57bc38529bcfe8a41d0c3b7427a183540890d847c80ebac6e57c24c53a9d00 0.0s done
+#15 exporting config sha256:e4f755ebb9bee5d1526dd6b51a7718366fbd2f93ec4564cc348bce76430b59de 0.0s done
+#15 exporting attestation manifest sha256:ea6913c7771356640228d6a5b3b7f4b0cfa410ee2a6382c779de1b33f13be3dc 0.0s done
+#15 exporting manifest list sha256:a052db17da00c26ae93d925a5ba8bc3092cc0d472be1e0e473f1d17a4b810f43 0.0s done
+#15 naming to docker.io/library/nikke-frontend-test:latest done
+#15 unpacking to docker.io/library/nikke-frontend-test:latest
+#15 unpacking to docker.io/library/nikke-frontend-test:latest 0.9s done
+#15 DONE 3.0s
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/bcsdfhp1uwd918g0k1diey525

@@ -1,0 +1,6 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T02:03:24+09:00
+Prompt: コンテナ起動確認用タイマー
+
+[2026-06-20T02:03:14+09:00] Still waiting. Remaining time: 10s
+[2026-06-20T02:03:24+09:00] Timer fired.

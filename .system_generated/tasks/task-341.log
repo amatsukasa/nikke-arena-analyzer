@@ -1,0 +1,110 @@
+time="2026-06-20T02:02:58+09:00" level=warning msg="C:\\Users\\youm3\\.gemini\\antigravity\\brain\\ec518f6a-c5b5-4935-a3bd-71616e26ed04\\docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+ Image ec518f6a-c5b5-4935-a3bd-71616e26ed04-backend Building 
+ Image ec518f6a-c5b5-4935-a3bd-71616e26ed04-frontend Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.40kB 0.0s done
+#1 DONE 0.0s
+
+#2 [frontend internal] load build definition from Dockerfile
+#2 transferring dockerfile: 434B 0.0s done
+#2 DONE 0.0s
+
+#3 [backend internal] load build definition from Dockerfile
+#3 transferring dockerfile: 693B 0.0s done
+#3 DONE 0.0s
+
+#4 [frontend internal] load metadata for docker.io/library/node:20-alpine
+#4 DONE 0.1s
+
+#5 [backend internal] load metadata for docker.io/library/python:3.11-slim
+#5 ...
+
+#6 [frontend internal] load .dockerignore
+#6 transferring context: 205B done
+#6 DONE 0.0s
+
+#7 [frontend 1/2] FROM docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+#7 resolve docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 0.0s done
+#7 DONE 0.0s
+
+#8 [frontend 2/2] WORKDIR /app
+#8 CACHED
+
+#9 [frontend] exporting to image
+#9 exporting layers 0.0s done
+#9 exporting manifest sha256:a6e59c8c2b27acadeedceacd3b154d0ea7296e37d464a9ee5fcc11acf48895dd 0.0s done
+#9 exporting config sha256:1c8ec0a08bd6563c7012d56f613ac3c0a4074d147094195002116e2542130dee 0.0s done
+#9 exporting attestation manifest sha256:67f2db3c199ee8ebdff73851286d0c43076313bc2c8ba5e1df3458d6b9b243f6 0.0s done
+#9 exporting manifest list sha256:28277379fb7ac108247e2dd70d5e72ac2f3b83515a0daf8582bf996a9287df5e 0.0s done
+#9 naming to docker.io/library/ec518f6a-c5b5-4935-a3bd-71616e26ed04-frontend:latest done
+#9 unpacking to docker.io/library/ec518f6a-c5b5-4935-a3bd-71616e26ed04-frontend:latest
+#9 unpacking to docker.io/library/ec518f6a-c5b5-4935-a3bd-71616e26ed04-frontend:latest 0.0s done
+#9 DONE 0.2s
+
+#10 [frontend] resolving provenance for metadata file
+#10 DONE 0.0s
+
+#5 [backend internal] load metadata for docker.io/library/python:3.11-slim
+#5 DONE 1.5s
+
+#11 [backend internal] load .dockerignore
+#11 transferring context: 2B done
+#11 DONE 0.0s
+
+#12 [backend 1/6] FROM docker.io/library/python:3.11-slim@sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca
+#12 resolve docker.io/library/python:3.11-slim@sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca 0.0s done
+#12 DONE 0.0s
+
+#13 [backend internal] load build context
+#13 transferring context: 22.02MB 5.0s
+#13 transferring context: 103.92MB 10.2s
+#13 transferring context: 199.66MB 15.3s
+#13 transferring context: 291.17MB 20.3s
+#13 transferring context: 381.87MB 25.3s
+#13 transferring context: 477.44MB 30.4s
+#13 transferring context: 585.31MB 35.4s
+#13 transferring context: 684.95MB 40.5s
+#13 transferring context: 782.14MB 45.6s
+#13 transferring context: 876.99MB 50.6s
+#13 transferring context: 967.14MB 55.7s
+#13 transferring context: 1.06GB 60.8s
+#13 transferring context: 1.15GB 65.8s
+#13 transferring context: 1.24GB 70.9s
+#13 transferring context: 1.33GB 76.0s
+#13 transferring context: 1.42GB 81.1s
+#13 transferring context: 1.54GB 86.1s
+#13 transferring context: 1.69GB 91.2s
+#13 transferring context: 1.84GB 96.2s
+#13 transferring context: 1.98GB 101.2s
+#13 transferring context: 2.14GB 106.3s
+#13 transferring context: 2.29GB 111.3s
+#13 transferring context: 2.42GB 116.5s
+#13 transferring context: 2.56GB 121.5s
+#13 transferring context: 2.71GB 126.5s
+#13 transferring context: 2.86GB 131.7s
+#13 transferring context: 3.01GB 136.7s
+#13 transferring context: 3.16GB 141.7s
+#13 transferring context: 3.30GB 146.8s
+#13 transferring context: 3.46GB 151.8s
+#13 transferring context: 3.61GB 156.8s
+#13 transferring context: 3.75GB 161.9s
+#13 transferring context: 3.89GB 166.9s
+#13 transferring context: 4.04GB 171.9s
+#13 transferring context: 4.19GB 177.0s
+#13 transferring context: 4.34GB 182.0s
+#13 transferring context: 4.49GB 187.2s
+#13 transferring context: 4.64GB 192.2s
+#13 transferring context: 4.79GB 197.3s
+#13 transferring context: 4.92GB 202.3s
+#13 transferring context: 5.03GB 207.5s
+#13 transferring context: 5.18GB 212.5s
+#13 transferring context: 5.26GB 217.5s
+#13 transferring context: 5.40GB 222.6s
+#13 transferring context: 5.50GB 227.7s
+#13 transferring context: 5.60GB 232.8s
+#13 transferring context: 5.67GB 238.0s
+#13 transferring context: 5.71GB 243.0s
+#13 transferring context: 5.81GB 248.0s
+#13 transferring context: 5.82GB 253.3s
+#13 transferring context: 5.92GB 258.3s
+#13 transferring context: 6.02GB 263.4s

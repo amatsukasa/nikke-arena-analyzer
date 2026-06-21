@@ -1,0 +1,7 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T23:41:45+09:00
+Prompt: 本番イメージの起動テスト結果を確認してください
+
+[2026-06-20T23:41:25+09:00] Still waiting. Remaining time: 20s
+[2026-06-20T23:41:35+09:00] Still waiting. Remaining time: 10s
+[2026-06-20T23:41:45+09:00] Timer fired.

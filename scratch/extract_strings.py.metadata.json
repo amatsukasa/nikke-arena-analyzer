@@ -1,0 +1,4 @@
+{
+  "summary":  "Python script to dump conversation history steps 350-390, resolving unpacking error by accessing tuple indices directly.",
+  "updatedAt":  "2026-06-19T17:50:54.926242600Z"
+}

@@ -1,0 +1,11 @@
+
+#11 11.20 Error occurred prerendering page "/". Read more: https://nextjs.org/docs/messages/prerender-error
+#11 11.20 Export encountered an error on /page: /, exiting the build.
+#11 11.22 ⨯ Next.js build worker exited with code: 1 and signal: null
+#11 ERROR: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+11.20 Error occurred prerendering page "/". Read more: https://nextjs.org/docs/messages/prerender-error
+11.20 Export encountered an error on /page: /, exiting the build.
+11.22 ⨯ Next.js build worker exited with code: 1 and signal: null
+ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+
+

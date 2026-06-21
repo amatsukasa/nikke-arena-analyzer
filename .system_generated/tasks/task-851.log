@@ -1,0 +1,16 @@
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+2026-06-19 17:44:53.920 UTC [1] LOG:  starting PostgreSQL 15.17 (Debian 15.17-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-06-19 17:44:53.921 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-06-19 17:44:53.921 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-06-19 17:44:53.925 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-06-19 17:44:53.934 UTC [29] LOG:  database system was shut down at 2026-06-19 17:40:50 UTC
+2026-06-19 17:44:53.946 UTC [1] LOG:  database system is ready to accept connections
+2026-06-19 17:45:30.464 UTC [1] LOG:  received fast shutdown request
+2026-06-19 17:45:30.466 UTC [1] LOG:  aborting any active transactions
+2026-06-19 17:45:30.468 UTC [1] LOG:  background worker "logical replication launcher" (PID 32) exited with exit code 1
+2026-06-19 17:45:30.469 UTC [27] LOG:  shutting down
+2026-06-19 17:45:30.471 UTC [27] LOG:  checkpoint starting: shutdown immediate
+2026-06-19 17:45:30.495 UTC [27] LOG:  checkpoint complete: wrote 41 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.009 s, sync=0.007 s, total=0.027 s; sync files=11, longest=0.002 s, average=0.001 s; distance=229 kB, estimate=229 kB
+2026-06-19 17:45:30.502 UTC [1] LOG:  database system is shut down

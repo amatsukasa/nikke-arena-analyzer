@@ -1,0 +1,11 @@
+time="2026-06-20T02:48:59+09:00" level=warning msg="C:\\Users\\youm3\\.gemini\\antigravity\\brain\\ec518f6a-c5b5-4935-a3bd-71616e26ed04\\docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+
+========================================
+DATABASE: temp_history.db
+========================================
+Total steps in DB: 591
+
+========================================
+DATABASE: temp_current.db
+========================================
+Total steps in DB: 911

@@ -1,0 +1,5 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T02:49:20+09:00
+Prompt: Check steps table query status
+
+[2026-06-20T02:49:06+09:00] Timer cancelled: agent received a message during wait.

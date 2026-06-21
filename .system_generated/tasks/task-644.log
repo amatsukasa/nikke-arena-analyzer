@@ -1,0 +1,15 @@
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+2026-06-19 17:32:21.350 UTC [1] LOG:  starting PostgreSQL 15.17 (Debian 15.17-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-06-19 17:32:21.353 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-06-19 17:32:21.353 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-06-19 17:32:21.358 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-06-19 17:32:21.368 UTC [29] LOG:  database system was interrupted; last known up at 2026-06-19 17:27:27 UTC
+2026-06-19 17:32:21.925 UTC [29] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-06-19 17:32:21.932 UTC [29] LOG:  redo starts at 0/192DEF0
+2026-06-19 17:32:21.932 UTC [29] LOG:  invalid record length at 0/192DF28: wanted 24, got 0
+2026-06-19 17:32:21.932 UTC [29] LOG:  redo done at 0/192DEF0 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-06-19 17:32:21.938 UTC [27] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-06-19 17:32:21.953 UTC [27] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.002 s, total=0.017 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB
+2026-06-19 17:32:21.959 UTC [1] LOG:  database system is ready to accept connections

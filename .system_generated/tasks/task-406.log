@@ -1,0 +1,6 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T02:09:00+09:00
+Prompt: 起動完了待ちタイマー（30秒）
+
+[2026-06-20T02:08:40+09:00] Still waiting. Remaining time: 20s
+[2026-06-20T02:08:42+09:00] Timer cancelled: agent received a message during wait.

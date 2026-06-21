@@ -1,0 +1,1 @@
+{"id":"08dd1b7e-101c-408f-9a60-f6b787ddbf6d", "recipient":"7f3658ca-115f-4b51-888a-74dd014893a1", "sender":"7f3658ca-115f-4b51-888a-74dd014893a1/task-355", "priority":"MESSAGE_PRIORITY_HIGH", "timestamp":"2026-06-19T17:06:33.404279600Z", "renderDetails":{"messageTitle":"タイマー設定: Timer has expired"}, "content":"Dockerビルド完了待ちタイマー（2分）"}

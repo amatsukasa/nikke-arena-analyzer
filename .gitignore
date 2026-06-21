@@ -1,0 +1,10 @@
+# uploads直下のファイルは無視
+backend/uploads/*
+
+# でもフォルダは残す
+!backend/uploads/**/
+
+# 必要なフォルダを明示的に許可（例）
+!backend/uploads/cropped/
+!backend/uploads/debug_match/
+!backend/uploads/templates/

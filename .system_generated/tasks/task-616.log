@@ -1,0 +1,45 @@
+Checking volume: 02af0ad10c1115d31714f3d3c08bea6d07366c317749b04b62fdb512b33b5d9d
+Could not connect to postgres on volume 02af0ad10c1115d31714f3d3c08bea6d07366c317749b04b62fdb512b33b5d9d.
+initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+initdb: hint: If you want to create a new database system, either remove or empty the directory "/var/lib/postgresql/data" or run initdb with an argument other than "/var/lib/postgresql/data".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+
+Checking volume: ec99eb23a7f2a2d9691ae221098dfc1225e53b5a25d7f800d4f6f6ebfe50637e
+Could not connect to postgres on volume ec99eb23a7f2a2d9691ae221098dfc1225e53b5a25d7f800d4f6f6ebfe50637e.
+initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+initdb: hint: If you want to create a new database system, either remove or empty the directory "/var/lib/postgresql/data" or run initdb with an argument other than "/var/lib/postgresql/data".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+
+Checking volume: 918a4be382363b64cc8bd49b549817b5d36861fa56edcee85584592cfeb23e82
+Could not connect to postgres on volume 918a4be382363b64cc8bd49b549817b5d36861fa56edcee85584592cfeb23e82.
+initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+initdb: hint: If you want to create a new database system, either remove or empty the directory "/var/lib/postgresql/data" or run initdb with an argument other than "/var/lib/postgresql/data".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+
+Checking volume: f1bc7d6f1ddef1a3556003edcdd3923d38f8609a9da229403df290b570fa19c6
+Could not connect to postgres on volume f1bc7d6f1ddef1a3556003edcdd3923d38f8609a9da229403df290b570fa19c6.
+initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+initdb: hint: If you want to create a new database system, either remove or empty the directory "/var/lib/postgresql/data" or run initdb with an argument other than "/var/lib/postgresql/data".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+
+Checking volume: f437e1592abb22866c7fecb02e6d397a87cde9ac951557a1d249448e2283ce45
+Could not connect to postgres on volume f437e1592abb22866c7fecb02e6d397a87cde9ac951557a1d249448e2283ce45.
+initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+initdb: hint: If you want to create a new database system, either remove or empty the directory "/var/lib/postgresql/data" or run initdb with an argument other than "/var/lib/postgresql/data".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+

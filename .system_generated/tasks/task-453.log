@@ -1,0 +1,7 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T02:21:29+09:00
+Prompt: frontendコピー完了待ちタイマー
+
+[2026-06-20T02:21:09+09:00] Still waiting. Remaining time: 20s
+[2026-06-20T02:21:19+09:00] Still waiting. Remaining time: 10s
+[2026-06-20T02:21:29+09:00] Timer fired.

@@ -1,0 +1,29 @@
+#11 13.59     at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:86135)
+#11 13.59     at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:104615)
+#11 13.59 Error occurred prerendering page "/". Read more: https://nextjs.org/docs/messages/prerender-error
+#11 13.59 Export encountered an error on /page: /, exiting the build.
+#11 13.62 ⨯ Next.js build worker exited with code: 1 and signal: null
+#11 ERROR: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+------
+ > [builder 7/7] RUN npm run build:
+13.59     at an (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:84267)
+13.59     at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:86086)
+13.59     at al (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:107860)
+13.59     at ao (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:105275)
+13.59     at aa (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:84619)
+13.59     at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:86135)
+13.59     at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:104615)
+13.59 Error occurred prerendering page "/". Read more: https://nextjs.org/docs/messages/prerender-error
+13.59 Export encountered an error on /page: /, exiting the build.
+13.62 ⨯ Next.js build worker exited with code: 1 and signal: null
+------
+Dockerfile:19
+--------------------
+  17 |     
+  18 |     # Next.js スタンドアロンビルド
+  19 | >>> RUN npm run build
+  20 |     
+  21 |     # ===== Stage 2: 本番実行 =====
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/d2fo2wft02q18jr1d7klu9wec

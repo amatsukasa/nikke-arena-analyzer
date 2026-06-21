@@ -1,0 +1,5 @@
+  · proxyClientMaxBodySize: "50mb"
+  · serverActions
+
+○ Compiling /secret-login ...
+ GET /secret-login?redirect=%2Ftournament%2F1 200 in 5.2s (next.js: 4.8s, proxy.ts: 17ms, application-code: 426ms)

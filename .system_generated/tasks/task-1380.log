@@ -1,0 +1,6 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-20T08:28:02+09:00
+Prompt: リダイレクトテストの結果を確認してください
+
+[2026-06-20T08:27:57+09:00] Still waiting. Remaining time: 5s
+[2026-06-20T08:28:02+09:00] Timer fired.

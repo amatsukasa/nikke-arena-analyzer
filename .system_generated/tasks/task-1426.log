@@ -1,0 +1,8 @@
+=== 認証API確認 ===
+✅ gate: True
+✅ login: admin@local.dev / role=admin
+✅ me: id=1, role=admin
+✅ users: 2 users
+✅ admin/all-characters (auth済み): 0 chars
+
+=== フロントエンドルート確認 ===

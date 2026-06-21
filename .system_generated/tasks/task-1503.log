@@ -1,0 +1,34 @@
+
+> app@0.1.0 build
+> next build
+
+Attention: Next.js now collects completely anonymous telemetry regarding usage.
+This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+
+▲ Next.js 16.2.4 (Turbopack)
+- Experiments (use with caution):
+  · proxyClientMaxBodySize: "50mb"
+  · serverActions
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 4.8s
+  Running TypeScript ...
+  Finished TypeScript in 7.2s ...
+  Collecting page data using 15 workers ...
+  Generating static pages using 15 workers (0/10) ...
+⨯ useSearchParams() should be wrapped in a suspense boundary at page "/". Read more: https://nextjs.org/docs/messages/missing-suspense-with-csr-bailout
+    at S (/app/.next/server/chunks/ssr/node_modules_next_0w2y7fz._.js:2:2692)
+    at r (/app/.next/server/chunks/ssr/node_modules_next_0w2y7fz._.js:4:6760)
+    at /app/.next/server/chunks/ssr/src_app_page_tsx_0ss2.w7._.js:1:278
+    at an (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:84267)
+    at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:86086)
+    at al (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:107860)
+    at ao (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:105275)
+    at aa (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:84619)
+    at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:86135)
+    at ai (/app/node_modules/next/dist/compiled/next-server/app-page-turbo.runtime.prod.js:2:104615)
+Error occurred prerendering page "/". Read more: https://nextjs.org/docs/messages/prerender-error
+Export encountered an error on /page: /, exiting the build.
+⨯ Next.js build worker exited with code: 1 and signal: null

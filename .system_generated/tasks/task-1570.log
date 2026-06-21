@@ -1,0 +1,9 @@
+#12 exporting manifest sha256:d43eb2611e1eba01d95ade5e2daafd09e2f0a1ce78b7f900f1e272b86654313e 0.0s done
+#12 exporting config sha256:9f75b568789e7c8f72540189d96affa2f6667b9a4a9a229d32d313a9499da10d 0.0s done
+#12 exporting attestation manifest sha256:03c5cc422dcf08591f15e5e85417775cad6e8dd3a0a0af34daf09089c00017bd 0.0s done
+#12 exporting manifest list sha256:a8290c67178edc6da9071c67b852e409ad05631577f78cb9c57dca4887a26a01
+#12 exporting manifest list sha256:a8290c67178edc6da9071c67b852e409ad05631577f78cb9c57dca4887a26a01 0.0s done
+#12 naming to docker.io/library/nikke-backend-test:latest done
+#12 unpacking to docker.io/library/nikke-backend-test:latest 0.1s done
+#12 DONE 0.4s
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/yrxttuipxa55yao3agz6ed26q
