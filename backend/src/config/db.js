@@ -21,6 +21,18 @@ const initDb = async () => {
     );
   `;
 
+  const createChampionshipsTableQuery = `
+    CREATE TABLE IF NOT EXISTS championships (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      date DATE NOT NULL,
+      start_date DATE NOT NULL,
+      owner_name VARCHAR(255),
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
   const createTournamentsTableQuery = `
     CREATE TABLE IF NOT EXISTS tournaments (
       id SERIAL PRIMARY KEY,
@@ -28,6 +40,7 @@ const initDb = async () => {
       stage VARCHAR(100) NOT NULL,
       winner_team VARCHAR(255) NOT NULL,
       loser_team VARCHAR(255) NOT NULL,
+      championship_id INTEGER REFERENCES championships(id) ON DELETE SET NULL,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -39,8 +52,16 @@ const initDb = async () => {
     
     // ユーザーテーブル作成
     await client.query(createUsersTableQuery);
+    // 大会管理テーブル作成
+    await client.query(createChampionshipsTableQuery);
     // 大会データテーブル作成
     await client.query(createTournamentsTableQuery);
+
+    // 既存のtournamentsテーブルにchampionship_idカラムがなければ追加
+    await client.query(`
+      ALTER TABLE tournaments 
+      ADD COLUMN IF NOT EXISTS championship_id INTEGER REFERENCES championships(id) ON DELETE SET NULL;
+    `);
     
     console.log('テーブルが準備されました。');
     

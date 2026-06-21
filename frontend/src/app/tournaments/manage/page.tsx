@@ -8,7 +8,7 @@ interface Tournament {
   id: number;
   name: string;
   date: string;
-  season?: string;
+  start_date: string;
   owner_name?: string;
 }
 
@@ -18,11 +18,12 @@ export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState<number | null>(null);
   const [newTournamentName, setNewTournamentName] = useState("");
-  const [newSeason, setNewSeason] = useState("β30");
   const [newOwnerName, setNewOwnerName] = useState("");
+  const [newDate, setNewDate] = useState("");
+  const [newStartDate, setNewStartDate] = useState("");
   
   useEffect(() => {
-    fetch("/api/tournaments")
+    fetch("/api/championships")
       .then(res => res.json())
       .then(data => setTournaments(data))
       .catch(err => console.error(err));
@@ -31,8 +32,9 @@ export default function Home() {
   const openCreateModal = () => {
     setEditTournamentId(null);
     setNewTournamentName(`第${tournaments.length + 1}回 チャンピオンアリーナ`);
-    setNewSeason("β30");
     setNewOwnerName("");
+    setNewDate(new Date().toISOString().split('T')[0]);
+    setNewStartDate("");
     setIsModalOpen(true);
   };
 
@@ -40,37 +42,43 @@ export default function Home() {
     e.preventDefault();
     setEditTournamentId(t.id);
     setNewTournamentName(t.name);
-    setNewSeason(t.season || "");
     setNewOwnerName(t.owner_name || "");
+    setNewDate(t.date ? t.date.split('T')[0] : new Date().toISOString().split('T')[0]);
+    setNewStartDate(t.start_date ? t.start_date.split('T')[0] : "");
     setIsModalOpen(true);
   };
 
   const handleSave = () => {
     if (!newTournamentName.trim()) return;
+    if (!newDate) {
+      alert("開催日を入力してください。");
+      return;
+    }
+    if (!newStartDate) {
+      alert("指揮官のゲーム開始日を入力してください。");
+      return;
+    }
     
+    const body = {
+      name: newTournamentName.trim(),
+      date: newDate,
+      start_date: newStartDate,
+      owner_name: newOwnerName.trim() || null
+    };
+
     if (editTournamentId) {
       // 編集モード
-      fetch(`/api/tournaments/${editTournamentId}`, {
+      fetch(`/api/championships/${editTournamentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          name: newTournamentName.trim(), 
-          date: tournaments.find(t => t.id === editTournamentId)?.date || new Date().toISOString().split('T')[0],
-          season: newSeason.trim() || null,
-          owner_name: newOwnerName.trim() || null
-        })
+        body: JSON.stringify(body)
       }).then(() => window.location.reload());
     } else {
       // 新規作成モード
-      fetch("/api/tournaments", {
+      fetch("/api/championships", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          name: newTournamentName.trim(), 
-          date: new Date().toISOString().split('T')[0],
-          season: newSeason.trim() || null,
-          owner_name: newOwnerName.trim() || null
-        })
+        body: JSON.stringify(body)
       }).then(() => window.location.reload());
     }
   };
@@ -79,7 +87,7 @@ export default function Home() {
     e.preventDefault(); // リンクへの遷移を防ぐ
     if (!window.confirm("この大会を削除してもよろしいですか？")) return;
 
-    fetch(`/api/tournaments/${id}`, {
+    fetch(`/api/championships/${id}`, {
       method: "DELETE",
     }).then(() => window.location.reload());
   };
@@ -137,9 +145,9 @@ export default function Home() {
                     <div>
                       <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
                       <div className="text-sm text-slate-500 mt-1 flex items-center space-x-3">
-                        <span>{t.date}</span>
-                        {t.season && <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs">{t.season}</span>}
-                        {t.owner_name && <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded text-xs">{t.owner_name}</span>}
+                        <span>開催日: {t.date ? t.date.split('T')[0] : ""}</span>
+                        {t.start_date && <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs">開始時期: {t.start_date.split('T')[0]}</span>}
+                        {t.owner_name && <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded text-xs">提供者: {t.owner_name}</span>}
                       </div>
                     </div>
                     <div className="flex items-center space-x-4">
@@ -189,11 +197,20 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">開催期間 (例: β30)</label>
+                <label className="block text-sm font-medium text-slate-400 mb-2">開催日</label>
                 <input 
-                  type="text" 
-                  value={newSeason}
-                  onChange={(e) => setNewSeason(e.target.value)}
+                  type="date" 
+                  value={newDate}
+                  onChange={(e) => setNewDate(e.target.value)}
+                  className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-400 mb-2">指揮官のゲーム開始日</label>
+                <input 
+                  type="date" 
+                  value={newStartDate}
+                  onChange={(e) => setNewStartDate(e.target.value)}
                   className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
                 />
               </div>

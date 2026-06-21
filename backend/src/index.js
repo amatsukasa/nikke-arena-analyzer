@@ -7,6 +7,7 @@ const { initDb } = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+const championshipRoutes = require('./routes/championshipRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -46,6 +47,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/tournaments', dashboardRoutes);
+app.use('/api/championships', championshipRoutes);
 
 // グローバルエラーハンドラー
 app.use((err, req, res, next) => {

@@ -59,7 +59,7 @@ exports.getTournaments = async (req, res) => {
 
 // 大会データの新規登録（認証が必要）
 exports.createTournament = async (req, res) => {
-  const { name, stage, winner_team, loser_team } = req.body;
+  const { name, stage, winner_team, loser_team, championship_id } = req.body;
 
   if (!name || !stage || !winner_team || !loser_team) {
     return res.status(400).json({ message: 'すべての必須項目を入力してください。' });
@@ -67,10 +67,10 @@ exports.createTournament = async (req, res) => {
 
   try {
     const result = await db.query(
-      `INSERT INTO tournaments (name, stage, winner_team, loser_team, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO tournaments (name, stage, winner_team, loser_team, created_by, championship_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [name, stage, winner_team, loser_team, req.user.id]
+      [name, stage, winner_team, loser_team, req.user ? req.user.id : null, championship_id || null]
     );
 
     return res.status(201).json({
