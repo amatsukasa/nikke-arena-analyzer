@@ -73,17 +73,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     document.cookie = `role=${newUser.role}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
   };
 
-  const logout = () => {
+  const logout = async () => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     
     // Cookieもクリア
-    document.cookie = 'auth_token=; path=/; max-age=0';
-    document.cookie = 'token=; path=/; max-age=0';
-    document.cookie = 'role=; path=/; max-age=0';
-    router.push('/');
+    document.cookie = 'auth_token=; path=/; max-age=0; path=/';
+    document.cookie = 'token=; path=/; max-age=0; path=/';
+    document.cookie = 'role=; path=/; max-age=0; path=/';
+    document.cookie = 'site_session=; path=/; max-age=0; path=/';
+    
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.error('Failed to logout via server api', e);
+    }
+    
+    // router.push('/') を呼ぶ前に、画面を強制的にリロードしてミドルウェア判定を走らせる
+    window.location.href = '/';
   };
 
   const apiFetch = async (url: string, options: RequestInit = {}) => {

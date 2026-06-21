@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2 } from "lucide-react";
+import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut } from "lucide-react";
+import { useAuth } from "../../../context/AuthContext";
 
 interface Tournament {
   id: number;
@@ -12,6 +13,7 @@ interface Tournament {
 }
 
 export default function Home() {
+  const { logout } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState<number | null>(null);
@@ -111,6 +113,13 @@ export default function Home() {
               >
                 <PlusCircle size={18} />
                 <span>新規大会を作成</span>
+              </button>
+              <button 
+                onClick={logout}
+                className="flex items-center space-x-2 px-4 py-2 bg-red-650 hover:bg-red-500 ring-1 ring-red-500/20 text-red-400 hover:text-white rounded-full font-bold shadow-lg transition-all active:scale-95"
+              >
+                <LogOut size={16} />
+                <span className="text-sm">ログアウト</span>
               </button>
             </div>
           </div>

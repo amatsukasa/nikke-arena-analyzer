@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     if (password === sitePassword) {
       // cookies() を await することで、Next.js 15 の非同期化に対応しつつ、14以前のバージョンでも動作させます。
       const cookieStore = await cookies();
-      cookieStore.set('site_unlocked', password, {
+      cookieStore.set('site_session', password, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         path: '/',

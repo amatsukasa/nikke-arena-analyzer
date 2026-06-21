@@ -46,7 +46,7 @@ export default function SecretLoginPage() {
       }
 
       // AuthContextにトークンとユーザー情報を保存
-      login(data.access_token, data.user);
+      login(data.token || data.access_token, data.user);
       
       // リダイレクト先があればそこへ、無ければトップへ
       const searchParams = new URLSearchParams(window.location.search);

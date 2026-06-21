@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 /**
  * Next.js 16.x proxy によるルート保護
@@ -38,11 +38,9 @@ export function proxy(request: NextRequest) {
   }
 
   // ダッシュボード閲覧: ゲートパス必須（ログイン済みならゲートパス不要）
-  /*
   if (!siteSession && !authToken) {
     return NextResponse.redirect(new URL("/gate", request.url));
   }
-  */
 
   return NextResponse.next();
 }
