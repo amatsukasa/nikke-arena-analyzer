@@ -14,6 +14,15 @@ class User(Base):
 
     tournaments = relationship("Tournament", back_populates="creator")
 
+class AppUser(Base):
+    __tablename__ = "app_users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, default="contributor") # "admin" or "contributor"
+    is_banned = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class Character(Base):
     __tablename__ = "characters"
     id = Column(Integer, primary_key=True, index=True)
@@ -23,8 +32,22 @@ class Character(Base):
     burst_phase = Column(String, nullable=True) # "1", "2", "3", "A"
     manufacturer = Column(String, nullable=True)
     rarity = Column(String)  # SSR, SR, R
+    class_type = Column(String, nullable=True) # "火力型", "支援型", "防御型"
     is_template_available = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Championship(Base):
+    __tablename__ = "championships"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    date = Column(Date, nullable=False)
+    start_date = Column(Date, nullable=False)
+    owner_name = Column(String, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    creator = relationship("User", foreign_keys=[created_by])
+    tournaments = relationship("Tournament", back_populates="championship")
 
 class Tournament(Base):
     __tablename__ = "tournaments"
@@ -33,12 +56,14 @@ class Tournament(Base):
     date = Column(Date, nullable=False)
     season = Column(String, nullable=True) # e.g. "β30", "β31"
     owner_name = Column(String, nullable=True) # データ提供者
+    championship_id = Column(Integer, ForeignKey("championships.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     creator = relationship("User", back_populates="tournaments")
+    championship = relationship("Championship", back_populates="tournaments")
     players = relationship("Player", back_populates="tournament")
     matches = relationship("Match", back_populates="tournament")
 

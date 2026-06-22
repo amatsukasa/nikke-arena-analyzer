@@ -20,15 +20,20 @@ services:
       dockerfile: Dockerfile
     container_name: nikke_arena_backend
     ports:
-      - "8000:5000"
+      - "8000:8000"
     volumes:
       - ./backend:/app
-      - /app/node_modules
     environment:
       - DATABASE_URL=postgresql://postgres:password@db:5432/nikke_arena
+      - SECRET_KEY=dev-secret-key-local-only
+      - SITE_PASSWORD=test2026
+      - INVITE_CODE=dev-invite
+      - FIRST_ADMIN_EMAIL=admin@example.com
+      - FIRST_ADMIN_PASSWORD=admin123
+      - CORS_ORIGINS=http://localhost:3000
     depends_on:
       - db
-    command: npm start
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
 
   frontend:
@@ -41,7 +46,7 @@ services:
     # No volumes mapping to avoid overwriting production build inside container
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - API_URL=http://backend:5000
+      - API_URL=http://backend:8000
       - SITE_PASSWORD=test2026
     command: npm start
     restart: unless-stopped

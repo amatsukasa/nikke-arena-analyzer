@@ -9,6 +9,7 @@ class CharacterBase(BaseModel):
     burst_phase: Optional[str] = None
     manufacturer: Optional[str] = None
     rarity: Optional[str] = None
+    class_type: Optional[str] = None
     is_template_available: bool = False
 
 class Character(CharacterBase):
@@ -16,11 +17,27 @@ class Character(CharacterBase):
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+class ChampionshipBase(BaseModel):
+    name: str
+    date: date
+    start_date: date
+    owner_name: Optional[str] = None
+
+class ChampionshipCreate(ChampionshipBase):
+    pass
+
+class ChampionshipResponse(ChampionshipBase):
+    id: int
+    created_at: datetime
+    created_by: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
 class TournamentBase(BaseModel):
     name: str
     date: date
     season: Optional[str] = None
     owner_name: Optional[str] = None
+    championship_id: Optional[int] = None
 
 class Tournament(TournamentBase):
     id: int

@@ -112,6 +112,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       headers
     });
 
+    if (response.status === 401) {
+      alert('セッションの期限が切れました。再度ログインしてください。');
+      logout();
+    }
+
     if (response.status === 403) {
       const data = await response.clone().json().catch(() => ({}));
       if (data.detail && data.detail.includes('BAN')) {

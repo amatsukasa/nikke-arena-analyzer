@@ -1,18 +1,51 @@
+﻿# Python キャッシュ
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.git
-.github
-.vscode
-.venv
-venv
-ENV
-env
+.Python
+
+# 環境設定
+.env
+.env.*
+
+# データベース（本番では PostgreSQL を使用）
+nikke_arena.db
 *.db
 *.sqlite3
-cropped_test/
+
+# 全ての PNG/画像ファイルを除外（mask.png と empty_face_*.png は除く）
 *.png
-*.jpg
-*.jpeg
-*.log
+!mask.png
+!empty_face_0.png
+!empty_face_1.png
+!empty_face_2.png
+!empty_face_3.png
+!empty_face_4.png
+
+# デバッグ・開発用スクリプト
+debug_*.py
+test*.py
+script.py
+save_*.py
+
+# テスト・デバッグディレクトリ
+cropped_test/
+scripts/
+
+# バージョン管理
+.git
+.gitignore
+
+# Node.js（Python プロジェクトには不要）
+node_modules/
+package.json
+package-lock.json
+
+# SQLite 移行スクリプト（本番不要）
+migrate_sqlite_to_postgres.py
+
+# アップロード済み画像（永続ボリュームで管理するため、イメージには含めない）
+uploads/
+
+# alembic はランタイム起動時に使うため含める（除外しない）

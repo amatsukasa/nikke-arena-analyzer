@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../../../context/AuthContext';
 
-export default function RegisterTournamentPage() {
+function RegisterForm() {
   const { user, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const championshipId = searchParams.get('championship_id');
 
   const [name, setName] = useState('');
   const [stage, setStage] = useState('決勝');
@@ -22,6 +24,23 @@ export default function RegisterTournamentPage() {
       router.push('/secret-login');
     }
   }, [isLoading, token, router]);
+
+  // 大会情報が指定されている場合、デフォルトの大会名を取得して設定
+  useEffect(() => {
+    if (championshipId) {
+      fetch(`/api/championships/${championshipId}`)
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error();
+        })
+        .then(data => {
+          if (data && data.name) {
+            setName(data.name);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [championshipId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,6 +64,7 @@ export default function RegisterTournamentPage() {
           stage,
           winner_team: winnerTeam,
           loser_team: loserTeam,
+          championship_id: championshipId ? parseInt(championshipId) : null,
         }),
       });
 
@@ -54,9 +74,13 @@ export default function RegisterTournamentPage() {
         throw new Error(data.message || '登録に失敗しました。');
       }
 
-      setSuccess('大会データを登録しました！ダッシュボードに戻ります...');
+      setSuccess('大会データを登録しました！遷移します...');
       setTimeout(() => {
-        router.push('/');
+        if (championshipId) {
+          router.push(`/tournament/${championshipId}`);
+        } else {
+          router.push('/');
+        }
       }, 2000);
     } catch (err: any) {
       setError(err.message || '登録中にエラーが発生しました。');
@@ -100,6 +124,7 @@ export default function RegisterTournamentPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
+              disabled={!!championshipId} // 大会から遷移した場合は固定
             />
           </div>
 
@@ -160,7 +185,13 @@ export default function RegisterTournamentPage() {
               type="button"
               className="btn btn-secondary"
               style={{ flex: 1, padding: '12px' }}
-              onClick={() => router.push('/')}
+              onClick={() => {
+                if (championshipId) {
+                  router.push(`/tournament/${championshipId}`);
+                } else {
+                  router.push('/');
+                }
+              }}
             >
               キャンセル
             </button>
@@ -176,5 +207,18 @@ export default function RegisterTournamentPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function RegisterTournamentPage() {
+  return (
+    <Suspense fallback={
+      <div className="loading-screen" style={{ height: '50vh' }}>
+        <div className="spinner"></div>
+        <p>読み込み中...</p>
+      </div>
+    }>
+      <RegisterForm />
+    </Suspense>
   );
 }

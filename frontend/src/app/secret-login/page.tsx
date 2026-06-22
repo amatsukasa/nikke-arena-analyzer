@@ -51,7 +51,7 @@ export default function SecretLoginPage() {
       // リダイレクト先があればそこへ、無ければトップへ
       const searchParams = new URLSearchParams(window.location.search);
       const redirectUrl = searchParams.get('redirect') || '/';
-      router.push(redirectUrl);
+      window.location.href = redirectUrl;
     } catch (err: any) {
       setError(err.message || 'サーバーとの通信に失敗しました。');
     } finally {
