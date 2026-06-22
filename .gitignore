@@ -1,10 +1,8 @@
-# uploads直下のファイルは無視
+# uploads直下のファイルおよび一時生成される画像は無視
 backend/uploads/*
+backend/uploads/cropped/*
+backend/uploads/debug_match/*
 
-# でもフォルダは残す
-!backend/uploads/**/
-
-# 必要なフォルダを明示的に許可（例）
-!backend/uploads/cropped/
-!backend/uploads/debug_match/
+# パターンマッチングに必要なAI学習テンプレート画像のみGit管理に含める
 !backend/uploads/templates/
+!backend/uploads/templates/*
