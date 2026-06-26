@@ -14,6 +14,26 @@ from database import engine
 BASELINE_REVISION = "e8950d0bb43e"
 
 
+def _repair_missing_columns():
+    """Add model columns that were introduced without an Alembic migration."""
+    if engine.dialect.name != "postgresql":
+        return
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "players" not in inspector.get_table_names():
+            return
+        player_columns = {
+            column["name"] for column in inspector.get_columns("players")
+        }
+        if "icon_url" not in player_columns:
+            connection.execute(text(
+                'ALTER TABLE "players" '
+                'ADD COLUMN IF NOT EXISTS icon_url VARCHAR'
+            ))
+            print("[Migration] Added players.icon_url")
+
+
 def _repair_creator_foreign_keys():
     """Point creator references at the app_users table used by authentication."""
     if engine.dialect.name != "postgresql":
@@ -103,12 +123,14 @@ def run_migrations():
         )
         command.stamp(alembic_cfg, BASELINE_REVISION)
 
-    # Repair the legacy creator constraints before application code starts.
+    # Repair schema drift before application code starts.
+    _repair_missing_columns()
     _repair_creator_foreign_keys()
 
     # 通常のアップグレードを実行
     print("[Migration] マイグレーションの実行(upgrade head)を開始します...")
     command.upgrade(alembic_cfg, "head")
+    _repair_missing_columns()
     _repair_creator_foreign_keys()
     print("[Migration] マイグレーションが完了しました。")
 
