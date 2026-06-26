@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
-from datetime import date, datetime
+from datetime import date as date_type, datetime
 
 class CharacterBase(BaseModel):
     name: str
@@ -19,8 +19,8 @@ class Character(CharacterBase):
 
 class ChampionshipBase(BaseModel):
     name: str
-    date: Optional[date] = None
-    start_date: Optional[date] = None
+    date: Optional[date_type] = None
+    start_date: Optional[date_type] = None
     owner_name: Optional[str] = None
 
 class ChampionshipCreate(ChampionshipBase):
@@ -34,7 +34,7 @@ class ChampionshipResponse(ChampionshipBase):
 
 class TournamentBase(BaseModel):
     name: str
-    date: date
+    date: date_type
     season: Optional[str] = None
     owner_name: Optional[str] = None
     championship_id: Optional[int] = None
@@ -108,7 +108,7 @@ class UserCreate(UserBase):
     password: str
     invite_code: str
     provider_name: Optional[str] = None # 追加: 提供者名
-    game_start_date: Optional[date] = None # 追加: 指揮官のゲーム開始日
+    game_start_date: Optional[date_type] = None # 追加: 指揮官のゲーム開始日
 
 class UserLogin(UserBase):
     password: str
@@ -118,7 +118,7 @@ class UserResponse(UserBase):
     role: str
     is_banned: bool
     provider_name: Optional[str] = None # 追加
-    game_start_date: Optional[date] = None # 追加
+    game_start_date: Optional[date_type] = None # 追加
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
