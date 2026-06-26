@@ -19,8 +19,8 @@ class Character(CharacterBase):
 
 class ChampionshipBase(BaseModel):
     name: str
-    date: date
-    start_date: date
+    date: Optional[date] = None
+    start_date: Optional[date] = None
     owner_name: Optional[str] = None
 
 class ChampionshipCreate(ChampionshipBase):
@@ -107,6 +107,8 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     invite_code: str
+    provider_name: Optional[str] = None # 追加: 提供者名
+    game_start_date: Optional[date] = None # 追加: 指揮官のゲーム開始日
 
 class UserLogin(UserBase):
     password: str
@@ -115,6 +117,8 @@ class UserResponse(UserBase):
     id: int
     role: str
     is_banned: bool
+    provider_name: Optional[str] = None # 追加
+    game_start_date: Optional[date] = None # 追加
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

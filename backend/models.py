@@ -21,6 +21,8 @@ class AppUser(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(String, default="contributor") # "admin" or "contributor"
     is_banned = Column(Boolean, default=False)
+    provider_name = Column(String, nullable=True) # 追加: 提供者名
+    game_start_date = Column(Date, nullable=True) # 追加: 指揮官のゲーム開始日
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Character(Base):
@@ -40,8 +42,8 @@ class Championship(Base):
     __tablename__ = "championships"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    date = Column(Date, nullable=False)
-    start_date = Column(Date, nullable=False)
+    date = Column(Date, nullable=True) # 開催順管理とするため nullable に変更
+    start_date = Column(Date, nullable=True)
     owner_name = Column(String, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

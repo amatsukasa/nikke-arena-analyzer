@@ -72,12 +72,17 @@ async def startup_event():
     first_password = os.environ.get("FIRST_ADMIN_PASSWORD", "admin123")
     db = SessionLocal()
     try:
+        from datetime import date
+        default_start_date = date(2022, 11, 4) # NIKKEリリース日
+        
         existing = db.query(models.AppUser).filter(models.AppUser.email == first_email).first()
         if not existing:
             admin = models.AppUser(
                 email=first_email,
                 hashed_password=auth_module.hash_password(first_password),
                 role="admin",
+                provider_name="管理者",
+                game_start_date=default_start_date
             )
             db.add(admin)
             db.commit()
@@ -85,8 +90,12 @@ async def startup_event():
         else:
             existing.hashed_password = auth_module.hash_password(first_password)
             existing.role = "admin"
+            if not existing.provider_name:
+                existing.provider_name = "管理者"
+            if not existing.game_start_date:
+                existing.game_start_date = default_start_date
             db.commit()
-            print(f"[Startup] 管理者アカウントのパスワードを同期しました: {first_email}")
+            print(f"[Startup] 管理者アカウントのパスワードおよびプロフィールを同期しました: {first_email}")
     finally:
         db.close()
 
@@ -139,6 +148,9 @@ def user_register(body: dict, db: Session = Depends(get_db)):
     email       = body.get("email", "").strip().lower()
     password    = body.get("password", "")
     invite_code = body.get("inviteCode", "")
+    provider_name = body.get("providerName", "").strip() or None
+    game_start_date = body.get("gameStartDate", "") or None
+    
     if not email or not password:
         raise HTTPException(status_code=400, detail="メールとパスワードは必須です")
     expected_code = auth_module.INVITE_CODE
@@ -147,10 +159,22 @@ def user_register(body: dict, db: Session = Depends(get_db)):
     existing = db.query(models.AppUser).filter(models.AppUser.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="そのメールアドレスは既に登録されています")
+    
+    # 日付文字列のパース処理
+    parsed_date = None
+    if game_start_date:
+        try:
+            from datetime import datetime
+            parsed_date = datetime.strptime(game_start_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ゲーム開始日の日付フォーマットが正しくありません (YYYY-MM-DD)")
+
     user = models.AppUser(
         email=email,
         hashed_password=auth_module.hash_password(password),
         role="contributor",
+        provider_name=provider_name,
+        game_start_date=parsed_date,
     )
     db.add(user)
     db.commit()
@@ -160,7 +184,13 @@ def user_register(body: dict, db: Session = Depends(get_db)):
 @app.get("/api/auth/me")
 def get_me(current_user: models.AppUser = Depends(auth_module.get_current_user)):
     """現在ログイン中のユーザー情報"""
-    return {"id": current_user.id, "email": current_user.email, "role": current_user.role}
+    return {
+        "id": current_user.id, 
+        "email": current_user.email, 
+        "role": current_user.role,
+        "provider_name": current_user.provider_name,
+        "game_start_date": str(current_user.game_start_date) if current_user.game_start_date else None
+    }
 
 
 @app.get("/api/auth/users")
@@ -487,8 +517,29 @@ def merge_characters(
     }
 
 @app.post("/api/tournaments", response_model=schemas.Tournament)
-def create_tournament(tournament: schemas.TournamentBase, db: Session = Depends(get_db)):
-    db_tournament = models.Tournament(**tournament.model_dump())
+def create_tournament(
+    tournament: schemas.TournamentBase, 
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user)
+):
+    # 登録データのベースを作成
+    data = tournament.model_dump()
+    
+    # ログインユーザーから提供者名を取得
+    data["owner_name"] = current_user.provider_name or "不明な提供者"
+    
+    # 作成者を記録
+    data["created_by"] = current_user.id
+    
+    # championship_id から名前などの情報を引き継ぐ
+    if tournament.championship_id:
+        championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
+        if championship:
+            data["name"] = championship.name
+            # dateはChampionshipの作成日またはシステム日付にする
+            data["date"] = championship.created_at.date() if championship.created_at else tournament.date
+
+    db_tournament = models.Tournament(**data)
     db.add(db_tournament)
     db.commit()
     db.refresh(db_tournament)
@@ -506,15 +557,26 @@ def get_tournament(tournament_id: int, db: Session = Depends(get_db)):
     return db_tournament
 
 @app.put("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
-def update_tournament(tournament_id: int, tournament: schemas.TournamentBase, db: Session = Depends(get_db)):
+def update_tournament(
+    tournament_id: int, 
+    tournament: schemas.TournamentBase, 
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user)
+):
     db_tournament = db.query(models.Tournament).filter(models.Tournament.id == tournament_id).first()
     if not db_tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
-    db_tournament.name = tournament.name
-    db_tournament.date = tournament.date
+    
+    # championship_id が更新されたら名前などを再同期
+    if tournament.championship_id:
+        championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
+        if championship:
+            db_tournament.name = championship.name
+            db_tournament.championship_id = tournament.championship_id
+            
     db_tournament.season = tournament.season
-    db_tournament.owner_name = tournament.owner_name
-    db_tournament.championship_id = tournament.championship_id
+    # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
+    db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
     db.commit()
     db.refresh(db_tournament)
     return db_tournament
@@ -534,7 +596,7 @@ def delete_tournament(tournament_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/championships", response_model=List[schemas.ChampionshipResponse])
 def get_championships(db: Session = Depends(get_db)):
-    return db.query(models.Championship).order_by(models.Championship.date.desc(), models.Championship.created_at.desc()).all()
+    return db.query(models.Championship).order_by(models.Championship.id.desc()).all()
 
 @app.get("/api/championships/{id}", response_model=schemas.ChampionshipResponse)
 def get_championship(id: int, db: Session = Depends(get_db)):

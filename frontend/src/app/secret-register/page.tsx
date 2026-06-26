@@ -8,6 +8,8 @@ export default function SecretRegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
+  const [providerName, setProviderName] = useState('');
+  const [gameStartDate, setGameStartDate] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,7 +29,13 @@ export default function SecretRegisterPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password, inviteCode: inviteCode }),// invite_codeをバックエンドのinviteCodeに合わせる 
+        body: JSON.stringify({ 
+          email, 
+          password, 
+          inviteCode: inviteCode,
+          providerName: providerName,
+          gameStartDate: gameStartDate || null
+        }),
       });
 
       const contentType = response.headers.get('content-type');
@@ -105,6 +113,35 @@ export default function SecretRegisterPage() {
               placeholder="任意のパスワード（8文字以上推奨）"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-slate-300 text-sm font-medium mb-2" htmlFor="providerName">
+              提供者名 (表示名)
+            </label>
+            <input
+              id="providerName"
+              type="text"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-950 transition"
+              placeholder="例: 指揮官A (データ提供者の表記ゆれを防ぐための固定名)"
+              value={providerName}
+              onChange={(e) => setProviderName(e.target.value)}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-slate-300 text-sm font-medium mb-2" htmlFor="gameStartDate">
+              指揮官のゲーム開始日
+            </label>
+            <input
+              id="gameStartDate"
+              type="date"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-950 transition"
+              value={gameStartDate}
+              onChange={(e) => setGameStartDate(e.target.value)}
               required
             />
           </div>

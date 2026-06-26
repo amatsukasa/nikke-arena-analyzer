@@ -8,9 +8,10 @@ function RegisterForm() {
   const { user, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const championshipId = searchParams.get('championship_id');
+  const queryChampionshipId = searchParams.get('championship_id');
 
-  const [name, setName] = useState('');
+  const [championships, setChampionships] = useState<any[]>([]);
+  const [selectedChampionshipId, setSelectedChampionshipId] = useState('');
   const [stage, setStage] = useState('決勝');
   const [winnerTeam, setWinnerTeam] = useState('');
   const [loserTeam, setLoserTeam] = useState('');
@@ -25,28 +26,35 @@ function RegisterForm() {
     }
   }, [isLoading, token, router]);
 
-  // 大会情報が指定されている場合、デフォルトの大会名を取得して設定
+  // 大会一覧をAPIからロード
   useEffect(() => {
-    if (championshipId) {
-      fetch(`/api/championships/${championshipId}`)
-        .then(res => {
-          if (res.ok) return res.json();
-          throw new Error();
-        })
-        .then(data => {
-          if (data && data.name) {
-            setName(data.name);
-          }
-        })
-        .catch(() => {});
-    }
-  }, [championshipId]);
+    fetch('/api/championships')
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error();
+      })
+      .then(data => {
+        setChampionships(data);
+        if (queryChampionshipId) {
+          setSelectedChampionshipId(queryChampionshipId);
+        } else if (data.length > 0) {
+          setSelectedChampionshipId(data[0].id.toString());
+        }
+      })
+      .catch(() => {});
+  }, [queryChampionshipId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setSubmitting(true);
+
+    if (!selectedChampionshipId) {
+      setError('登録対象の大会を選択してください。');
+      setSubmitting(false);
+      return;
+    }
 
     if (winnerTeam === loserTeam) {
       setError('勝利チームと敗北チームは異なるチームである必要があります。');
@@ -60,11 +68,11 @@ function RegisterForm() {
       const response = await apiFetch(`${apiUrl}/api/tournaments`, {
         method: 'POST',
         body: JSON.stringify({
-          name,
+          name: '', // バックエンドでchampionship_idから自動付与されるためダミー
           stage,
           winner_team: winnerTeam,
           loser_team: loserTeam,
-          championship_id: championshipId ? parseInt(championshipId) : null,
+          championship_id: parseInt(selectedChampionshipId),
         }),
       });
 
@@ -76,11 +84,7 @@ function RegisterForm() {
 
       setSuccess('大会データを登録しました！遷移します...');
       setTimeout(() => {
-        if (championshipId) {
-          router.push(`/tournament/${championshipId}`);
-        } else {
-          router.push('/');
-        }
+        router.push(`/tournament/${selectedChampionshipId}`);
       }, 2000);
     } catch (err: any) {
       setError(err.message || '登録中にエラーが発生しました。');
@@ -113,19 +117,25 @@ function RegisterForm() {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label" htmlFor="name">
-              大会名 / イベント名
+            <label className="form-label" htmlFor="championshipId">
+              対象の大会名称 (※表記ゆれ防止のため選択式)
             </label>
-            <input
-              id="name"
-              type="text"
+            <select
+              id="championshipId"
               className="form-input"
-              placeholder="例: 第1回 アリーナ記念大会"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={selectedChampionshipId}
+              onChange={(e) => setSelectedChampionshipId(e.target.value)}
               required
-              disabled={!!championshipId} // 大会から遷移した場合は固定
-            />
+              disabled={!!queryChampionshipId} // URLから遷移した場合は固定
+              style={{ backgroundColor: 'var(--bg-input)' }}
+            >
+              <option value="" disabled>-- 大会タイトルを選択してください --</option>
+              {championships.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="form-group">
@@ -186,8 +196,8 @@ function RegisterForm() {
               className="btn btn-secondary"
               style={{ flex: 1, padding: '12px' }}
               onClick={() => {
-                if (championshipId) {
-                  router.push(`/tournament/${championshipId}`);
+                if (queryChampionshipId) {
+                  router.push(`/tournament/${queryChampionshipId}`);
                 } else {
                   router.push('/');
                 }

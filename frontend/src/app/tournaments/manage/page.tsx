@@ -50,20 +50,12 @@ export default function Home() {
 
   const handleSave = () => {
     if (!newTournamentName.trim()) return;
-    if (!newDate) {
-      alert("開催日を入力してください。");
-      return;
-    }
-    if (!newStartDate) {
-      alert("指揮官のゲーム開始日を入力してください。");
-      return;
-    }
     
     const body = {
       name: newTournamentName.trim(),
-      date: newDate,
-      start_date: newStartDate,
-      owner_name: newOwnerName.trim() || null
+      date: null,
+      start_date: null,
+      owner_name: null
     };
 
     if (editTournamentId) {
@@ -144,11 +136,6 @@ export default function Home() {
                   <div className="flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 ring-1 ring-white/5 hover:ring-white/20 transition-all rounded-xl group/item">
                     <div>
                       <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
-                      <div className="text-sm text-slate-500 mt-1 flex items-center space-x-3">
-                        <span>開催日: {t.date ? t.date.split('T')[0] : ""}</span>
-                        {t.start_date && <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs">開始時期: {t.start_date.split('T')[0]}</span>}
-                        {t.owner_name && <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded text-xs">提供者: {t.owner_name}</span>}
-                      </div>
                     </div>
                     <div className="flex items-center space-x-4">
                       <button 
@@ -194,33 +181,6 @@ export default function Home() {
                   onChange={(e) => setNewTournamentName(e.target.value)}
                   className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
                   autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">開催日</label>
-                <input 
-                  type="date" 
-                  value={newDate}
-                  onChange={(e) => setNewDate(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">指揮官のゲーム開始日</label>
-                <input 
-                  type="date" 
-                  value={newStartDate}
-                  onChange={(e) => setNewStartDate(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">提供者名 (誰のデータか)</label>
-                <input 
-                  type="text" 
-                  value={newOwnerName}
-                  onChange={(e) => setNewOwnerName(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
                 />
               </div>
               <button 
