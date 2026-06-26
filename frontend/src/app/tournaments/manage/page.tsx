@@ -10,6 +10,7 @@ interface Tournament {
   date: string;
   start_date: string;
   owner_name?: string;
+  championship_id?: number;
 }
 
 export default function Home() {
