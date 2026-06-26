@@ -23,23 +23,40 @@ export default function Home() {
   const [newOwnerName, setNewOwnerName] = useState("");
   const [newDate, setNewDate] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  const loadTournaments = async () => {
+    const res = await fetch("/api/tournaments", { cache: "no-store" });
+    if (!res.ok) {
+      throw new Error("大会一覧の取得に失敗しました。");
+    }
+    const data = await res.json();
+    setTournaments(data);
+  };
+
+  const loadChampionships = async () => {
+    const res = await fetch("/api/championships", { cache: "no-store" });
+    if (!res.ok) {
+      throw new Error("大会タイトル一覧の取得に失敗しました。");
+    }
+    const data = await res.json();
+    setChampionships(data);
+  };
   
   useEffect(() => {
     // 登録されたTournament（対戦データグループ）一覧を取得
-    fetch("/api/tournaments")
-      .then(res => res.json())
-      .then(data => setTournaments(data))
+    loadTournaments()
       .catch(err => console.error(err));
 
     // 管理者画面で登録された大会タイトル（Championship）一覧を取得
-    fetch("/api/championships")
-      .then(res => res.json())
-      .then(data => setChampionships(data))
+    loadChampionships()
       .catch(err => console.error(err));
   }, []);
 
   const openCreateModal = () => {
     setEditTournamentId(null);
+    setSaveError("");
     if (championships.length > 0) {
       setSelectedChampionshipId(championships[0].id.toString());
     } else {
@@ -53,6 +70,7 @@ export default function Home() {
 
   const openEditModal = (e: React.MouseEvent, t: any) => {
     e.preventDefault();
+    setSaveError("");
     setEditTournamentId(t.id);
     setSelectedChampionshipId(t.championship_id ? t.championship_id.toString() : "");
     setNewOwnerName(t.owner_name || "");
@@ -61,48 +79,61 @@ export default function Home() {
     setIsModalOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedChampionshipId) {
       alert("大会名称（大会タイトル）を選択してください。まだ登録されていない場合は、管理者画面から登録してください。");
       return;
     }
-    
-    const champId = parseInt(selectedChampionshipId);
-    const selectedChamp = championships.find(c => c.id === champId);
-
-    const body = {
-      name: selectedChamp ? selectedChamp.name : "",
-      date: newDate || null,
-      start_date: newStartDate || null,
-      owner_name: newOwnerName || null,
-      championship_id: champId,
-      season: selectedChamp ? selectedChamp.name : "" // 表示用などに格納
-    };
-
-    if (editTournamentId) {
-      // 編集モード
-      fetch(`/api/tournaments/${editTournamentId}`, {
-        method: "PUT",
+    setSaveError("");
+    setIsSaving(true);
+    try {
+      const champId = parseInt(selectedChampionshipId);
+      const selectedChamp = championships.find(c => c.id === champId);
+      const body = {
+        name: selectedChamp ? selectedChamp.name : "",
+        date: newDate || null,
+        start_date: newStartDate || null,
+        owner_name: newOwnerName || null,
+        championship_id: champId,
+        season: selectedChamp ? selectedChamp.name : ""
+      };
+      const url = editTournamentId
+        ? `/api/tournaments/${editTournamentId}`
+        : "/api/tournaments";
+      const response = await fetch(url, {
+        method: editTournamentId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
-      }).then(() => window.location.reload());
-    } else {
-      // 新規作成モード
-      fetch("/api/tournaments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      }).then(() => window.location.reload());
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const detail = data.detail || data.message;
+        throw new Error(typeof detail === "string" ? detail : "大会の保存に失敗しました。");
+      }
+
+      await loadTournaments();
+      setIsModalOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "大会の保存に失敗しました。");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDelete = (e: React.MouseEvent, id: number) => {
+  const handleDelete = async (e: React.MouseEvent, id: number) => {
     e.preventDefault(); // リンクへの遷移を防ぐ
     if (!window.confirm("この大会を削除してもよろしいですか？")) return;
 
-    fetch(`/api/tournaments/${id}`, {
+    const response = await fetch(`/api/tournaments/${id}`, {
       method: "DELETE",
-    }).then(() => window.location.reload());
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      alert(data.detail || data.message || "Failed to delete tournament.");
+      return;
+    }
+    setTournaments(prev => prev.filter(t => t.id !== id));
   };
 
   return (
@@ -227,12 +258,17 @@ export default function Home() {
                   </select>
                 )}
               </div>
+              {saveError && (
+                <div role="alert" className="text-sm text-red-300 bg-red-950/40 border border-red-800 rounded-lg p-3">
+                  {saveError}
+                </div>
+              )}
               <button 
                 onClick={handleSave}
-                disabled={championships.length === 0}
+                disabled={championships.length === 0 || isSaving}
                 className="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl font-bold text-white shadow-lg transition-all hover:shadow-blue-500/25 active:scale-95 disabled:opacity-50"
               >
-                {editTournamentId ? "更新する" : "作成する"}
+                {isSaving ? "保存中..." : editTournamentId ? "更新する" : "作成する"}
               </button>
             </div>
           </div>
