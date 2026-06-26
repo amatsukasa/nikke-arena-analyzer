@@ -117,7 +117,7 @@ export default function AdminPage() {
 
     const payload = {
       name: formChampName.trim(),
-      date: formChampDate || null,
+      date: formChampDate ? formChampDate : null,
       start_date: null,
       owner_name: null
     };
@@ -138,7 +138,15 @@ export default function AdminPage() {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || '大会タイトルの保存に失敗しました。');
+        let errMsg = '大会タイトルの保存に失敗しました。';
+        if (data && data.detail) {
+          if (typeof data.detail === 'string') {
+            errMsg = data.detail;
+          } else if (Array.isArray(data.detail)) {
+            errMsg = data.detail.map((err: any) => `${err.loc.join('.')}: ${err.msg}`).join(', ');
+          }
+        }
+        throw new Error(errMsg);
       }
 
       setMessage(champModalMode === 'create' ? '大会タイトルを新規追加しました。' : '大会タイトルを更新しました。');
