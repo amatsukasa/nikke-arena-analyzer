@@ -13,7 +13,7 @@ interface Tournament {
 }
 
 export default function Home() {
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState<number | null>(null);
@@ -107,6 +107,15 @@ export default function Home() {
               >
                 <span className="text-sm">ダッシュボードへ戻る</span>
               </Link>
+              {user && user.role === 'admin' && (
+                <Link
+                  href="/admin"
+                  className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white"
+                >
+                  <ShieldAlert size={16} />
+                  <span className="text-sm">管理者画面へ</span>
+                </Link>
+              )}
               <button 
                 onClick={openCreateModal}
                 className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 rounded-full font-bold shadow-lg transition-all active:scale-95 text-white"

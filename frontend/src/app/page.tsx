@@ -1,11 +1,13 @@
-﻿"use client";
+"use client";
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe, PlusCircle } from "lucide-react";
 import Link from "next/link";
+import { useAuth } from "../context/AuthContext";
 
 function DashboardContent() {
+  const { user } = useAuth();
   const searchParams = useSearchParams();
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
@@ -385,20 +387,32 @@ function DashboardContent() {
         </div>
         
         <div className="flex items-center space-x-2">
-           <Link
-             href="/tournaments/manage"
-             className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
-           >
-             <PlusCircle size={16} />
-             <span>大会データ登録</span>
-           </Link>
-           <Link
-             href="/admin"
-             className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
-           >
-             <ShieldAlert size={16} />
-             <span>管理者</span>
-           </Link>
+          {user && (
+            <Link
+              href="/tournaments/manage"
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
+            >
+              <PlusCircle size={16} />
+              <span>大会データ登録</span>
+            </Link>
+          )}
+          {user && user.role === 'admin' && (
+            <Link
+              href="/admin"
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
+            >
+              <ShieldAlert size={16} />
+              <span>管理者</span>
+            </Link>
+          )}
+          {!user && (
+            <Link
+              href="/secret-login"
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-800/50 hover:bg-slate-800 ring-1 ring-white/5 rounded-full font-bold transition-all text-slate-400 hover:text-slate-200 text-sm"
+            >
+              <span>スタッフログイン</span>
+            </Link>
+          )}
         </div>
       </div>
 
