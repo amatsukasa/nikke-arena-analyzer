@@ -3,6 +3,7 @@ backend/uploads/*
 backend/uploads/cropped/*
 backend/uploads/debug_match/*
 backend/cropped_test/
+backend_node_bak/uploads/
 
 # パターンマッチングに必要なAI学習テンプレート画像のみGit管理に含める
 !backend/uploads/templates/
