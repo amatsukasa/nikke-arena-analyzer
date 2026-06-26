@@ -15,33 +15,45 @@ interface Tournament {
 export default function Home() {
   const { user, logout } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [championships, setChampionships] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState<number | null>(null);
-  const [newTournamentName, setNewTournamentName] = useState("");
+  const [selectedChampionshipId, setSelectedChampionshipId] = useState<string>("");
   const [newOwnerName, setNewOwnerName] = useState("");
   const [newDate, setNewDate] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
   
   useEffect(() => {
-    fetch("/api/championships")
+    // 登録されたTournament（対戦データグループ）一覧を取得
+    fetch("/api/tournaments")
       .then(res => res.json())
       .then(data => setTournaments(data))
+      .catch(err => console.error(err));
+
+    // 管理者画面で登録された大会タイトル（Championship）一覧を取得
+    fetch("/api/championships")
+      .then(res => res.json())
+      .then(data => setChampionships(data))
       .catch(err => console.error(err));
   }, []);
 
   const openCreateModal = () => {
     setEditTournamentId(null);
-    setNewTournamentName(`第${tournaments.length + 1}回 チャンピオンアリーナ`);
+    if (championships.length > 0) {
+      setSelectedChampionshipId(championships[0].id.toString());
+    } else {
+      setSelectedChampionshipId("");
+    }
     setNewOwnerName("");
     setNewDate(new Date().toISOString().split('T')[0]);
     setNewStartDate("");
     setIsModalOpen(true);
   };
 
-  const openEditModal = (e: React.MouseEvent, t: Tournament) => {
+  const openEditModal = (e: React.MouseEvent, t: any) => {
     e.preventDefault();
     setEditTournamentId(t.id);
-    setNewTournamentName(t.name);
+    setSelectedChampionshipId(t.championship_id ? t.championship_id.toString() : "");
     setNewOwnerName(t.owner_name || "");
     setNewDate(t.date ? t.date.split('T')[0] : new Date().toISOString().split('T')[0]);
     setNewStartDate(t.start_date ? t.start_date.split('T')[0] : "");
@@ -49,25 +61,33 @@ export default function Home() {
   };
 
   const handleSave = () => {
-    if (!newTournamentName.trim()) return;
+    if (!selectedChampionshipId) {
+      alert("大会名称（大会タイトル）を選択してください。まだ登録されていない場合は、管理者画面から登録してください。");
+      return;
+    }
     
+    const champId = parseInt(selectedChampionshipId);
+    const selectedChamp = championships.find(c => c.id === champId);
+
     const body = {
-      name: newTournamentName.trim(),
-      date: null,
-      start_date: null,
-      owner_name: null
+      name: selectedChamp ? selectedChamp.name : "",
+      date: newDate || null,
+      start_date: newStartDate || null,
+      owner_name: newOwnerName || null,
+      championship_id: champId,
+      season: selectedChamp ? selectedChamp.name : "" // 表示用などに格納
     };
 
     if (editTournamentId) {
       // 編集モード
-      fetch(`/api/championships/${editTournamentId}`, {
+      fetch(`/api/tournaments/${editTournamentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       }).then(() => window.location.reload());
     } else {
       // 新規作成モード
-      fetch("/api/championships", {
+      fetch("/api/tournaments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -79,7 +99,7 @@ export default function Home() {
     e.preventDefault(); // リンクへの遷移を防ぐ
     if (!window.confirm("この大会を削除してもよろしいですか？")) return;
 
-    fetch(`/api/championships/${id}`, {
+    fetch(`/api/tournaments/${id}`, {
       method: "DELETE",
     }).then(() => window.location.reload());
   };
@@ -141,10 +161,13 @@ export default function Home() {
           ) : (
             <div className="grid gap-4">
               {tournaments.map(t => (
-                <Link key={t.id} href={`/tournament/${t.id}`}>
+                <Link key={t.id} href={`/tournament/${t.championship_id || t.id}`}>
                   <div className="flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 ring-1 ring-white/5 hover:ring-white/20 transition-all rounded-xl group/item">
                     <div>
                       <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
+                      {t.date && (
+                        <div className="text-xs text-slate-500 mt-1">開催日: {t.date.split('T')[0]}</div>
+                      )}
                     </div>
                     <div className="flex items-center space-x-4">
                       <button 
@@ -183,18 +206,30 @@ export default function Home() {
             </div>
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">大会名称</label>
-                <input 
-                  type="text" 
-                  value={newTournamentName}
-                  onChange={(e) => setNewTournamentName(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
-                  autoFocus
-                />
+                <label className="block text-sm font-medium text-slate-400 mb-2">大会名称 (大会タイトル)</label>
+                {championships.length === 0 ? (
+                  <div className="text-sm text-amber-500 bg-amber-500/10 p-3 rounded-lg border border-amber-500/25 mb-4">
+                    大会タイトルが登録されていません。先に管理者画面の「大会タイトル管理」から登録してください。
+                  </div>
+                ) : (
+                  <select 
+                    value={selectedChampionshipId}
+                    onChange={(e) => setSelectedChampionshipId(e.target.value)}
+                    className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all mb-4"
+                  >
+                    <option value="" disabled>-- 大会タイトルを選択 --</option>
+                    {championships.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.date ? `(${c.date.split('T')[0]})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <button 
                 onClick={handleSave}
-                className="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl font-bold text-white shadow-lg transition-all hover:shadow-blue-500/25 active:scale-95"
+                disabled={championships.length === 0}
+                className="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl font-bold text-white shadow-lg transition-all hover:shadow-blue-500/25 active:scale-95 disabled:opacity-50"
               >
                 {editTournamentId ? "更新する" : "作成する"}
               </button>

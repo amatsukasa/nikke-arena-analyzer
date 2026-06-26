@@ -50,6 +50,7 @@ export default function AdminPage() {
   const [champModalMode, setChampModalMode] = useState<'create' | 'edit'>('create');
   const [editingChampId, setEditingChampId] = useState<number | null>(null);
   const [formChampName, setFormChampName] = useState('');
+  const [formChampDate, setFormChampDate] = useState('');
 
   // 共通エラー・メッセージ
   const [error, setError] = useState('');
@@ -116,7 +117,7 @@ export default function AdminPage() {
 
     const payload = {
       name: formChampName.trim(),
-      date: null,
+      date: formChampDate || null,
       start_date: null,
       owner_name: null
     };
@@ -178,9 +179,11 @@ export default function AdminPage() {
     if (mode === 'edit' && champ) {
       setEditingChampId(champ.id);
       setFormChampName(champ.name);
+      setFormChampDate(champ.date ? champ.date.split('T')[0] : '');
     } else {
       setEditingChampId(null);
       setFormChampName('');
+      setFormChampDate(new Date().toISOString().split('T')[0]);
     }
     setIsChampModalOpen(true);
   };
@@ -716,6 +719,7 @@ export default function AdminPage() {
                   <tr className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
                     <th className="p-4 w-24">ID</th>
                     <th className="p-4">大会タイトル名称</th>
+                    <th className="p-4">開催日</th>
                     <th className="p-4">登録日時</th>
                     <th className="p-4 text-right">操作</th>
                   </tr>
@@ -723,7 +727,7 @@ export default function AdminPage() {
                 <tbody className="divide-y divide-slate-800 text-slate-300">
                   {championships.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="p-8 text-center text-slate-500">
+                      <td colSpan={5} className="p-8 text-center text-slate-500">
                         大会タイトルが登録されていません。
                       </td>
                     </tr>
@@ -732,6 +736,9 @@ export default function AdminPage() {
                       <tr key={champ.id} className="hover:bg-slate-900/50 transition">
                         <td className="p-4">{champ.id}</td>
                         <td className="p-4 font-semibold text-slate-200">{champ.name}</td>
+                        <td className="p-4 text-slate-300">
+                          {champ.date ? champ.date.split('T')[0] : '未設定'}
+                        </td>
                         <td className="p-4 text-slate-500">
                           {new Date(champ.created_at).toLocaleDateString('ja-JP')} {new Date(champ.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                         </td>
@@ -767,7 +774,7 @@ export default function AdminPage() {
           <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl text-slate-100 my-8">
             <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-6">
               <h3 className="text-lg font-bold text-slate-200">
-                {champModalMode === 'create' ? '🏆 新規大会タイトル登録' : '🏆 大会タイトル名編集'}
+                {champModalMode === 'create' ? '🏆 新規大会タイトル登録' : '🏆 大会タイトル情報編集'}
               </h3>
               <button
                 onClick={() => setIsChampModalOpen(false)}
@@ -788,6 +795,17 @@ export default function AdminPage() {
                   placeholder="例: 第1回 アリーナ記念大会"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition"
                   autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-300 mb-1.5">開催日 *</label>
+                <input
+                  type="date"
+                  required
+                  value={formChampDate}
+                  onChange={(e) => setFormChampDate(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
                 />
               </div>
 

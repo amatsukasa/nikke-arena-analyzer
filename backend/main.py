@@ -598,7 +598,7 @@ def delete_tournament(tournament_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/championships", response_model=List[schemas.ChampionshipResponse])
 def get_championships(db: Session = Depends(get_db)):
-    return db.query(models.Championship).order_by(models.Championship.id.desc()).all()
+    return db.query(models.Championship).order_by(models.Championship.date.desc(), models.Championship.id.desc()).all()
 
 @app.get("/api/championships/{id}", response_model=schemas.ChampionshipResponse)
 def get_championship(id: int, db: Session = Depends(get_db)):
