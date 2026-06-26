@@ -34,6 +34,28 @@ def _repair_missing_columns():
             print("[Migration] Added players.icon_url")
 
 
+def _repair_tournament_dates():
+    """Synchronize linked tournament dates with their championship dates."""
+    if engine.dialect.name != "postgresql":
+        return
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        if not {"championships", "tournaments"}.issubset(tables):
+            return
+        result = connection.execute(text(
+            'UPDATE tournaments '
+            'SET date = championships.date '
+            'FROM championships '
+            'WHERE tournaments.championship_id = championships.id '
+            'AND championships.date IS NOT NULL '
+            'AND tournaments.date IS DISTINCT FROM championships.date'
+        ))
+        if result.rowcount:
+            print(f"[Migration] Corrected {result.rowcount} tournament dates")
+
+
 def _repair_creator_foreign_keys():
     """Point creator references at the app_users table used by authentication."""
     if engine.dialect.name != "postgresql":
@@ -125,12 +147,14 @@ def run_migrations():
 
     # Repair schema drift before application code starts.
     _repair_missing_columns()
+    _repair_tournament_dates()
     _repair_creator_foreign_keys()
 
     # 通常のアップグレードを実行
     print("[Migration] マイグレーションの実行(upgrade head)を開始します...")
     command.upgrade(alembic_cfg, "head")
     _repair_missing_columns()
+    _repair_tournament_dates()
     _repair_creator_foreign_keys()
     print("[Migration] マイグレーションが完了しました。")
 

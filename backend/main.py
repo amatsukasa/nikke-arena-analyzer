@@ -538,8 +538,7 @@ def create_tournament(
         championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
         if championship:
             data["name"] = championship.name
-            # dateはChampionshipの作成日またはシステム日付にする
-            data["date"] = championship.created_at.date() if championship.created_at else tournament.date
+            data["date"] = championship.date or tournament.date
 
     db_tournament = models.Tournament(**data)
     db.add(db_tournament)
@@ -603,6 +602,7 @@ def update_tournament(
         if championship:
             db_tournament.name = championship.name
             db_tournament.championship_id = tournament.championship_id
+            db_tournament.date = championship.date or tournament.date
             
     db_tournament.season = tournament.season
     # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
@@ -660,6 +660,13 @@ def update_championship(id: int, championship: schemas.ChampionshipCreate, db: S
     db_championship.date = championship.date
     db_championship.start_date = championship.start_date
     db_championship.owner_name = championship.owner_name
+    if championship.date is not None:
+        db.query(models.Tournament).filter(
+            models.Tournament.championship_id == id
+        ).update(
+            {models.Tournament.date: championship.date},
+            synchronize_session=False,
+        )
     db.commit()
     db.refresh(db_championship)
     return db_championship
