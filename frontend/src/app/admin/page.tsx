@@ -55,6 +55,7 @@ export default function AdminPage() {
   // 共通エラー・メッセージ
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [modalError, setModalError] = useState('');
 
   // 新規追加・編集モーダル用ステート
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -113,6 +114,7 @@ export default function AdminPage() {
     e.preventDefault();
     setError('');
     setMessage('');
+    setModalError('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
     const payload = {
@@ -153,7 +155,7 @@ export default function AdminPage() {
       setIsChampModalOpen(false);
       fetchChampionships();
     } catch (err: any) {
-      setError(err.message || 'エラーが発生しました。');
+      setModalError(err.message || 'エラーが発生しました。');
     }
   };
 
@@ -184,6 +186,7 @@ export default function AdminPage() {
     setChampModalMode(mode);
     setError('');
     setMessage('');
+    setModalError('');
     if (mode === 'edit' && champ) {
       setEditingChampId(champ.id);
       setFormChampName(champ.name);
@@ -791,6 +794,12 @@ export default function AdminPage() {
                 ×
               </button>
             </div>
+
+            {modalError && (
+              <div className="bg-red-950/50 border border-red-800 text-red-300 px-4 py-3 rounded-lg text-sm mb-4">
+                {modalError}
+              </div>
+            )}
 
             <form onSubmit={handleChampSubmit} className="space-y-5">
               <div>
