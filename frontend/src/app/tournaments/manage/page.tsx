@@ -27,7 +27,13 @@ export default function Home() {
   const [isSaving, setIsSaving] = useState(false);
 
   const loadTournaments = async () => {
-    const res = await fetch("/api/tournaments", { cache: "no-store" });
+    const res = await fetch(`/api/tournaments?_=${Date.now()}`, {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
+      }
+    });
     if (!res.ok) {
       throw new Error("大会一覧の取得に失敗しました。");
     }
@@ -112,7 +118,10 @@ export default function Home() {
         throw new Error(typeof detail === "string" ? detail : "大会の保存に失敗しました。");
       }
 
-      await loadTournaments();
+      setTournaments(prev => editTournamentId
+        ? prev.map(tournament => tournament.id === data.id ? data : tournament)
+        : [data, ...prev.filter(tournament => tournament.id !== data.id)]
+      );
       setIsModalOpen(false);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "大会の保存に失敗しました。");
