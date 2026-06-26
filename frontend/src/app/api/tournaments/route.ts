@@ -30,11 +30,15 @@ async function readBackendResponse(res: Response) {
 
 export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/tournaments`, {
+    const token = request.cookies.get('auth_token')?.value;
+    const query = request.nextUrl.searchParams.toString();
+    const url = `${BACKEND_URL}/api/tournaments${query ? `?${query}` : ''}`;
+    const res = await fetch(url, {
       method: 'GET',
       cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
     });
     const data = await readBackendResponse(res);

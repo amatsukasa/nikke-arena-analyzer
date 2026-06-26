@@ -547,9 +547,39 @@ def create_tournament(
     db.refresh(db_tournament)
     return db_tournament
 
+def require_tournament_manager(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser,
+) -> models.Tournament:
+    tournament = db.query(models.Tournament).filter(
+        models.Tournament.id == tournament_id
+    ).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if current_user.role != "admin" and tournament.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to manage this tournament",
+        )
+    return tournament
+
 @app.get("/api/tournaments", response_model=List[schemas.Tournament])
-def get_tournaments(db: Session = Depends(get_db)):
-    return db.query(models.Tournament).all()
+def get_tournaments(
+    mine: bool = False,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    query = db.query(models.Tournament)
+    if mine:
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Login required")
+        if current_user.role != "admin":
+            query = query.filter(models.Tournament.created_by == current_user.id)
+    return query.order_by(
+        models.Tournament.created_at.desc(),
+        models.Tournament.id.desc(),
+    ).all()
 
 @app.get("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
 def get_tournament(tournament_id: int, db: Session = Depends(get_db)):
@@ -565,9 +595,7 @@ def update_tournament(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
-    db_tournament = db.query(models.Tournament).filter(models.Tournament.id == tournament_id).first()
-    if not db_tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+    db_tournament = require_tournament_manager(tournament_id, db, current_user)
     
     # championship_id が更新されたら名前などを再同期
     if tournament.championship_id:
@@ -584,10 +612,12 @@ def update_tournament(
     return db_tournament
 
 @app.delete("/api/tournaments/{tournament_id}")
-def delete_tournament(tournament_id: int, db: Session = Depends(get_db)):
-    db_tournament = db.query(models.Tournament).filter(models.Tournament.id == tournament_id).first()
-    if not db_tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+def delete_tournament(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    db_tournament = require_tournament_manager(tournament_id, db, current_user)
     db.delete(db_tournament)
     db.commit()
     return {"ok": True}
@@ -720,8 +750,10 @@ async def update_player_info(
     tournament_id: int,
     seed_number: int,
     data: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    require_tournament_manager(tournament_id, db, current_user)
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
@@ -750,8 +782,10 @@ async def update_player_info(
 async def save_teams(
     tournament_id: int,
     data: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    require_tournament_manager(tournament_id, db, current_user)
     try:
         seed_number = data.get("seed_number")
         teams = data.get("teams", [])
@@ -1088,8 +1122,10 @@ def get_tournament_bracket(tournament_id: int, db: Session = Depends(get_db)):
 async def save_match(
     tournament_id: int,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    require_tournament_manager(tournament_id, db, current_user)
     data = await request.json()
     attacker_seed = data.get("attacker_seed")
     defender_seed = data.get("defender_seed")

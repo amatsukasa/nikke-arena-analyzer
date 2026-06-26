@@ -27,7 +27,7 @@ export default function Home() {
   const [isSaving, setIsSaving] = useState(false);
 
   const loadTournaments = async () => {
-    const res = await fetch(`/api/tournaments?_=${Date.now()}`, {
+    const res = await fetch(`/api/tournaments?mine=true&_=${Date.now()}`, {
       cache: "no-store",
       headers: {
         "Cache-Control": "no-cache",
