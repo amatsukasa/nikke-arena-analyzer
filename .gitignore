@@ -2,7 +2,26 @@
 backend/uploads/*
 backend/uploads/cropped/*
 backend/uploads/debug_match/*
+backend/cropped_test/
 
 # パターンマッチングに必要なAI学習テンプレート画像のみGit管理に含める
 !backend/uploads/templates/
 !backend/uploads/templates/*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*
+!frontend/.env.example
+
+# Local environment
+.env
+.env.*

@@ -31,7 +31,9 @@ save_*.py
 
 # テスト・デバッグディレクトリ
 cropped_test/
-scripts/
++scripts/__pycache__/
++scripts/analyze.py
++scripts/test_image.py
 
 # バージョン管理
 .git
@@ -48,4 +50,4 @@ migrate_sqlite_to_postgres.py
 # アップロード済み画像（永続ボリュームで管理するため、イメージには含めない）
 uploads/
 
-# alembic はランタイム起動時に使うため含める（除外しない）
+# alembicとscripts/init_db.py + characters.csvは起動時に使うため含める（除外しない）
