@@ -10,6 +10,7 @@ export default function SecretRegisterPage() {
   const [inviteCode, setInviteCode] = useState('');
   const [providerName, setProviderName] = useState('');
   const [gameStartDate, setGameStartDate] = useState('');
+  const [playServer, setPlayServer] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,7 +35,8 @@ export default function SecretRegisterPage() {
           password, 
           inviteCode: inviteCode,
           providerName: providerName,
-          gameStartDate: gameStartDate || null
+          gameStartDate: gameStartDate || null,
+          playServer: playServer || null
         }),
       });
 
@@ -144,6 +146,26 @@ export default function SecretRegisterPage() {
               onChange={(e) => setGameStartDate(e.target.value)}
               required
             />
+          </div>
+
+          <div>
+            <label className="block text-slate-300 text-sm font-medium mb-2" htmlFor="playServer">
+              プレイしているサーバー
+            </label>
+            <select
+              id="playServer"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-slate-100 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-950 transition"
+              value={playServer}
+              onChange={(e) => setPlayServer(e.target.value)}
+              required
+            >
+              <option value="" disabled>サーバーを選択</option>
+              <option value="KR">韓国（KR）</option>
+              <option value="JP">日本（JP）</option>
+              <option value="GLOBAL">グローバル（ヨーロッパ）</option>
+              <option value="NA">北米</option>
+              <option value="SEA">東南アジア</option>
+            </select>
           </div>
 
           <div>

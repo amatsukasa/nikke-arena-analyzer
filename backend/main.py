@@ -77,6 +77,10 @@ async def startup_event():
         
         existing = db.query(models.AppUser).filter(models.AppUser.email == first_email).first()
         if not existing:
+            existing = db.query(models.AppUser).filter(
+                models.AppUser.role == "admin"
+            ).order_by(models.AppUser.id).first()
+        if not existing:
             admin = models.AppUser(
                 email=first_email,
                 hashed_password=auth_module.hash_password(first_password),
@@ -88,19 +92,32 @@ async def startup_event():
             db.commit()
             print(f"[Startup] 管理者アカウント作成: {first_email}")
         else:
-            existing.hashed_password = auth_module.hash_password(first_password)
             existing.role = "admin"
             if not existing.provider_name:
                 existing.provider_name = "管理者"
             if not existing.game_start_date:
                 existing.game_start_date = default_start_date
             db.commit()
-            print(f"[Startup] 管理者アカウントのパスワードおよびプロフィールを同期しました: {first_email}")
+            print(f"[Startup] Existing admin preserved: {existing.email}")
     finally:
         db.close()
 
 
 # ===== 認証エンドポイント =====
+
+PLAY_SERVERS = {"KR", "JP", "GLOBAL", "NA", "SEA"}
+
+
+def serialize_app_user(user: models.AppUser):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "provider_name": user.provider_name,
+        "game_start_date": str(user.game_start_date) if user.game_start_date else None,
+        "play_server": user.play_server,
+    }
+
 
 @app.post("/api/auth/gate")
 def gate_login(body: dict, response: Response):
@@ -131,7 +148,7 @@ def user_login(body: dict, response: Response, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="このアカウントは停止されています")
     token = auth_module.create_access_token({"sub": str(user.id), "role": user.role})
     response.set_cookie("auth_token", token, httponly=True, samesite="lax", max_age=86400 * 7)
-    return {"ok": True, "token": token, "user": {"id": user.id, "email": user.email, "role": user.role}}
+    return {"ok": True, "token": token, "user": serialize_app_user(user)}
 
 
 @app.post("/api/auth/logout")
@@ -150,6 +167,7 @@ def user_register(body: dict, db: Session = Depends(get_db)):
     invite_code = body.get("inviteCode", "").strip() # 余分なスペースをトリミング
     provider_name = body.get("providerName", "").strip() or None
     game_start_date = body.get("gameStartDate", "") or None
+    play_server = body.get("playServer") or None
     
     expected_code = auth_module.INVITE_CODE.strip() if auth_module.INVITE_CODE else ""
     
@@ -160,6 +178,8 @@ def user_register(body: dict, db: Session = Depends(get_db)):
     existing = db.query(models.AppUser).filter(models.AppUser.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="そのメールアドレスは既に登録されています")
+    if play_server not in PLAY_SERVERS and play_server is not None:
+        raise HTTPException(status_code=400, detail="プレイしているサーバーが正しくありません")
     
     # 日付文字列のパース処理
     parsed_date = None
@@ -177,6 +197,7 @@ def user_register(body: dict, db: Session = Depends(get_db)):
         role="contributor",
         provider_name=provider_name,
         game_start_date=parsed_date,
+        play_server=play_server,
     )
     db.add(user)
     db.commit()
@@ -186,13 +207,55 @@ def user_register(body: dict, db: Session = Depends(get_db)):
 @app.get("/api/auth/me")
 def get_me(current_user: models.AppUser = Depends(auth_module.get_current_user)):
     """現在ログイン中のユーザー情報"""
-    return {
-        "id": current_user.id, 
-        "email": current_user.email, 
-        "role": current_user.role,
-        "provider_name": current_user.provider_name,
-        "game_start_date": str(current_user.game_start_date) if current_user.game_start_date else None
-    }
+    return serialize_app_user(current_user)
+
+
+@app.put("/api/auth/me")
+def update_me(
+    body: dict,
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+    db: Session = Depends(get_db),
+):
+    email = body.get("email", "").strip().lower()
+    provider_name = body.get("providerName", "").strip() or None
+    game_start_date = body.get("gameStartDate") or None
+    play_server = body.get("playServer") or None
+    current_password = body.get("currentPassword", "")
+    new_password = body.get("newPassword", "")
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="メールアドレスが正しくありません")
+    duplicate = db.query(models.AppUser).filter(
+        models.AppUser.email == email,
+        models.AppUser.id != current_user.id,
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="そのメールアドレスは既に登録されています")
+    if play_server not in PLAY_SERVERS and play_server is not None:
+        raise HTTPException(status_code=400, detail="プレイしているサーバーが正しくありません")
+
+    parsed_date = None
+    if game_start_date:
+        try:
+            from datetime import datetime
+            parsed_date = datetime.strptime(game_start_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ゲーム開始日が正しくありません")
+
+    if new_password:
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="新しいパスワードは8文字以上にしてください")
+        if not auth_module.verify_password(current_password, current_user.hashed_password):
+            raise HTTPException(status_code=400, detail="現在のパスワードが正しくありません")
+        current_user.hashed_password = auth_module.hash_password(new_password)
+
+    current_user.email = email
+    current_user.provider_name = provider_name
+    current_user.game_start_date = parsed_date
+    current_user.play_server = play_server
+    db.commit()
+    db.refresh(current_user)
+    return {"ok": True, "user": serialize_app_user(current_user)}
 
 
 @app.get("/api/auth/users")

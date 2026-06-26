@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut } from "lucide-react";
+import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
 
 interface Tournament {
@@ -159,9 +159,16 @@ export default function Home() {
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-purple-600 rounded-3xl blur opacity-25 group-hover:opacity-40 transition duration-1000"></div>
         <div className="relative bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-2xl shadow-2xl">
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 mb-6">
             <h2 className="text-2xl font-bold text-slate-100">大会一覧</h2>
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/account"
+                className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                title="アカウント情報"
+              >
+                <UserRound size={18} />
+              </Link>
               <Link
                 href="/"
                 className="flex items-center space-x-2 px-4 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-400 hover:text-white"

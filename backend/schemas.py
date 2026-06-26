@@ -109,6 +109,7 @@ class UserCreate(UserBase):
     invite_code: str
     provider_name: Optional[str] = None # 追加: 提供者名
     game_start_date: Optional[date_type] = None # 追加: 指揮官のゲーム開始日
+    play_server: Optional[str] = None
 
 class UserLogin(UserBase):
     password: str
@@ -119,6 +120,7 @@ class UserResponse(UserBase):
     is_banned: bool
     provider_name: Optional[str] = None # 追加
     game_start_date: Optional[date_type] = None # 追加
+    play_server: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

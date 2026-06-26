@@ -386,7 +386,16 @@ function DashboardContent() {
           </div>
         </div>
         
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {user && (
+            <Link
+              href="/account"
+              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
+            >
+              <UserIcon size={16} />
+              <span>アカウント</span>
+            </Link>
+          )}
           {user && (
             <Link
               href="/tournaments/manage"

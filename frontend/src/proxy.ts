@@ -27,7 +27,7 @@ export function proxy(request: NextRequest) {
   const authToken   = request.cookies.get("auth_token")?.value;
 
   // ログイン必須ルート: 大会データ登録・編集・管理者画面
-  const staffRoutes = ["/tournaments", "/tournament", "/admin"];
+  const staffRoutes = ["/tournaments", "/tournament", "/admin", "/account"];
   if (staffRoutes.some((r) => pathname.startsWith(r))) {
     if (!authToken) {
       const loginUrl = new URL("/secret-login", request.url);

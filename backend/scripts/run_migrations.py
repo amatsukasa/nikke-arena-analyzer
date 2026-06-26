@@ -21,17 +21,30 @@ def _repair_missing_columns():
 
     with engine.begin() as connection:
         inspector = inspect(connection)
-        if "players" not in inspector.get_table_names():
-            return
-        player_columns = {
-            column["name"] for column in inspector.get_columns("players")
-        }
-        if "icon_url" not in player_columns:
+        tables = set(inspector.get_table_names())
+        if "players" in tables:
+            player_columns = {
+                column["name"] for column in inspector.get_columns("players")
+            }
+        else:
+            player_columns = set()
+        if player_columns and "icon_url" not in player_columns:
             connection.execute(text(
                 'ALTER TABLE "players" '
                 'ADD COLUMN IF NOT EXISTS icon_url VARCHAR'
             ))
             print("[Migration] Added players.icon_url")
+
+        if "app_users" in tables:
+            user_columns = {
+                column["name"] for column in inspector.get_columns("app_users")
+            }
+            if "play_server" not in user_columns:
+                connection.execute(text(
+                    'ALTER TABLE "app_users" '
+                    'ADD COLUMN IF NOT EXISTS play_server VARCHAR'
+                ))
+                print("[Migration] Added app_users.play_server")
 
 
 def _repair_tournament_dates():

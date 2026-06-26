@@ -21,6 +21,7 @@ class AppUser(Base):
     is_banned = Column(Boolean, default=False)
     provider_name = Column(String, nullable=True) # 追加: 提供者名
     game_start_date = Column(Date, nullable=True) # 追加: 指揮官のゲーム開始日
+    play_server = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     championships = relationship("Championship", back_populates="creator")

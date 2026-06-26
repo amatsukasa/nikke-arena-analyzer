@@ -7,6 +7,9 @@ interface User {
   id: number;
   email: string;
   role: string;
+  provider_name?: string | null;
+  game_start_date?: string | null;
+  play_server?: string | null;
 }
 
 interface AuthContextType {
@@ -14,6 +17,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (token: string, user: User) => void;
+  updateUser: (user: User) => void;
   logout: () => void;
   apiFetch: (url: string, options?: RequestInit) => Promise<Response>;
 }
@@ -73,6 +77,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     document.cookie = `role=${newUser.role}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
   };
 
+  const updateUser = (updatedUser: User) => {
+    setUser(updatedUser);
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+  };
+
   const logout = async () => {
     setToken(null);
     setUser(null);
@@ -129,7 +138,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout, apiFetch }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, updateUser, logout, apiFetch }}>
       {children}
     </AuthContext.Provider>
   );
