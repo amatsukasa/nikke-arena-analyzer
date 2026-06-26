@@ -30,7 +30,7 @@ export default function AdminPage() {
   const { user: currentUser, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'characters'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'characters' | 'championships'>('users');
 
   // ユーザー管理用ステート
   const [users, setUsers] = useState<User[]>([]);
@@ -42,6 +42,14 @@ export default function AdminPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRarity, setFilterRarity] = useState('');
   const [filterClass, setFilterClass] = useState('');
+
+  // 大会タイトル(Championship)管理用ステート
+  const [championships, setChampionships] = useState<any[]>([]);
+  const [champsLoading, setChampsLoading] = useState(false);
+  const [isChampModalOpen, setIsChampModalOpen] = useState(false);
+  const [champModalMode, setChampModalMode] = useState<'create' | 'edit'>('create');
+  const [editingChampId, setEditingChampId] = useState<number | null>(null);
+  const [formChampName, setFormChampName] = useState('');
 
   // 共通エラー・メッセージ
   const [error, setError] = useState('');
@@ -79,9 +87,103 @@ export default function AdminPage() {
       } else {
         fetchUsers();
         fetchCharacters();
+        fetchChampionships();
       }
     }
   }, [isLoading, token, currentUser, router]);
+
+  const fetchChampionships = async () => {
+    setChampsLoading(true);
+    try {
+      const response = await fetch('/api/championships');
+      if (!response.ok) {
+        throw new Error('大会タイトル一覧の取得に失敗しました。');
+      }
+      const data = await response.json();
+      setChampionships(data);
+    } catch (err: any) {
+      setError(err.message || '大会タイトルの取得に失敗しました。');
+    } finally {
+      setChampsLoading(false);
+    }
+  };
+
+  const handleChampSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+    const payload = {
+      name: formChampName.trim(),
+      date: null,
+      start_date: null,
+      owner_name: null
+    };
+
+    try {
+      let response;
+      if (champModalMode === 'create') {
+        response = await apiFetch(`${apiUrl}/api/championships`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        response = await apiFetch(`${apiUrl}/api/championships/${editingChampId}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+      }
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '大会タイトルの保存に失敗しました。');
+      }
+
+      setMessage(champModalMode === 'create' ? '大会タイトルを新規追加しました。' : '大会タイトルを更新しました。');
+      setIsChampModalOpen(false);
+      fetchChampionships();
+    } catch (err: any) {
+      setError(err.message || 'エラーが発生しました。');
+    }
+  };
+
+  const handleDeleteChamp = async (id: number, name: string) => {
+    if (!window.confirm(`「${name}」を削除してもよろしいですか？\n※この大会に関連する対戦データやプレイヤー情報などもすべて削除されます。`)) {
+      return;
+    }
+    setError('');
+    setMessage('');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+    try {
+      const response = await apiFetch(`${apiUrl}/api/championships/${id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || '削除に失敗しました。');
+      }
+      setMessage(`「${name}」を削除しました。`);
+      fetchChampionships();
+    } catch (err: any) {
+      setError(err.message || '削除中にエラーが発生しました。');
+    }
+  };
+
+  const openChampModal = (mode: 'create' | 'edit', champ?: any) => {
+    setChampModalMode(mode);
+    setError('');
+    setMessage('');
+    if (mode === 'edit' && champ) {
+      setEditingChampId(champ.id);
+      setFormChampName(champ.name);
+    } else {
+      setEditingChampId(null);
+      setFormChampName('');
+    }
+    setIsChampModalOpen(true);
+  };
 
   const fetchUsers = async () => {
     setUsersLoading(true);
@@ -299,7 +401,11 @@ export default function AdminPage() {
               ← ダッシュボードへ
             </button>
             <button
-              onClick={activeTab === 'users' ? fetchUsers : fetchCharacters}
+              onClick={() => {
+                if (activeTab === 'users') fetchUsers();
+                else if (activeTab === 'characters') fetchCharacters();
+                else fetchChampionships();
+              }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition animate-pulse"
             >
               🔄 最新情報に更新
@@ -332,6 +438,18 @@ export default function AdminPage() {
             }`}
           >
             🛡️ キャラクター管理
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('championships');
+              setError('');
+              setMessage('');
+            }}
+            className={`px-5 py-2.5 font-medium text-sm transition relative ${
+              activeTab === 'championships' ? 'text-indigo-400 border-b-2 border-indigo-500 font-bold' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            🏆 大会タイトル管理
           </button>
         </div>
       </div>
@@ -573,6 +691,123 @@ export default function AdminPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* --- タブ内容3: 大会タイトル管理 --- */}
+      {activeTab === 'championships' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+            <h2 className="text-lg font-bold text-slate-100">大会タイトル一覧</h2>
+            <button
+              onClick={() => openChampModal('create')}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2.5 rounded-lg text-sm transition flex items-center gap-2 shadow-lg shadow-indigo-900/30 justify-center"
+            >
+              ➕ 大会タイトル新規追加
+            </button>
+          </div>
+
+          {champsLoading ? (
+            <div className="text-center py-8 text-slate-400 text-sm">大会タイトルをロード中...</div>
+          ) : (
+            <div className="overflow-x-auto border border-slate-800 rounded-lg">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
+                    <th className="p-4 w-24">ID</th>
+                    <th className="p-4">大会タイトル名称</th>
+                    <th className="p-4">登録日時</th>
+                    <th className="p-4 text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 text-slate-300">
+                  {championships.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="p-8 text-center text-slate-500">
+                        大会タイトルが登録されていません。
+                      </td>
+                    </tr>
+                  ) : (
+                    championships.map((champ) => (
+                      <tr key={champ.id} className="hover:bg-slate-900/50 transition">
+                        <td className="p-4">{champ.id}</td>
+                        <td className="p-4 font-semibold text-slate-200">{champ.name}</td>
+                        <td className="p-4 text-slate-500">
+                          {new Date(champ.created_at).toLocaleDateString('ja-JP')} {new Date(champ.created_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="p-4 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => openChampModal('edit', champ)}
+                              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3 py-1.5 rounded transition"
+                            >
+                              編集
+                            </button>
+                            <button
+                              onClick={() => handleDeleteChamp(champ.id, champ.name)}
+                              className="bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 text-xs font-medium px-3 py-1.5 rounded transition"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- 大会タイトル追加・編集用モーダル --- */}
+      {isChampModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl text-slate-100 my-8">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-6">
+              <h3 className="text-lg font-bold text-slate-200">
+                {champModalMode === 'create' ? '🏆 新規大会タイトル登録' : '🏆 大会タイトル名編集'}
+              </h3>
+              <button
+                onClick={() => setIsChampModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200 transition text-xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleChampSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-semibold text-slate-300 mb-1.5">大会タイトル名称 *</label>
+                <input
+                  type="text"
+                  required
+                  value={formChampName}
+                  onChange={(e) => setFormChampName(e.target.value)}
+                  placeholder="例: 第1回 アリーナ記念大会"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setIsChampModalOpen(false)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium px-4 py-2 rounded-lg text-sm transition"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2 rounded-lg text-sm transition shadow-lg shadow-indigo-900/30"
+                >
+                  保存する
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
