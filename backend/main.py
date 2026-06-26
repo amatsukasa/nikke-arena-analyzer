@@ -145,15 +145,18 @@ def user_logout(response: Response):
 @app.post("/api/auth/register")
 def user_register(body: dict, db: Session = Depends(get_db)):
     """招待コード付きユーザー登録"""
+    print(f"[Debug Register] Received body: {body}")
     email       = body.get("email", "").strip().lower()
     password    = body.get("password", "")
     invite_code = body.get("inviteCode", "")
     provider_name = body.get("providerName", "").strip() or None
     game_start_date = body.get("gameStartDate", "") or None
     
+    expected_code = auth_module.INVITE_CODE
+    print(f"[Debug Register] invite_code in body: '{invite_code}', expected_code: '{expected_code}'")
+    
     if not email or not password:
         raise HTTPException(status_code=400, detail="メールとパスワードは必須です")
-    expected_code = auth_module.INVITE_CODE
     if expected_code and invite_code != expected_code:
         raise HTTPException(status_code=400, detail="招待コードが正しくありません")
     existing = db.query(models.AppUser).filter(models.AppUser.email == email).first()
@@ -166,7 +169,8 @@ def user_register(body: dict, db: Session = Depends(get_db)):
         try:
             from datetime import datetime
             parsed_date = datetime.strptime(game_start_date, "%Y-%m-%d").date()
-        except ValueError:
+        except ValueError as ve:
+            print(f"[Debug Register] Date parsing error for '{game_start_date}': {ve}")
             raise HTTPException(status_code=400, detail="ゲーム開始日の日付フォーマットが正しくありません (YYYY-MM-DD)")
 
     user = models.AppUser(
