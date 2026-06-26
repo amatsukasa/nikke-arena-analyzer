@@ -145,15 +145,13 @@ def user_logout(response: Response):
 @app.post("/api/auth/register")
 def user_register(body: dict, db: Session = Depends(get_db)):
     """招待コード付きユーザー登録"""
-    print(f"[Debug Register] Received body: {body}")
     email       = body.get("email", "").strip().lower()
     password    = body.get("password", "")
-    invite_code = body.get("inviteCode", "")
+    invite_code = body.get("inviteCode", "").strip() # 余分なスペースをトリミング
     provider_name = body.get("providerName", "").strip() or None
     game_start_date = body.get("gameStartDate", "") or None
     
-    expected_code = auth_module.INVITE_CODE
-    print(f"[Debug Register] invite_code in body: '{invite_code}', expected_code: '{expected_code}'")
+    expected_code = auth_module.INVITE_CODE.strip() if auth_module.INVITE_CODE else ""
     
     if not email or not password:
         raise HTTPException(status_code=400, detail="メールとパスワードは必須です")
