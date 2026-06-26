@@ -14,6 +14,54 @@ from database import engine
 BASELINE_REVISION = "e8950d0bb43e"
 
 
+def _repair_creator_foreign_keys():
+    """Point creator references at the app_users table used by authentication."""
+    if engine.dialect.name != "postgresql":
+        return
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        if "app_users" not in tables:
+            return
+
+        for table in ("championships", "tournaments"):
+            if table not in tables:
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            if "created_by" not in columns:
+                continue
+
+            connection.execute(text(
+                f'UPDATE "{table}" SET created_by = NULL '
+                'WHERE created_by IS NOT NULL '
+                'AND NOT EXISTS ('
+                f'SELECT 1 FROM app_users WHERE app_users.id = "{table}".created_by'
+                ')'
+            ))
+
+            has_app_user_fk = False
+            for foreign_key in inspector.get_foreign_keys(table):
+                if foreign_key.get("constrained_columns") != ["created_by"]:
+                    continue
+                if foreign_key.get("referred_table") == "app_users":
+                    has_app_user_fk = True
+                    continue
+                constraint_name = foreign_key.get("name")
+                if constraint_name:
+                    connection.execute(text(
+                        f'ALTER TABLE "{table}" DROP CONSTRAINT "{constraint_name}"'
+                    ))
+
+            if not has_app_user_fk:
+                connection.execute(text(
+                    f'ALTER TABLE "{table}" '
+                    f'ADD CONSTRAINT "fk_{table}_created_by_app_users" '
+                    'FOREIGN KEY (created_by) REFERENCES app_users(id)'
+                ))
+            print(f"[Migration] {table}.created_by now references app_users.id")
+
+
 def _get_applied_revisions():
     with engine.connect() as connection:
         return [
@@ -55,9 +103,13 @@ def run_migrations():
         )
         command.stamp(alembic_cfg, BASELINE_REVISION)
 
+    # Repair the legacy creator constraints before application code starts.
+    _repair_creator_foreign_keys()
+
     # 通常のアップグレードを実行
     print("[Migration] マイグレーションの実行(upgrade head)を開始します...")
     command.upgrade(alembic_cfg, "head")
+    _repair_creator_foreign_keys()
     print("[Migration] マイグレーションが完了しました。")
 
 

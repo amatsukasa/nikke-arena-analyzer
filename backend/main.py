@@ -608,8 +608,14 @@ def get_championship(id: int, db: Session = Depends(get_db)):
     return db_championship
 
 @app.post("/api/championships", response_model=schemas.ChampionshipResponse)
-def create_championship(championship: schemas.ChampionshipCreate, db: Session = Depends(get_db)):
-    db_championship = models.Championship(**championship.model_dump())
+def create_championship(
+    championship: schemas.ChampionshipCreate,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    data = championship.model_dump()
+    data["created_by"] = current_user.id
+    db_championship = models.Championship(**data)
     db.add(db_championship)
     db.commit()
     db.refresh(db_championship)

@@ -12,8 +12,6 @@ class User(Base):
     is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    tournaments = relationship("Tournament", back_populates="creator")
-
 class AppUser(Base):
     __tablename__ = "app_users"
     id = Column(Integer, primary_key=True, index=True)
@@ -24,6 +22,9 @@ class AppUser(Base):
     provider_name = Column(String, nullable=True) # 追加: 提供者名
     game_start_date = Column(Date, nullable=True) # 追加: 指揮官のゲーム開始日
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    championships = relationship("Championship", back_populates="creator")
+    tournaments = relationship("Tournament", back_populates="creator")
 
 class Character(Base):
     __tablename__ = "characters"
@@ -45,10 +46,10 @@ class Championship(Base):
     date = Column(Date, nullable=True) # 開催順管理とするため nullable に変更
     start_date = Column(Date, nullable=True)
     owner_name = Column(String, nullable=True)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    creator = relationship("User", foreign_keys=[created_by])
+    creator = relationship("AppUser", back_populates="championships")
     tournaments = relationship("Tournament", back_populates="championship")
 
 class Tournament(Base):
@@ -62,9 +63,9 @@ class Tournament(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # 追加: 登録ユーザーの関連付け
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     
-    creator = relationship("User", back_populates="tournaments")
+    creator = relationship("AppUser", back_populates="tournaments")
     championship = relationship("Championship", back_populates="tournaments")
     players = relationship("Player", back_populates="tournament")
     matches = relationship("Match", back_populates="tournament")

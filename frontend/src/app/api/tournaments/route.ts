@@ -11,6 +11,23 @@ const NO_CACHE_HEADERS = {
   'Expires': '0',
 };
 
+async function readBackendResponse(res: Response) {
+  const text = await res.text();
+  if (!text) {
+    return res.ok ? {} : { message: `Backend request failed (${res.status})` };
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      message: res.ok
+        ? text
+        : `Backend request failed (${res.status}): ${text}`,
+    };
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const res = await fetch(`${BACKEND_URL}/api/tournaments`, {
@@ -20,7 +37,7 @@ export async function GET(request: NextRequest) {
         'Content-Type': 'application/json',
       },
     });
-    const data = await res.json();
+    const data = await readBackendResponse(res);
     return NextResponse.json(data, {
       status: res.status,
       headers: NO_CACHE_HEADERS,
@@ -43,7 +60,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify(body),
     });
-    const data = await res.json();
+    const data = await readBackendResponse(res);
     return NextResponse.json(data, {
       status: res.status,
       headers: NO_CACHE_HEADERS,
