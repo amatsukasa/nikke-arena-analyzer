@@ -14,45 +14,20 @@ export default function PlayerStatsPage() {
   const [playerDetails, setPlayerDetails] = useState<any>(null);
   const [bracketData, setBracketData] = useState<any>(null);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
+  const [error, setError] = useState("");
 
-  const [tournamentId, setTournamentId] = useState<number | null>(null);
-
-  useEffect(() => {
-    const initTournament = async () => {
-      try {
-        const res = await fetch(`/api/championships/${id}/matches`);
-        const matches = await res.json();
-        
-        if (matches && matches.length > 0) {
-          setTournamentId(matches[0].id);
-        } else {
-          const champRes = await fetch(`/api/championships/${id}`);
-          const champ = await champRes.json();
-          
-          const createRes = await fetch(`/api/tournaments`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: champ.name || `Championship ${id} Tournament`,
-              date: champ.date || new Date().toISOString().split('T')[0],
-              championship_id: parseInt(id as string)
-            })
-          });
-          const newTourn = await createRes.json();
-          setTournamentId(newTourn.id);
-        }
-      } catch (err) {
-        console.error("Tournament initialization failed in player stats page:", err);
-      }
-    };
-    initTournament();
-  }, [id]);
+  const tournamentId = parseInt(id, 10);
 
   useEffect(() => {
-    if (!tournamentId) return;
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) {
+      setError("大会IDが正しくありません。");
+      setLoading(false);
+      return;
+    }
 
     const fetchData = async () => {
       try {
+        setError("");
         const timestamp = Date.now();
         const [tournRes, detailsRes, bracketRes, charsRes] = await Promise.all([
           fetch(`/api/tournaments/${tournamentId}?t=${timestamp}`),
@@ -60,6 +35,11 @@ export default function PlayerStatsPage() {
           fetch(`/api/tournaments/${tournamentId}/bracket?t=${timestamp}`),
           fetch(`/api/characters?t=${timestamp}`)
         ]);
+
+        const responses = [tournRes, detailsRes, bracketRes, charsRes];
+        if (responses.some(response => !response.ok)) {
+          throw new Error("個人成績データを取得できませんでした。");
+        }
         
         setTournament(await tournRes.json());
         setPlayerDetails(await detailsRes.json());
@@ -67,6 +47,7 @@ export default function PlayerStatsPage() {
         setAllCharacters(await charsRes.json());
       } catch (e) {
         console.error(e);
+        setError(e instanceof Error ? e.message : "個人成績データを取得できませんでした。");
       } finally {
         setLoading(false);
       }
@@ -79,6 +60,19 @@ export default function PlayerStatsPage() {
       <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
   );
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-950 p-6 flex flex-col items-center justify-center text-center">
+        <UserIcon size={64} className="text-slate-700 mb-4" />
+        <h1 className="text-2xl font-bold text-slate-300">個人成績を表示できません</h1>
+        <p className="text-slate-500 mt-2">{error}</p>
+        <Link href="/" className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors">
+          ダッシュボードへ戻る
+        </Link>
+      </div>
+    );
+  }
 
   if (!playerDetails || !playerDetails.player) {
     return (
@@ -95,9 +89,14 @@ export default function PlayerStatsPage() {
 
   const myPlayer = playerDetails.player;
   const myDecks = playerDetails.decks || [];
+  const hasRecordedMatches = myDecks.some(
+    (deck: any) => (deck.wins || 0) + (deck.losses || 0) > 0
+  );
 
-  let myTournamentResult = "グループ1回戦出場 (Best 64)";
-  if (bracketData && bracketData.groups) {
+  let myTournamentResult = hasRecordedMatches
+    ? "グループ1回戦出場 (Best 64)"
+    : "対戦成績未登録";
+  if (hasRecordedMatches && bracketData && bracketData.groups) {
      bracketData.groups.forEach((g: any) => {
         const found = g.players.find((p:any) => (p.original_seed || p.seed) === seed && p.id !== null);
         if (found) {

@@ -837,7 +837,15 @@ def get_player_details(tournament_id: int, seed_number: int, db: Session = Depen
         
     deck_set = db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).first()
     if not deck_set:
-        return {"player": {"id": player.id, "name": player.name, "seed_number": player.seed_number}, "decks": []}
+        return {
+            "player": {
+                "id": player.id,
+                "name": player.name,
+                "seed_number": player.seed_number,
+                "icon_url": player.icon_url,
+            },
+            "decks": [],
+        }
         
     # Get matches where this player participated and the match was resolved
     matches = db.query(models.Match).filter(
