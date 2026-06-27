@@ -6,8 +6,11 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models, schemas
 from typing import List
+import asyncio
+import contextlib
 import shutil
 import os
+from pathlib import Path
 
 app = FastAPI(
     title="NIKKE Arena Analysis API",
@@ -29,6 +32,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from fastapi.staticfiles import StaticFiles
 from services.image_processor import process_images
+from services.upload_cleanup import (
+    cleanup_stale_uploads,
+    delete_temporary_crop_urls,
+    delete_upload_file,
+    path_from_upload_url,
+    stale_age_hours_from_env,
+)
 from fastapi.responses import FileResponse
 
 app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -59,8 +69,43 @@ def read_root():
 # ===== 初回起動時: 管理者アカウント自動作成 =====
 from database import SessionLocal, Base
 from scripts.init_db import init_db
+
+_upload_cleanup_task = None
+
+
+def run_stale_upload_cleanup():
+    db = SessionLocal()
+    try:
+        referenced_icons = {
+            icon_url
+            for (icon_url,) in db.query(models.Player.icon_url).filter(
+                models.Player.icon_url.isnot(None)
+            ).all()
+        }
+        cleanup_stale_uploads(
+            referenced_icons,
+            max_age_hours=stale_age_hours_from_env(),
+        )
+    except Exception as error:
+        print(f"[Cleanup] Scheduled cleanup failed: {error}")
+    finally:
+        db.close()
+
+
+async def periodic_upload_cleanup():
+    raw_interval = os.environ.get("UPLOAD_CLEANUP_INTERVAL_MINUTES", "60")
+    try:
+        interval_seconds = max(5, int(raw_interval)) * 60
+    except ValueError:
+        interval_seconds = 60 * 60
+    while True:
+        await asyncio.sleep(interval_seconds)
+        await asyncio.to_thread(run_stale_upload_cleanup)
+
+
 @app.on_event("startup")
 async def startup_event():
+    global _upload_cleanup_task
     Base.metadata.create_all(bind=engine)
     try:
         init_db()
@@ -99,8 +144,21 @@ async def startup_event():
                 existing.game_start_date = default_start_date
             db.commit()
             print(f"[Startup] Existing admin preserved: {existing.email}")
+
     finally:
         db.close()
+    await asyncio.to_thread(run_stale_upload_cleanup)
+    _upload_cleanup_task = asyncio.create_task(periodic_upload_cleanup())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _upload_cleanup_task
+    if _upload_cleanup_task is not None:
+        _upload_cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await _upload_cleanup_task
+        _upload_cleanup_task = None
 
 
 # ===== 認証エンドポイント =====
@@ -823,6 +881,27 @@ def get_player_details(tournament_id: int, seed_number: int, db: Session = Depen
 
 
 
+def cleanup_replaced_player_icon(
+    db: Session,
+    player_id: int,
+    previous_url: str | None,
+    current_url: str | None,
+):
+    if not previous_url or previous_url == current_url:
+        return
+    still_referenced = db.query(models.Player.id).filter(
+        models.Player.id != player_id,
+        models.Player.icon_url == previous_url,
+    ).first()
+    path = path_from_upload_url(previous_url)
+    if (
+        not still_referenced
+        and path is not None
+        and path.name.startswith("player_icon_")
+    ):
+        delete_upload_file(path)
+
+
 @app.post("/api/tournaments/{tournament_id}/players/{seed_number}")
 async def update_player_info(
     tournament_id: int,
@@ -839,6 +918,7 @@ async def update_player_info(
     
     name = data.get("name")
     icon_url = data.get("icon_url")
+    previous_icon_url = player.icon_url if player else None
     
     if not player:
         player = models.Player(
@@ -854,6 +934,7 @@ async def update_player_info(
     
     db.commit()
     db.refresh(player)
+    cleanup_replaced_player_icon(db, player.id, previous_icon_url, player.icon_url)
     return player
 
 @app.post("/api/tournaments/{tournament_id}/teams")
@@ -864,6 +945,11 @@ async def save_teams(
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
     require_tournament_manager(tournament_id, db, current_user)
+    temporary_crop_urls = [
+        character.get("image_url")
+        for team in data.get("teams", [])
+        for character in team.get("characters", [])
+    ]
     try:
         seed_number = data.get("seed_number")
         teams = data.get("teams", [])
@@ -876,6 +962,7 @@ async def save_teams(
             models.Player.tournament_id == tournament_id,
             models.Player.seed_number == seed_number
         ).first()
+        previous_icon_url = player.icon_url if player else None
         
         if not player:
             player = models.Player(
@@ -893,6 +980,12 @@ async def save_teams(
             if player_icon_url: player.icon_url = player_icon_url
             db.commit()
             print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+        cleanup_replaced_player_icon(
+            db,
+            player.id,
+            previous_icon_url,
+            player.icon_url,
+        )
 
         # 重複キャラクターのバリデーション
         all_char_ids = []
@@ -1002,6 +1095,9 @@ async def save_teams(
 
         
         db.commit()
+        deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
+        if deleted_crops:
+            print(f"[Cleanup] Removed {deleted_crops} registered crop images")
         return {"ok": True, "is_update": is_update}
     except Exception as e:
         import traceback
@@ -1014,7 +1110,8 @@ async def upload_player_icon(
     image: UploadFile = File(...)
 ):
     # プレイヤーアイコンを保存
-    filename = f"player_icon_{os.urandom(4).hex()}_{image.filename}"
+    original_name = Path(image.filename or "player.png").name
+    filename = f"player_icon_{os.urandom(4).hex()}_{original_name}"
     file_path = os.path.join("uploads/cropped", filename)
     os.makedirs("uploads/cropped", exist_ok=True)
     
@@ -1030,24 +1127,21 @@ async def analyze_deck(
     images: List[UploadFile] = File(...)
 ):
     saved_paths = []
-    for idx, image in enumerate(images):
-        file_location = f"{UPLOAD_DIR}/tour_{tournament_id}_seed_{seed_number}_img_{idx}_{image.filename}"
-        with open(file_location, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
-        saved_paths.append(file_location)
-    
-    # 画像処理サービスの呼び出し（ラウンドソートとキャラ切り抜き）
-    result = process_images(saved_paths, tournament_id, seed_number)
+    try:
+        for idx, image in enumerate(images):
+            original_name = Path(image.filename or "deck.png").name
+            file_location = (
+                f"{UPLOAD_DIR}/tour_{tournament_id}_seed_{seed_number}"
+                f"_img_{idx}_{original_name}"
+            )
+            saved_paths.append(file_location)
+            with open(file_location, "wb") as buffer:
+                shutil.copyfileobj(image.file, buffer)
 
-    # ストレージ節約: 処理済みのスクショ原本を即削除
-    for p in saved_paths:
-        try:
-            if os.path.exists(p):
-                os.remove(p)
-        except Exception as e:
-            print(f"[Cleanup] 削除失敗: {p} - {e}")
-
-    return result
+        return process_images(saved_paths, tournament_id, seed_number)
+    finally:
+        for path in saved_paths:
+            delete_upload_file(path)
 
 @app.post("/api/analyze/match_result")
 async def analyze_match_result(
@@ -1076,16 +1170,12 @@ async def analyze_match_result(
             "rounds": result["rounds"],
             "winner": result["winner"]
         }
-        # ストレージ節約: 処理済みのスクショ原本を即削除
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except Exception as _e:
-            print(f"[Cleanup] match画像削除失敗: {_e}")
         return resp
     except Exception as e:
         print(f"Error extracting match results: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        delete_upload_file(file_path)
 
 @app.get("/api/tournaments/{tournament_id}/bracket")
 def get_tournament_bracket(tournament_id: int, db: Session = Depends(get_db)):
