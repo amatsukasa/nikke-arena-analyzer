@@ -20,6 +20,7 @@ export default function TournamentDetail() {
   const [isUploading, setIsUploading] = useState(false);
   const [characters, setCharacters] = useState<any[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<any[]>([]);
+  const [expandedPreviewRound, setExpandedPreviewRound] = useState(0);
 
   // 勝敗登録用state
   const [mode, setMode] = useState<"deck" | "match">("deck");
@@ -257,6 +258,7 @@ export default function TournamentDetail() {
       };
 
       setResult(augmentedData);
+      setExpandedPreviewRound(0);
       setSelectedTeams(augmentedData.suggested_teams.map((team: any, r_idx: number) => ({
         team_number: r_idx + 1,
         characters: team.map((c: any) => ({
@@ -270,6 +272,36 @@ export default function TournamentDetail() {
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const movePreviewRound = (roundIndex: number, offset: number) => {
+    const targetIndex = roundIndex + offset;
+    if (targetIndex < 0 || targetIndex >= result.suggested_teams.length) return;
+
+    const suggestedTeams = [...result.suggested_teams];
+    [suggestedTeams[roundIndex], suggestedTeams[targetIndex]] = [
+      suggestedTeams[targetIndex],
+      suggestedTeams[roundIndex]
+    ];
+    setResult((prev: any) => ({ ...prev, suggested_teams: suggestedTeams }));
+
+    const teams = [...selectedTeams];
+    [teams[roundIndex], teams[targetIndex]] = [teams[targetIndex], teams[roundIndex]];
+    setSelectedTeams(teams.map((team, index) => ({ ...team, team_number: index + 1 })));
+    setExpandedPreviewRound(targetIndex);
+  };
+
+  const updateSelectedCharacter = (roundIndex: number, characterIndex: number, characterId: number | null) => {
+    setSelectedTeams(prev => prev.map((team, teamIndex) => (
+      teamIndex !== roundIndex
+        ? team
+        : {
+            ...team,
+            characters: team.characters.map((character: any, index: number) => (
+              index === characterIndex ? { ...character, id: characterId } : character
+            ))
+          }
+    )));
   };
 
   const handleSave = async () => {
@@ -885,73 +917,99 @@ export default function TournamentDetail() {
 
             <div className="space-y-3">
               {result.suggested_teams.map((team: any, idx: number) => (
-                <div key={idx} className="flex space-x-2 items-center">
-                  <div className="flex flex-col items-center justify-center space-y-0.5 shrink-0">
-                    <button 
-                      onClick={() => {
-                        if (idx === 0) return;
-                        const newResult = { ...result };
-                        const newSuggested = [...newResult.suggested_teams];
-                        [newSuggested[idx], newSuggested[idx - 1]] = [newSuggested[idx - 1], newSuggested[idx]];
-                        newResult.suggested_teams = newSuggested;
-                        setResult(newResult);
-
-                        const newSelected = [...selectedTeams];
-                        [newSelected[idx], newSelected[idx - 1]] = [newSelected[idx - 1], newSelected[idx]];
-                        newSelected.forEach((t, i) => t.team_number = i + 1);
-                        setSelectedTeams(newSelected);
-                      }}
-                      disabled={idx === 0}
-                      className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
-                      title="一つ上へ移動"
-                    >
-                      ▲
-                    </button>
-                    <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center text-xs text-slate-500 font-mono ring-1 ring-white/5">R{idx + 1}</div>
-                    <button 
-                      onClick={() => {
-                        if (idx === result.suggested_teams.length - 1) return;
-                        const newResult = { ...result };
-                        const newSuggested = [...newResult.suggested_teams];
-                        [newSuggested[idx], newSuggested[idx + 1]] = [newSuggested[idx + 1], newSuggested[idx]];
-                        newResult.suggested_teams = newSuggested;
-                        setResult(newResult);
-
-                        const newSelected = [...selectedTeams];
-                        [newSelected[idx], newSelected[idx + 1]] = [newSelected[idx + 1], newSelected[idx]];
-                        newSelected.forEach((t, i) => t.team_number = i + 1);
-                        setSelectedTeams(newSelected);
-                      }}
-                      disabled={idx === result.suggested_teams.length - 1}
-                      className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
-                      title="一つ下へ移動"
-                    >
-                      ▼
-                    </button>
-                  </div>
-                  {team.map((char: any, c_idx: number) => (
-                    <div key={c_idx} className="flex-1 flex flex-col space-y-1">
-                      <div className="aspect-square rounded-lg bg-slate-800/50 ring-1 ring-white/5 overflow-hidden relative">
-                        {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-600 text-xs">-</div>}
-                      </div>
-                      <select
-                        className={`w-full text-[10px] rounded py-1 px-0.5 ${!selectedTeams[idx]?.characters[c_idx]?.id ? 'bg-red-950/80 text-red-400 border-2 border-red-500 font-bold shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-slate-800 border border-slate-700 text-slate-300'}`}
-                        value={selectedTeams[idx]?.characters[c_idx]?.id || ""}
-                        onChange={(e) => {
-                          const newTeams = [...selectedTeams];
-                          newTeams[idx].characters[c_idx].id = e.target.value ? parseInt(e.target.value) : null;
-                          setSelectedTeams(newTeams);
-                        }}
+                <div key={idx} className="rounded-lg border border-white/10 bg-slate-900/40 p-2 sm:border-0 sm:bg-transparent sm:p-0">
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col items-center justify-center space-y-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => movePreviewRound(idx, -1)}
+                        disabled={idx === 0}
+                        className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
+                        title="一つ上へ移動"
                       >
-                        <option value="">(不明)</option>
-                        {characters.map(c => 
-                          <option key={c.id} value={c.id}>
-                            {c.id === 9999 ? '登録なし' : `[${c.rarity}] ${c.name}`}
-                          </option>
-                        )}
-                      </select>
+                        ▲
+                      </button>
+                      <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center text-xs text-slate-500 font-mono ring-1 ring-white/5">R{idx + 1}</div>
+                      <button
+                        type="button"
+                        onClick={() => movePreviewRound(idx, 1)}
+                        disabled={idx === result.suggested_teams.length - 1}
+                        className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
+                        title="一つ下へ移動"
+                      >
+                        ▼
+                      </button>
                     </div>
-                  ))}
+
+                    <button
+                      type="button"
+                      onClick={() => setExpandedPreviewRound(current => current === idx ? -1 : idx)}
+                      className="flex min-h-12 flex-1 items-center justify-between rounded-md bg-slate-800/70 px-3 text-left sm:hidden"
+                      aria-expanded={expandedPreviewRound === idx}
+                    >
+                      <span className="font-bold text-slate-200">ラウンド {idx + 1}</span>
+                      <span className="flex items-center gap-2">
+                        {(() => {
+                          const missingCount = selectedTeams[idx]?.characters.filter((character: any) => !character.id).length ?? team.length;
+                          return missingCount > 0
+                            ? <span className="text-sm font-bold text-red-400">未確認 {missingCount}</span>
+                            : <span className="text-sm font-bold text-emerald-400">確認済み</span>;
+                        })()}
+                        <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${expandedPreviewRound === idx ? "rotate-180" : ""}`} />
+                      </span>
+                    </button>
+
+                    <div className="hidden min-w-0 flex-1 grid-cols-5 gap-2 sm:grid">
+                      {team.map((char: any, c_idx: number) => (
+                        <div key={c_idx} className="flex min-w-0 flex-col items-center gap-2">
+                          <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-800/50 ring-1 ring-white/5">
+                            {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">-</div>}
+                          </div>
+                          <select
+                            className={`h-10 w-full min-w-0 rounded px-2 text-sm ${!selectedTeams[idx]?.characters[c_idx]?.id ? 'bg-red-950/80 text-red-400 border-2 border-red-500 font-bold shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-slate-800 border border-slate-700 text-slate-300'}`}
+                            value={selectedTeams[idx]?.characters[c_idx]?.id || ""}
+                            onChange={(e) => updateSelectedCharacter(idx, c_idx, e.target.value ? parseInt(e.target.value) : null)}
+                            aria-label={`ラウンド${idx + 1} キャラクター${c_idx + 1}`}
+                          >
+                            <option value="">(不明)</option>
+                            {characters.map(c =>
+                              <option key={c.id} value={c.id}>
+                                {c.id === 9999 ? '登録なし' : `[${c.rarity}] ${c.name}`}
+                              </option>
+                            )}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {expandedPreviewRound === idx && (
+                    <div className="mt-2 space-y-2 sm:hidden">
+                      {team.map((char: any, c_idx: number) => (
+                        <div key={c_idx} className="flex min-w-0 items-center gap-3 rounded-md bg-slate-950/50 p-2">
+                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-slate-800/50 ring-1 ring-white/5">
+                            {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">-</div>}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <label className="mb-1 block text-xs text-slate-500" htmlFor={`round-${idx}-character-${c_idx}`}>キャラクター {c_idx + 1}</label>
+                            <select
+                              id={`round-${idx}-character-${c_idx}`}
+                              className={`min-h-11 w-full min-w-0 rounded px-3 text-base ${!selectedTeams[idx]?.characters[c_idx]?.id ? 'bg-red-950/80 text-red-400 border-2 border-red-500 font-bold shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-slate-800 border border-slate-700 text-slate-200'}`}
+                              value={selectedTeams[idx]?.characters[c_idx]?.id || ""}
+                              onChange={(e) => updateSelectedCharacter(idx, c_idx, e.target.value ? parseInt(e.target.value) : null)}
+                            >
+                              <option value="">(不明)</option>
+                              {characters.map(c =>
+                                <option key={c.id} value={c.id}>
+                                  {c.id === 9999 ? '登録なし' : `[${c.rarity}] ${c.name}`}
+                                </option>
+                              )}
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
