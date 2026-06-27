@@ -8,6 +8,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const filePath = path.join('/');
     const res = await fetch(`${BACKEND_URL}/api/uploads/${filePath}`, {
       method: 'GET',
+      cache: 'no-store',
     });
     
     if (!res.ok) {
@@ -16,12 +17,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const contentType = res.headers.get('content-type') || 'application/octet-stream';
     const fileBuffer = await res.arrayBuffer();
+    const isTemporaryCrop = filePath.startsWith('cropped/crop_');
 
     return new NextResponse(fileBuffer, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': isTemporaryCrop
+          ? 'no-store, no-cache, must-revalidate, max-age=0'
+          : 'public, max-age=31536000, immutable',
       },
     });
   } catch (error: any) {

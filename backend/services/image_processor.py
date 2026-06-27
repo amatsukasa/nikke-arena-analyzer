@@ -2,8 +2,10 @@ import cv2
 import numpy as np
 import os
 import pytesseract
+import secrets
 
 def process_images(image_paths, tournament_id, seed_number):
+    analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
     lower_cyan = np.array([75, 50, 50])
     upper_cyan = np.array([105, 255, 255])
@@ -139,7 +141,10 @@ def process_images(image_paths, tournament_id, seed_number):
                 })
                 continue
             
-            crop_filename = f"crop_t{tournament_id}_s{seed_number}_r{r_idx+1}_c{c_idx+1}.png"
+            crop_filename = (
+                f"crop_t{tournament_id}_s{seed_number}_{analysis_id}"
+                f"_r{r_idx+1}_c{c_idx+1}.png"
+            )
             crop_path = os.path.join(cropped_dir, crop_filename)
             cv2.imwrite(crop_path, face)
             
