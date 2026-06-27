@@ -335,6 +335,29 @@ export default function TournamentDetail() {
       return;
     }
 
+    const correctedCharacters = selectedTeams.flatMap((team, roundIndex) =>
+      team.characters.flatMap((character: any, characterIndex: number) => {
+        if (!character.add_to_templates) return [];
+        const characterName = characters.find(c => c.id === character.id)?.name || `ID:${character.id}`;
+        return [`R${roundIndex + 1}・${characterIndex + 1}人目：（不明）→ ${characterName}`];
+      })
+    );
+    const correctionSummary = correctedCharacters.length > 0
+      ? correctedCharacters.map(line => `・${line}`).join("\n")
+      : "・なし";
+    const templateNotice = correctedCharacters.length > 0
+      ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
+      : "";
+    const playerLabel = result?.suggested_player_name || `Player ${seed}`;
+
+    if (!window.confirm(
+      `${playerLabel}（シード${seed}）をこの内容で登録しますか？\n\n`
+      + `不明から補正したキャラ：\n${correctionSummary}`
+      + templateNotice
+    )) {
+      return;
+    }
+
     if (!tournamentId) return;
     try {
       const res = await fetch(`/api/tournaments/${tournamentId}/teams`, {
