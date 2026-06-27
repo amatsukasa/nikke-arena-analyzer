@@ -71,6 +71,14 @@ class Tournament(Base):
     players = relationship("Player", back_populates="tournament")
     matches = relationship("Match", back_populates="tournament")
 
+    @property
+    def play_server(self):
+        return self.creator.play_server if self.creator else None
+
+    @property
+    def provider_game_start_date(self):
+        return self.creator.game_start_date if self.creator else None
+
 class Player(Base):
     __tablename__ = "players"
     __table_args__ = (

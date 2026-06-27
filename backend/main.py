@@ -638,10 +638,18 @@ def get_tournaments(
             raise HTTPException(status_code=401, detail="Login required")
         if current_user.role != "admin":
             query = query.filter(models.Tournament.created_by == current_user.id)
-    return query.order_by(
+    tournaments = query.order_by(
         models.Tournament.created_at.desc(),
         models.Tournament.id.desc(),
     ).all()
+    if mine:
+        return tournaments
+    return [
+        schemas.Tournament.model_validate(tournament).model_copy(
+            update={"owner_name": None, "created_by": None}
+        )
+        for tournament in tournaments
+    ]
 
 @app.get("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
 def get_tournament(tournament_id: int, db: Session = Depends(get_db)):
