@@ -50,7 +50,11 @@ def get_char_icon(char_id: int):
     # 旧形式を優先
     old_path = os.path.join(template_dir, f"char_{char_id}.png")
     if os.path.exists(old_path):
-        return FileResponse(old_path, media_type="image/png")
+        return FileResponse(
+            old_path,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
     # 新形式: 連番の最初のファイルを探す
     if os.path.exists(template_dir):
         candidates = sorted([
@@ -58,7 +62,11 @@ def get_char_icon(char_id: int):
             if f.startswith(f"char_{char_id}_") and f.endswith(".png")
         ])
         if candidates:
-            return FileResponse(os.path.join(template_dir, candidates[0]), media_type="image/png")
+            return FileResponse(
+                os.path.join(template_dir, candidates[0]),
+                media_type="image/png",
+                headers={"Cache-Control": "no-store"},
+            )
     raise HTTPException(status_code=404, detail="Template not found")
 
 @app.get("/")
