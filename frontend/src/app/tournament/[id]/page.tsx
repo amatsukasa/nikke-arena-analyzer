@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, BarChart3, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save } from "lucide-react";
+import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save } from "lucide-react";
 import Link from "next/link";
 import Cropper from "react-easy-crop";
 
@@ -594,13 +594,6 @@ export default function TournamentDetail() {
           </Link>
           <h1 className="text-2xl md:text-3xl font-black text-slate-100">トーナメント表</h1>
         </div>
-
-        <Link href={`/tournament/${id}/dashboard`}>
-          <button className="flex items-center space-x-2 bg-blue-500 hover:bg-blue-600 text-white px-3 md:px-4 py-2 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/25 text-sm md:text-base">
-            <BarChart3 size={20} />
-            <span className="hidden md:inline">ダッシュボードを見る</span>
-          </button>
-        </Link>
       </div>
 
       {/* Bracket View Area */}
