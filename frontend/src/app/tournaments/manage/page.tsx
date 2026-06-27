@@ -169,12 +169,6 @@ export default function Home() {
               >
                 <UserRound size={18} />
               </Link>
-              <Link
-                href="/"
-                className="flex items-center space-x-2 px-4 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-400 hover:text-white"
-              >
-                <span className="text-sm">ダッシュボードへ戻る</span>
-              </Link>
               {user && user.role === 'admin' && (
                 <Link
                   href="/admin"

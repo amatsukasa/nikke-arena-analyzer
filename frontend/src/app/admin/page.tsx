@@ -85,7 +85,7 @@ export default function AdminPage() {
         router.push('/secret-login');
       } else if (currentUser?.role !== 'admin') {
         alert('管理者権限が必要です。');
-        router.push('/');
+        router.push('/staff');
       } else {
         fetchUsers();
         fetchCharacters();
@@ -409,10 +409,10 @@ export default function AdminPage() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => router.push('/')}
+              onClick={() => router.push('/staff')}
               className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium px-4 py-2 rounded-lg text-sm transition"
             >
-              ← ダッシュボードへ
+              ← 大会一覧へ
             </button>
             <button
               onClick={() => {

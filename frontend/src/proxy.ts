@@ -5,9 +5,9 @@ import { NextRequest, NextResponse } from "next/server";
  * （旧: middleware.ts → 新: proxy.ts、エクスポート名も proxy に変更）
  *
  * アクセス権限マトリクス:
- *   /gate, /secret-login, /secret-register  → 誰でもアクセス可
- *   /                                        → site_session Cookie 必須
- *   /tournaments/*, /tournament/*, /admin/*  → auth_token Cookie 必須
+ *   /, 大会別dashboard, 大会別player → site_session Cookie 必須
+ *   /staff, /tournaments/*, /tournament/:id, /admin/* → auth_token Cookie 必須
+ *   /gate, /secret-login, /secret-register             → 誰でもアクセス可
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -27,8 +27,9 @@ export function proxy(request: NextRequest) {
   const authToken   = request.cookies.get("auth_token")?.value;
 
   // ログイン必須ルート: 大会データ登録・編集・管理者画面
-  const staffRoutes = ["/tournaments", "/tournament", "/admin", "/account"];
-  if (staffRoutes.some((r) => pathname.startsWith(r))) {
+  const staffRoutes = ["/staff", "/tournaments", "/admin", "/account", "/tournament/register"];
+  const isTournamentEditor = /^\/tournament\/[^/]+\/?$/.test(pathname);
+  if (staffRoutes.some((r) => pathname.startsWith(r)) || isTournamentEditor) {
     if (!authToken) {
       const loginUrl = new URL("/secret-login", request.url);
       loginUrl.searchParams.set("redirect", pathname);
@@ -37,7 +38,8 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // ダッシュボード閲覧: ゲートパス必須（ログイン済みならゲートパス不要）
+  // ダッシュボードと分析詳細はクローズドテスト中のためゲート通過が必要
+  // スタッフはログイン済みであればゲート入力を省略できる
   if (!siteSession && !authToken) {
     return NextResponse.redirect(new URL("/gate", request.url));
   }

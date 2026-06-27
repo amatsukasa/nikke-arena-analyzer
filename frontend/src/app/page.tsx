@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe, PlusCircle } from "lucide-react";
+import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 
@@ -455,43 +455,6 @@ function DashboardContent() {
           </div>
         </div>
         
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {user && (
-            <Link
-              href="/account"
-              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
-            >
-              <UserIcon size={16} />
-              <span>アカウント</span>
-            </Link>
-          )}
-          {user && (
-            <Link
-              href="/tournaments/manage"
-              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
-            >
-              <PlusCircle size={16} />
-              <span>大会データ登録</span>
-            </Link>
-          )}
-          {user && user.role === 'admin' && (
-            <Link
-              href="/admin"
-              className="flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 ring-1 ring-white/10 rounded-full font-bold transition-all text-slate-300 hover:text-white text-sm"
-            >
-              <ShieldAlert size={16} />
-              <span>管理者</span>
-            </Link>
-          )}
-          {!user && (
-            <Link
-              href="/secret-login"
-              className="flex items-center space-x-2 px-4 py-2 bg-slate-800/50 hover:bg-slate-800 ring-1 ring-white/5 rounded-full font-bold transition-all text-slate-400 hover:text-slate-200 text-sm"
-            >
-              <span>スタッフログイン</span>
-            </Link>
-          )}
-        </div>
       </div>
 
       <div className="flex flex-col xl:flex-row gap-8">

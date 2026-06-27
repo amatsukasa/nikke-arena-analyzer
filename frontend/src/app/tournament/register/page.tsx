@@ -199,7 +199,7 @@ function RegisterForm() {
                 if (queryChampionshipId) {
                   router.push(`/tournament/${queryChampionshipId}`);
                 } else {
-                  router.push('/');
+                  router.push('/staff');
                 }
               }}
             >

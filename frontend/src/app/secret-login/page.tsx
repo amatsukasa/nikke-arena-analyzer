@@ -48,9 +48,12 @@ export default function SecretLoginPage() {
       // AuthContextにトークンとユーザー情報を保存
       login(data.token || data.access_token, data.user);
       
-      // リダイレクト先があればそこへ、無ければトップへ
+      // リダイレクト先があればそこへ、無ければスタッフ入口へ
       const searchParams = new URLSearchParams(window.location.search);
-      const redirectUrl = searchParams.get('redirect') || '/';
+      const requestedRedirect = searchParams.get('redirect');
+      const redirectUrl = requestedRedirect?.startsWith('/') && !requestedRedirect.startsWith('//')
+        ? requestedRedirect
+        : '/staff';
       window.location.href = redirectUrl;
     } catch (err: any) {
       setError(err.message || 'サーバーとの通信に失敗しました。');

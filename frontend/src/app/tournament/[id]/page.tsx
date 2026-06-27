@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save } from "lucide-react";
+import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import Cropper from "react-easy-crop";
 
@@ -617,15 +617,24 @@ export default function TournamentDetail() {
   return (
     <main className="p-4 md:p-8 max-w-7xl mx-auto space-y-8 pb-32">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center space-x-4">
-          <Link href="/">
+          <Link href="/tournaments/manage" aria-label="大会一覧に戻る">
             <div className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors cursor-pointer">
               <ChevronLeft size={24} className="text-slate-400" />
             </div>
           </Link>
           <h1 className="text-2xl md:text-3xl font-black text-slate-100">トーナメント表</h1>
         </div>
+        <Link
+          href={`/tournament/${id}/dashboard`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex min-h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-blue-500"
+        >
+          <BarChart3 size={18} />
+          <span>ダッシュボードを表示</span>
+        </Link>
       </div>
 
       {/* Bracket View Area */}

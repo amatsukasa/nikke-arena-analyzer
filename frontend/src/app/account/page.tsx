@@ -95,7 +95,7 @@ export default function AccountPage() {
               <p className="text-sm text-slate-400 mt-1">登録情報とパスワードを変更できます</p>
             </div>
           </div>
-          <Link href="/" className="p-2 text-slate-400 hover:text-white" title="ダッシュボードへ戻る">
+          <Link href="/staff" className="p-2 text-slate-400 hover:text-white" title="大会一覧へ戻る">
             <ArrowLeft size={22} />
           </Link>
         </div>
