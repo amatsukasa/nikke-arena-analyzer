@@ -971,6 +971,7 @@ async def save_teams(
         teams = data.get("teams", [])
         player_name = data.get("player_name")
         player_icon_url = data.get("player_icon_url")
+        add_to_templates = data.get("add_to_templates") is True
         
         is_update = False  # 上書きフラグ
         
@@ -1064,8 +1065,8 @@ async def save_teams(
             )
             db.add(deck_team)
             
-            # 自己学習パイプライン: 確定した画像をテンプレートとして追加保存（上書きしない）
-            for char_info in chars:
+            # 明示的に確認された場合だけ、確定画像を学習テンプレートへ追加する。
+            for char_info in (chars if add_to_templates else []):
                 c_id = char_info.get("id")
                 image_url = char_info.get("image_url")
                 if c_id and image_url and image_url.startswith("/api/"):

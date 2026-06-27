@@ -35,7 +35,7 @@ def get_templates():
     return templates
 
 
-def predict_character(face_img, templates: dict, threshold=0.65):
+def predict_character(face_img, templates: dict, threshold=0.65, min_margin=0.03):
     """
     切り抜かれた顔画像とすべてのテンプレートを比較し、最も類似度が高いキャラクターIDを返す。
     複数バリアント対応: キャラごとに全バリアントを試し、最高スコアを採用する。
@@ -43,8 +43,7 @@ def predict_character(face_img, templates: dict, threshold=0.65):
     if not templates or face_img is None:
         return None, 0.0
 
-    best_match_id = None
-    best_score = -1.0
+    scores_by_character = []
 
     # グレースケールに変換
     face_gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
@@ -67,12 +66,17 @@ def predict_character(face_img, templates: dict, threshold=0.65):
             if max_val > char_best_score:
                 char_best_score = max_val
 
-        # 全キャラの中で最高スコアを更新
-        if char_best_score > best_score:
-            best_score = char_best_score
-            best_match_id = char_id
+        scores_by_character.append((char_best_score, char_id))
 
-    if best_score >= threshold:
+    if not scores_by_character:
+        return None, 0.0
+
+    scores_by_character.sort(reverse=True)
+    best_score, best_match_id = scores_by_character[0]
+    second_score = scores_by_character[1][0] if len(scores_by_character) > 1 else -1.0
+
+    # 最高点でも、別キャラとの差が小さい場合は誤確定せず確認を促す。
+    if best_score >= threshold and best_score - second_score >= min_margin:
         return best_match_id, float(best_score)
 
     return None, float(best_score)
