@@ -14,6 +14,27 @@ const SERVER_LABELS: Record<string, string> = {
   SEA: "東南アジア",
 };
 
+function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center mb-2 font-black text-slate-300 ring-1 ring-white/10 group-hover:ring-amber-400 transition-colors shadow-lg overflow-hidden shrink-0">
+      {url && !failed ? (
+        <img
+          src={url}
+          alt=""
+          className="w-full h-full object-cover"
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        seed
+      )}
+    </div>
+  );
+}
+
 function DashboardContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
@@ -558,14 +579,7 @@ function DashboardContent() {
         <div className="flex-1 space-y-8 min-w-0">
           {/* Tabs */}
           <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto hide-scrollbar">
-            <button 
-              onClick={() => setActiveTab("my_dashboard")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
-            >
-              <UserIcon size={18} />
-              <span>個人成績</span>
-            </button>
-            <button 
+            <button
               onClick={() => setActiveTab("overview")}
               className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
@@ -577,7 +591,7 @@ function DashboardContent() {
               className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Trophy size={18} />
-              <span>キャラクター勝率</span>
+              <span>キャラ別勝率</span>
             </button>
             <button 
               onClick={() => setActiveTab("team_winrate")}
@@ -591,7 +605,7 @@ function DashboardContent() {
               className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Swords size={18} />
-              <span>編成勝敗アナリティクス</span>
+              <span>編成詳細</span>
             </button>
 
             <button 
@@ -600,6 +614,13 @@ function DashboardContent() {
             >
               <Search size={18} />
               <span>シナジー逆引き検索</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("my_dashboard")}
+              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+            >
+              <UserIcon size={18} />
+              <span>個人成績</span>
             </button>
           </div>
 
@@ -645,10 +666,14 @@ function DashboardContent() {
                     
                     seeds.forEach(seed => {
                       let playerName = null;
+                      let playerIconUrl = null;
                       if (bData && bData.groups) {
                         bData.groups.forEach((g: any) => {
                           const found = g.players.find((p:any) => (p.original_seed || p.seed) === seed && p.id !== null);
-                          if (found) playerName = found.name;
+                          if (found) {
+                            playerName = found.name;
+                            playerIconUrl = found.icon_url || null;
+                          }
                         });
                       }
                       allPlayers.push({
@@ -656,7 +681,8 @@ function DashboardContent() {
                         tournamentName: tName,
                         season: tSeason,
                         seed: seed,
-                        playerName: playerName
+                        playerName: playerName,
+                        playerIconUrl: playerIconUrl
                       });
                     });
                   });
@@ -679,9 +705,7 @@ function DashboardContent() {
                            </span>
                          </div>
 
-                         <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center mb-2 font-black text-slate-300 ring-1 ring-white/5 group-hover:bg-amber-500 group-hover:text-white transition-colors shadow-lg">
-                           {p.seed}
-                         </div>
+                         <PlayerAvatar url={p.playerIconUrl} seed={p.seed} />
                          <div className="text-xs text-center font-bold text-slate-300 break-all line-clamp-2 group-hover:text-amber-300 transition-colors">
                             {p.playerName || <span className="text-slate-600 font-normal">未登録</span>}
                          </div>
