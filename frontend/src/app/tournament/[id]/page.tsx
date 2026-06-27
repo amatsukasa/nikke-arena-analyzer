@@ -633,7 +633,7 @@ export default function TournamentDetail() {
           className="flex min-h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-blue-500"
         >
           <BarChart3 size={18} />
-          <span>ダッシュボードを表示</span>
+          <span>大会分析を表示</span>
         </Link>
       </div>
 

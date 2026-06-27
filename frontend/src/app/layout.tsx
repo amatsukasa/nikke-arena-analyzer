@@ -6,8 +6,8 @@ import { AuthProvider } from '../context/AuthContext'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'NIKKE Arena Analyzer',
-  description: 'Champion Arena Tracker',
+  title: 'にけあり！ | NIKKE Arena Analyzer',
+  description: 'チャンピオンアリーナをもっと楽しむためのファンサイト',
 }
 
 export default function RootLayout({

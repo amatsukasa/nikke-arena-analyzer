@@ -28,8 +28,8 @@ export default function Dashboard() {
   const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
   const isCrossMode = selectedTournamentIds.length > 1 || (selectedTournamentIds.length === 1 && selectedTournamentIds[0] !== Number(id));
   
-  // Default tab is my_dashboard
-  const [activeTab, setActiveTab] = useState<"my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8">(initialTab || "my_dashboard");
+  // トップページと同じくトレンド分析を初期表示にする
+  const [activeTab, setActiveTab] = useState<"my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8">(initialTab || "overview");
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
@@ -379,7 +379,7 @@ export default function Dashboard() {
         </Link>
         <div className="flex-1">
           <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-            ダッシュボード
+            大会分析
           </h1>
           <p className="text-slate-400 text-sm mt-1">{tournament?.name} の分析</p>
         </div>
@@ -446,14 +446,7 @@ export default function Dashboard() {
 
       {/* Tabs */}
       <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto">
-        <button 
-          onClick={() => setActiveTab("my_dashboard")}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
-        >
-          <UserIcon size={18} />
-          <span>マイ・ダッシュボード</span>
-        </button>
-        <button 
+        <button
           onClick={() => setActiveTab("overview")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
@@ -465,7 +458,7 @@ export default function Dashboard() {
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Trophy size={18} />
-          <span>キャラクター勝率</span>
+          <span>キャラ別勝率</span>
         </button>
         <button 
           onClick={() => setActiveTab("team_winrate")}
@@ -479,14 +472,7 @@ export default function Dashboard() {
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Swords size={18} />
-          <span>編成勝敗アナリティクス</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab("best8")}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "best8" ? "bg-indigo-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
-        >
-          <Trophy size={18} />
-          <span>Best8編成</span>
+          <span>編成詳細</span>
         </button>
         <button 
           onClick={() => setActiveTab("search")}
@@ -494,6 +480,20 @@ export default function Dashboard() {
         >
           <Search size={18} />
           <span>シナジー逆引き検索</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("my_dashboard")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <UserIcon size={18} />
+          <span>個人成績</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("best8")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "best8" ? "bg-indigo-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <Trophy size={18} />
+          <span>Best8編成（大会別）</span>
         </button>
       </div>
 

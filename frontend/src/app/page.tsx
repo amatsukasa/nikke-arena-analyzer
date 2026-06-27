@@ -288,7 +288,7 @@ function DashboardContent() {
             <span className="text-4xl">📊</span>
           </div>
           <h1 className="text-3xl font-black mb-4 tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-            大会分析ダッシュボードへようこそ
+            にけあり！へようこそ
           </h1>
           <p className="text-slate-400 text-base max-w-md mb-8 leading-relaxed">
             現在、システムに大会データが登録されていません。<br />
@@ -451,7 +451,7 @@ function DashboardContent() {
             <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
               NIKKE Arena Analyzer
             </h1>
-            <p className="text-slate-400 text-sm mt-1">ダッシュボード</p>
+            <p className="text-slate-400 text-sm mt-1">にけあり！ ～チャンアリをもっと楽しむためのファンサイト～</p>
           </div>
         </div>
         
