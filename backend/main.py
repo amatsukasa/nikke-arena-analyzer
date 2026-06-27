@@ -971,7 +971,6 @@ async def save_teams(
         teams = data.get("teams", [])
         player_name = data.get("player_name")
         player_icon_url = data.get("player_icon_url")
-        add_to_templates = data.get("add_to_templates") is True
         
         is_update = False  # 上書きフラグ
         
@@ -1038,6 +1037,7 @@ async def save_teams(
         
         template_dir = "uploads/templates"
         os.makedirs(template_dir, exist_ok=True)
+        templates_added = 0
         
         for team_data in teams:
             chars = team_data.get("characters", [])
@@ -1065,8 +1065,10 @@ async def save_teams(
             )
             db.add(deck_team)
             
-            # 明示的に確認された場合だけ、確定画像を学習テンプレートへ追加する。
-            for char_info in (chars if add_to_templates else []):
+            # 解析時に不明だった画像を人が補正した場合だけ自動学習する。
+            for char_info in chars:
+                if char_info.get("add_to_templates") is not True:
+                    continue
                 c_id = char_info.get("id")
                 image_url = char_info.get("image_url")
                 if c_id and image_url and image_url.startswith("/api/"):
@@ -1102,6 +1104,7 @@ async def save_teams(
                             next_num = len(existing) + 1
                             template_path = os.path.join(template_dir, f"char_{c_id}_{next_num:03d}.png")
                             shutil.copy(local_path, template_path)
+                            templates_added += 1
                             print(f"[Template] 追加: {template_path}（累計 {next_num} 枚）")
                         else:
                             print(f"[Template] スキップ（重複）: char_{c_id}")
@@ -1115,7 +1118,11 @@ async def save_teams(
         deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
         if deleted_crops:
             print(f"[Cleanup] Removed {deleted_crops} registered crop images")
-        return {"ok": True, "is_update": is_update}
+        return {
+            "ok": True,
+            "is_update": is_update,
+            "templates_added": templates_added,
+        }
     except Exception as e:
         import traceback
         print(f"Error in save_teams: {e}")

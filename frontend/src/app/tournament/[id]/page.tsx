@@ -21,7 +21,6 @@ export default function TournamentDetail() {
   const [characters, setCharacters] = useState<any[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<any[]>([]);
   const [expandedPreviewRound, setExpandedPreviewRound] = useState(0);
-  const [addToTemplates, setAddToTemplates] = useState(false);
 
   // 勝敗登録用state
   const [mode, setMode] = useState<"deck" | "match">("deck");
@@ -264,7 +263,9 @@ export default function TournamentDetail() {
         team_number: r_idx + 1,
         characters: team.map((c: any) => ({
           id: c.predicted_character_id || "",
-          image_url: c.image_url
+          image_url: c.image_url,
+          was_unrecognized: c.predicted_character_id == null,
+          add_to_templates: false
         }))
       })));
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
@@ -299,7 +300,15 @@ export default function TournamentDetail() {
         : {
             ...team,
             characters: team.characters.map((character: any, index: number) => (
-              index === characterIndex ? { ...character, id: characterId } : character
+              index === characterIndex
+                ? {
+                    ...character,
+                    id: characterId,
+                    add_to_templates: character.was_unrecognized
+                      && characterId !== null
+                      && characterId !== 9999
+                  }
+                : character
             ))
           }
     )));
@@ -335,16 +344,13 @@ export default function TournamentDetail() {
           seed_number: seed,
           teams: selectedTeams,
           player_name: result?.suggested_player_name,
-          player_icon_url: result?.player_icon_url,
-          add_to_templates: addToTemplates
+          player_icon_url: result?.player_icon_url
         })
       });
       if (res.ok) {
         const data = await res.json();
         if (data.is_update) {
           alert("既存の編成データを上書きしました！（古いデータは自動削除済み）");
-        } else if (addToTemplates) {
-          alert("編成データと確認済みの学習用テンプレートを保存しました！");
         } else {
           alert("編成データを保存しました！");
         }
@@ -352,7 +358,6 @@ export default function TournamentDetail() {
         setFiles([]);
         setPreviews([]);
         setResult(null);
-        setAddToTemplates(false);
         fetchBracket();
       } else {
         alert("保存に失敗しました。");
@@ -1027,16 +1032,6 @@ export default function TournamentDetail() {
                 </div>
               ))}
             </div>
-
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-slate-900/60 px-4 py-3">
-              <input
-                type="checkbox"
-                checked={addToTemplates}
-                onChange={(event) => setAddToTemplates(event.target.checked)}
-                className="h-5 w-5 accent-emerald-500"
-              />
-              <span className="text-sm font-bold text-slate-300">確認済み画像を解析テンプレートに追加</span>
-            </label>
 
             <button onClick={handleSave} className="w-full py-4 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-xl font-bold transition-all shadow-lg">
               この内容で編成を登録
