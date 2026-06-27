@@ -264,6 +264,7 @@ export default function TournamentDetail() {
         characters: team.map((c: any) => ({
           id: c.predicted_character_id || "",
           image_url: c.image_url,
+          original_predicted_id: c.predicted_character_id ?? null,
           was_unrecognized: c.predicted_character_id == null,
           add_to_templates: false
         }))
@@ -335,15 +336,39 @@ export default function TournamentDetail() {
       return;
     }
 
+    const getCharacterName = (characterId: number | null) => {
+      if (characterId == null) return "（不明）";
+      if (characterId === 9999) return "登録なし";
+      return characters.find(c => c.id === characterId)?.name || `ID:${characterId}`;
+    };
     const correctedCharacters = selectedTeams.flatMap((team, roundIndex) =>
       team.characters.flatMap((character: any, characterIndex: number) => {
         if (!character.add_to_templates) return [];
-        const characterName = characters.find(c => c.id === character.id)?.name || `ID:${character.id}`;
+        const characterName = getCharacterName(character.id);
         return [`R${roundIndex + 1}・${characterIndex + 1}人目：（不明）→ ${characterName}`];
+      })
+    );
+    const changedPredictions = selectedTeams.flatMap((team, roundIndex) =>
+      team.characters.flatMap((character: any, characterIndex: number) => {
+        const originalId = character.original_predicted_id;
+        if (
+          character.was_unrecognized
+          || originalId === 9999
+          || character.id === originalId
+        ) {
+          return [];
+        }
+        return [
+          `R${roundIndex + 1}・${characterIndex + 1}人目：`
+          + `${getCharacterName(originalId)} → ${getCharacterName(character.id)}`
+        ];
       })
     );
     const correctionSummary = correctedCharacters.length > 0
       ? correctedCharacters.map(line => `・${line}`).join("\n")
+      : "・なし";
+    const predictionChangeSummary = changedPredictions.length > 0
+      ? changedPredictions.map(line => `・${line}`).join("\n")
       : "・なし";
     const templateNotice = correctedCharacters.length > 0
       ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
@@ -353,6 +378,7 @@ export default function TournamentDetail() {
     if (!window.confirm(
       `${playerLabel}（シード${seed}）をこの内容で登録しますか？\n\n`
       + `不明から補正したキャラ：\n${correctionSummary}`
+      + `\n\n推測結果から変更したキャラ：\n${predictionChangeSummary}`
       + templateNotice
     )) {
       return;
