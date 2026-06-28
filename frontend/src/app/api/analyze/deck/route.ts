@@ -17,9 +17,10 @@ export async function POST(request: NextRequest) {
         'content-type': request.headers.get('content-type') || '',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
+      // @ts-ignore - Node.js fetch でリクエストボディをストリーミング転送する
       body: request.body,
       duplex: 'half',
-    } as any);
+    });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error: any) {
