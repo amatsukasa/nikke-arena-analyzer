@@ -43,7 +43,7 @@ def extract_match_results(img_path):
         sorted_cnts = sorted(cnts_white, key=cv2.contourArea, reverse=True)
         for cnt in sorted_cnts:
             x, y, w, h = cv2.boundingRect(cnt)
-            if w > img.shape[1] * 0.25 and h > img.shape[0] * 0.2:
+            if w > img.shape[1] * 0.25 and h > img.shape[0] * 0.15:
                 modal_roi = (x, y, w, h)
                 break
                 

@@ -36,8 +36,8 @@ def process_images(image_paths, tournament_id, seed_number):
             sorted_cnts = sorted(cnts_white, key=cv2.contourArea, reverse=True)
             for cnt in sorted_cnts:
                 x, y, w, h = cv2.boundingRect(cnt)
-                # モーダルらしい条件（画面の25%以上の幅、かつ20%以上の高さ）
-                if w > img.shape[1] * 0.25 and h > img.shape[0] * 0.2:
+                # モーダルらしい条件（画面の25%以上の幅、かつ15%以上の高さ）
+                if w > img.shape[1] * 0.25 and h > img.shape[0] * 0.15:
                     modal_roi = (x, y, w, h)
                     break
         
