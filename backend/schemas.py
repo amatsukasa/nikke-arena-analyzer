@@ -43,6 +43,9 @@ class Tournament(TournamentBase):
     id: int
     created_at: datetime
     created_by: Optional[int] = None
+    publication_status: str = "draft"
+    published_at: Optional[datetime] = None
+    published_by: Optional[int] = None
     play_server: Optional[str] = None
     provider_game_start_date: Optional[date_type] = None
     model_config = ConfigDict(from_attributes=True)

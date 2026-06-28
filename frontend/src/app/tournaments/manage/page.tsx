@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound } from "lucide-react";
+import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
 
 interface Tournament {
@@ -11,6 +11,18 @@ interface Tournament {
   start_date: string;
   owner_name?: string;
   championship_id?: number;
+  publication_status: "draft" | "published";
+  published_at?: string | null;
+}
+
+interface PublicationReadiness {
+  player_count: number;
+  complete_player_count: number;
+  incomplete_player_count: number;
+  unresolved_slot_count: number;
+  match_count: number;
+  can_publish: boolean;
+  warnings: string[];
 }
 
 export default function Home() {
@@ -25,6 +37,7 @@ export default function Home() {
   const [newStartDate, setNewStartDate] = useState("");
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [publicationUpdatingId, setPublicationUpdatingId] = useState<number | null>(null);
 
   const loadTournaments = async () => {
     const res = await fetch(`/api/tournaments?mine=true&_=${Date.now()}`, {
@@ -145,6 +158,69 @@ export default function Home() {
     setTournaments(prev => prev.filter(t => t.id !== id));
   };
 
+  const handlePublicationToggle = async (e: React.MouseEvent, tournament: Tournament) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const isPublished = tournament.publication_status === "published";
+    setPublicationUpdatingId(tournament.id);
+
+    try {
+      if (!isPublished) {
+        const readinessResponse = await fetch(`/api/tournaments/${tournament.id}/publication`, {
+          cache: "no-store",
+        });
+        const publication = await readinessResponse.json().catch(() => ({}));
+        if (!readinessResponse.ok) {
+          throw new Error(publication.detail || publication.message || "公開状態を確認できませんでした。");
+        }
+
+        const readiness = publication.readiness as PublicationReadiness;
+        const summary = [
+          `登録プレイヤー: ${readiness.player_count}人`,
+          `編成登録完了: ${readiness.complete_player_count}人`,
+          `編成未完了: ${readiness.incomplete_player_count}人`,
+          `未確定のキャラクター枠: ${readiness.unresolved_slot_count}件`,
+          `対戦結果: ${readiness.match_count}件`,
+        ];
+        if (readiness.warnings?.length) {
+          summary.push("", "確認事項:", ...readiness.warnings.map(warning => `・${warning}`));
+        }
+        if (!readiness.can_publish) {
+          window.alert(`まだ公開できません。\n\n${summary.join("\n")}\n\n未完了の編成を確認してください。`);
+          return;
+        }
+        if (!window.confirm(`この大会をトップページに公開しますか？\n\n${summary.join("\n")}`)) {
+          return;
+        }
+      } else if (!window.confirm("この大会を非公開に戻しますか？\nトップページと集計結果から表示されなくなります。")) {
+        return;
+      }
+
+      const response = await fetch(`/api/tournaments/${tournament.id}/publication`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ published: !isPublished }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "公開状態を変更できませんでした。");
+      }
+      setTournaments(previous => previous.map(item => (
+        item.id === tournament.id
+          ? {
+              ...item,
+              publication_status: data.publication_status,
+              published_at: data.published_at,
+            }
+          : item
+      )));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "公開状態を変更できませんでした。");
+    } finally {
+      setPublicationUpdatingId(null);
+    }
+  };
+
   return (
     <main className="p-6 md:p-12 max-w-5xl mx-auto">
       <div className="flex items-center space-x-4 mb-10">
@@ -205,13 +281,43 @@ export default function Home() {
               {tournaments.map(t => (
                 <Link key={t.id} href={`/tournament/${t.championship_id || t.id}`}>
                   <div className="flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 ring-1 ring-white/5 hover:ring-white/20 transition-all rounded-xl group/item">
-                    <div>
-                      <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ring-1 ${
+                          t.publication_status === "published"
+                            ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
+                            : "bg-amber-500/10 text-amber-300 ring-amber-500/30"
+                        }`}>
+                          {t.publication_status === "published" ? <Globe2 size={12} /> : <LockKeyhole size={12} />}
+                          {t.publication_status === "published" ? "公開中" : "下書き"}
+                        </span>
+                      </div>
                       {t.date && (
                         <div className="text-xs text-slate-500 mt-1">開催日: {t.date.split('T')[0]}</div>
                       )}
                     </div>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex shrink-0 items-center space-x-2 sm:space-x-4">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={t.publication_status === "published"}
+                        disabled={publicationUpdatingId === t.id}
+                        onClick={(e) => handlePublicationToggle(e, t)}
+                        className={`inline-flex min-h-9 items-center gap-2 rounded-lg px-3 text-sm font-bold ring-1 transition-all disabled:cursor-wait disabled:opacity-50 ${
+                          t.publication_status === "published"
+                            ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30 hover:bg-emerald-500/25"
+                            : "bg-slate-800 text-slate-300 ring-white/10 hover:bg-slate-700 hover:text-white"
+                        }`}
+                        title={t.publication_status === "published" ? "非公開に戻す" : "公開前の登録状況を確認する"}
+                      >
+                        {t.publication_status === "published" ? <Globe2 size={16} /> : <LockKeyhole size={16} />}
+                        <span className="hidden sm:inline">
+                          {publicationUpdatingId === t.id
+                            ? "更新中"
+                            : t.publication_status === "published" ? "公開中" : "公開する"}
+                        </span>
+                      </button>
                       <button 
                         onClick={(e) => openEditModal(e, t)}
                         className="p-2 text-slate-500 hover:text-blue-400 hover:bg-blue-400/10 rounded-lg transition-all"
