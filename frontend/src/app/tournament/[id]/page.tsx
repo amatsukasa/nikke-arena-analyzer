@@ -305,7 +305,10 @@ export default function TournamentDetail() {
                 ? {
                     ...character,
                     id: characterId,
-                    add_to_templates: character.was_unrecognized
+                    add_to_templates: (
+                      character.was_unrecognized
+                      || character.original_predicted_id !== characterId
+                    )
                       && characterId !== null
                       && characterId !== 9999
                   }
@@ -359,7 +362,7 @@ export default function TournamentDetail() {
     };
     const correctedCharacters = selectedTeams.flatMap((team, roundIndex) =>
       team.characters.flatMap((character: any, characterIndex: number) => {
-        if (!character.add_to_templates) return [];
+        if (!character.was_unrecognized || !character.add_to_templates) return [];
         const characterName = getCharacterName(character.id);
         return [`R${roundIndex + 1}・${characterIndex + 1}人目：（不明）→ ${characterName}`];
       })
@@ -369,7 +372,6 @@ export default function TournamentDetail() {
         const originalId = character.original_predicted_id;
         if (
           character.was_unrecognized
-          || originalId === 9999
           || character.id === originalId
         ) {
           return [];
@@ -396,7 +398,10 @@ export default function TournamentDetail() {
     const emptySlotSummary = emptySlots.length > 0
       ? emptySlots.map(slot => `・${slot}`).join("\n")
       : "・なし";
-    const templateNotice = correctedCharacters.length > 0
+    const hasTemplateAdditions = selectedTeams.some(team =>
+      team.characters.some((character: any) => character.add_to_templates)
+    );
+    const templateNotice = hasTemplateAdditions
       ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
       : "";
     const playerLabel = result?.suggested_player_name || `Player ${seed}`;
