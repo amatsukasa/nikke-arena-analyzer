@@ -1495,7 +1495,14 @@ async def analyze_deck(
             with open(file_location, "wb") as buffer:
                 shutil.copyfileobj(image.file, buffer)
 
-        return process_images(saved_paths, tournament_id, seed_number)
+        try:
+            return process_images(saved_paths, tournament_id, seed_number)
+        except Exception as e:
+            import traceback
+            # エラーの詳細をRailwayログに出力する
+            print(f"[analyze_deck] process_images でエラーが発生しました: {e}")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(e))
     finally:
         for path in saved_paths:
             delete_upload_file(path)
