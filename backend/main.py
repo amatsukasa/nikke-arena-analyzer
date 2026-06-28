@@ -1478,11 +1478,26 @@ async def upload_player_icon(
     return {"url": f"/api/uploads/cropped/{filename}"}
 
 @app.post("/api/analyze/deck")
-async def analyze_deck(
-    tournament_id: int = Form(...),
-    seed_number: int = Form(...),
-    images: List[UploadFile] = File(...)
-):
+async def analyze_deck(request: Request):
+    # Starlette 1.x ではマルチパートの1パートあたりデフォルト1MBの制限がある。
+    # PC/タブレットのスクリーンショットは1MBを超える場合があるため、
+    # Request.form() を直接使用して max_part_size を 20MB に引き上げる。
+    MAX_PART_SIZE = 20 * 1024 * 1024  # 20MB per file
+    form = await request.form(max_files=20, max_fields=20, max_part_size=MAX_PART_SIZE)
+
+    try:
+        tournament_id = int(form["tournament_id"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=422, detail="tournament_id が不正です")
+    try:
+        seed_number = int(form["seed_number"])
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=422, detail="seed_number が不正です")
+
+    images = form.getlist("images")
+    if not images:
+        raise HTTPException(status_code=422, detail="images が指定されていません")
+
     saved_paths = []
     try:
         for idx, image in enumerate(images):
@@ -1499,7 +1514,6 @@ async def analyze_deck(
             return process_images(saved_paths, tournament_id, seed_number)
         except Exception as e:
             import traceback
-            # エラーの詳細をRailwayログに出力する
             print(f"[analyze_deck] process_images でエラーが発生しました: {e}")
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
