@@ -33,6 +33,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from fastapi.staticfiles import StaticFiles
 from services.image_processor import process_images
+from services.character_templates import find_character_template
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
@@ -44,30 +45,17 @@ from fastapi.responses import FileResponse
 
 app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+
 @app.get("/api/char-icon/{char_id}.png")
 def get_char_icon(char_id: int):
     """キャラクターの代表テンプレート画像を返す（旧形式・新形式両対応）"""
-    template_dir = "uploads/templates"
-    # 旧形式を優先
-    old_path = os.path.join(template_dir, f"char_{char_id}.png")
-    if os.path.exists(old_path):
+    template_path = find_character_template(UPLOAD_DIR, char_id)
+    if template_path:
         return FileResponse(
-            old_path,
+            template_path,
             media_type="image/png",
             headers={"Cache-Control": "no-store"},
         )
-    # 新形式: 連番の最初のファイルを探す
-    if os.path.exists(template_dir):
-        candidates = sorted([
-            f for f in os.listdir(template_dir)
-            if f.startswith(f"char_{char_id}_") and f.endswith(".png")
-        ])
-        if candidates:
-            return FileResponse(
-                os.path.join(template_dir, candidates[0]),
-                media_type="image/png",
-                headers={"Cache-Control": "no-store"},
-            )
     raise HTTPException(status_code=404, detail="Template not found")
 
 @app.get("/")
@@ -403,7 +391,20 @@ def get_characters(db: Session = Depends(get_db)):
         (models.Character.rarity == 'R', 3),
         else_=4
     )
-    return db.query(models.Character).order_by(rarity_order, models.Character.name).all()
+    characters = db.query(models.Character).order_by(
+        rarity_order,
+        models.Character.name,
+    ).all()
+    return [
+        schemas.Character.model_validate(character).model_copy(
+            update={
+                "is_template_available": (
+                    find_character_template(UPLOAD_DIR, character.id) is not None
+                )
+            }
+        )
+        for character in characters
+    ]
 
 @app.post("/api/characters")
 def create_character(
@@ -2201,6 +2202,8 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
         chars_valid = [c for c in chars if c is not None]
 
         for c_id in chars_valid:
+            if c_id == EMPTY_SLOT_CHARACTER_ID:
+                continue
             char_usage[c_id] = char_usage.get(c_id, 0) + 1
             if c_id not in char_team_position:
                 char_team_position[c_id] = {p: {"count": 0, "wins": 0, "total": 0, "players": set()} for p in range(1, 6)}
@@ -2212,7 +2215,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                     char_team_position[c_id][t_pos]["players"].add(pid)
 
         for pos_idx, c_id in enumerate(chars):
-            if c_id is not None:
+            if c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
                 if c_id not in char_position:
                     char_position[c_id] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
                 char_position[c_id][pos_idx + 1] += 1
@@ -2270,10 +2273,14 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 is_d_win = winner_id == match.defender_id
 
                 for c_id in a_chars:
+                    if c_id == EMPTY_SLOT_CHARACTER_ID:
+                        continue
                     if c_id not in char_match_stats: char_match_stats[c_id] = {"wins": 0, "total": 0}
                     char_match_stats[c_id]["total"] += 1
                     if is_a_win: char_match_stats[c_id]["wins"] += 1
                 for c_id in d_chars:
+                    if c_id == EMPTY_SLOT_CHARACTER_ID:
+                        continue
                     if c_id not in char_match_stats: char_match_stats[c_id] = {"wins": 0, "total": 0}
                     char_match_stats[c_id]["total"] += 1
                     if is_d_win: char_match_stats[c_id]["wins"] += 1
@@ -2282,7 +2289,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 a_all = [a_team.char1_id, a_team.char2_id, a_team.char3_id, a_team.char4_id, a_team.char5_id]
                 d_all = [d_team.char1_id, d_team.char2_id, d_team.char3_id, d_team.char4_id, d_team.char5_id]
                 for pos_idx, c_id in enumerate(a_all):
-                    if c_id is not None:
+                    if c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
                         pos = pos_idx + 1
                         if c_id not in char_position_match_stats:
                             char_position_match_stats[c_id] = {p: {"wins": 0, "total": 0} for p in range(1, 6)}
@@ -2297,7 +2304,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                             if is_a_win: char_team_position[c_id][a_t_pos]["wins"] += 1
 
                 for pos_idx, c_id in enumerate(d_all):
-                    if c_id is not None:
+                    if c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
                         pos = pos_idx + 1
                         if c_id not in char_position_match_stats:
                             char_position_match_stats[c_id] = {p: {"wins": 0, "total": 0} for p in range(1, 6)}
@@ -2426,7 +2433,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     for ds in deck_sets:
         for team in ds.teams:
             for c_id in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id]:
-                if c_id is not None:
+                if c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
                     if c_id not in char_to_players:
                         char_to_players[c_id] = set()
                     char_to_players[c_id].add(ds.player_id)
