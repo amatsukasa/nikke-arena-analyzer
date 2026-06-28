@@ -314,7 +314,7 @@ function DashboardContent() {
                 <div className="w-10 h-10 rounded-lg bg-slate-800/50 ring-1 ring-white/5 overflow-hidden flex items-center justify-center">
                   <div className="text-slate-600 text-xs">-</div>
                 </div>
-                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title="登録なし">登録なし</span>
+                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title="空枠">空枠</span>
               </div>
             );
           }
@@ -1194,7 +1194,7 @@ function DashboardContent() {
               >
                 {(stats?.team_usage ?? []).map((team: any, idx: number) => (
                   <option key={idx} value={team.canonical_id}>
-                    [{team.count}回採用] {team.characters.map((c:any) => c.id === 9999 ? '登録なし' : c.name).join(" / ")}
+                    [{team.count}回採用] {team.characters.map((c:any) => c.id === 9999 ? '空枠' : c.name).join(" / ")}
                   </option>
                 ))}
               </select>

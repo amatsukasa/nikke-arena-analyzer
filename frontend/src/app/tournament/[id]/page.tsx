@@ -316,6 +316,22 @@ export default function TournamentDetail() {
   };
 
   const handleSave = async () => {
+    const unresolvedSlots = selectedTeams.flatMap((team, roundIndex) =>
+      team.characters.flatMap((character: any, characterIndex: number) =>
+        character.id
+          ? []
+          : [`R${roundIndex + 1}・${characterIndex + 1}人目`]
+      )
+    );
+    if (unresolvedSlots.length > 0) {
+      alert(
+        "不明のキャラクターが残っているため登録できません。\n"
+        + "キャラクター名または「空枠」を選択してください。\n\n"
+        + unresolvedSlots.map(slot => `・${slot}`).join("\n")
+      );
+      return;
+    }
+
     // 重複チェック (ID: 9999 は空枠なので除外)
     const allIds: number[] = [];
     const duplicates: Set<number> = new Set();
@@ -338,7 +354,7 @@ export default function TournamentDetail() {
 
     const getCharacterName = (characterId: number | null) => {
       if (characterId == null) return "（不明）";
-      if (characterId === 9999) return "登録なし";
+      if (characterId === 9999) return "空枠";
       return characters.find(c => c.id === characterId)?.name || `ID:${characterId}`;
     };
     const correctedCharacters = selectedTeams.flatMap((team, roundIndex) =>
@@ -370,6 +386,16 @@ export default function TournamentDetail() {
     const predictionChangeSummary = changedPredictions.length > 0
       ? changedPredictions.map(line => `・${line}`).join("\n")
       : "・なし";
+    const emptySlots = selectedTeams.flatMap((team, roundIndex) =>
+      team.characters.flatMap((character: any, characterIndex: number) =>
+        character.id === 9999
+          ? [`R${roundIndex + 1}・${characterIndex + 1}人目`]
+          : []
+      )
+    );
+    const emptySlotSummary = emptySlots.length > 0
+      ? emptySlots.map(slot => `・${slot}`).join("\n")
+      : "・なし";
     const templateNotice = correctedCharacters.length > 0
       ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
       : "";
@@ -379,6 +405,7 @@ export default function TournamentDetail() {
       `${playerLabel}（シード${seed}）をこの内容で登録しますか？\n\n`
       + `不明から補正したキャラ：\n${correctionSummary}`
       + `\n\n推測結果から変更したキャラ：\n${predictionChangeSummary}`
+      + `\n\n空枠：\n${emptySlotSummary}`
       + templateNotice
     )) {
       return;
@@ -1042,7 +1069,7 @@ export default function TournamentDetail() {
                             <option value="">(不明)</option>
                             {characters.map(c =>
                               <option key={c.id} value={c.id}>
-                                {c.id === 9999 ? '登録なし' : `[${c.rarity}] ${c.name}`}
+                                {c.id === 9999 ? '空枠' : `[${c.rarity}] ${c.name}`}
                               </option>
                             )}
                           </select>
@@ -1069,7 +1096,7 @@ export default function TournamentDetail() {
                               <option value="">(不明)</option>
                               {characters.map(c =>
                                 <option key={c.id} value={c.id}>
-                                  {c.id === 9999 ? '登録なし' : `[${c.rarity}] ${c.name}`}
+                                  {c.id === 9999 ? '空枠' : `[${c.rarity}] ${c.name}`}
                                 </option>
                               )}
                             </select>

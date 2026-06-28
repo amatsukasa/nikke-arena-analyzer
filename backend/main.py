@@ -172,6 +172,7 @@ async def shutdown_event():
 # ===== 認証エンドポイント =====
 
 PLAY_SERVERS = {"KR", "JP", "GLOBAL", "NA", "SEA"}
+EMPTY_SLOT_CHARACTER_ID = 9999
 
 
 def serialize_app_user(user: models.AppUser):
@@ -441,6 +442,8 @@ def update_character(
     db: Session = Depends(get_db)
 ):
     """キャラクター情報を修正する（管理者のみ）"""
+    if char_id == EMPTY_SLOT_CHARACTER_ID:
+        raise HTTPException(status_code=400, detail="空枠は編集できません")
     char = db.query(models.Character).filter(models.Character.id == char_id).first()
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -548,7 +551,9 @@ def get_all_characters_admin(
                 count += 1
         template_counts[cid] = count
 
-    chars = db.query(models.Character).order_by(models.Character.name).all()
+    chars = db.query(models.Character).filter(
+        models.Character.id != EMPTY_SLOT_CHARACTER_ID
+    ).order_by(models.Character.name).all()
     result = []
     for c in chars:
         has_tpl = c.id in template_ids
@@ -575,6 +580,8 @@ def delete_character(
     db: Session = Depends(get_db)
 ):
     """キャラクターをDBから完全削除（テンプレートも削除、管理者のみ）"""
+    if char_id == EMPTY_SLOT_CHARACTER_ID:
+        raise HTTPException(status_code=400, detail="空枠は削除できません")
     char = db.query(models.Character).filter(models.Character.id == char_id).first()
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -607,6 +614,8 @@ def merge_characters(
 
     if not from_id or not to_id:
         raise HTTPException(status_code=400, detail="from_id と to_id が必要です")
+    if EMPTY_SLOT_CHARACTER_ID in (from_id, to_id):
+        raise HTTPException(status_code=400, detail="空枠はキャラクター統合の対象にできません")
     if from_id == to_id:
         raise HTTPException(status_code=400, detail="from_id と to_id が同じです")
 
@@ -1005,16 +1014,30 @@ async def save_teams(
 
         # 重複キャラクターのバリデーション
         all_char_ids = []
-        for team_data in teams:
+        unresolved_slots = []
+        if len(teams) != 5:
+            raise HTTPException(status_code=400, detail="編成は5ラウンド分必要です")
+
+        for team_index, team_data in enumerate(teams, start=1):
             chars = team_data.get("characters", [])
-            for c in chars:
+            team_number = team_data.get("team_number") or team_index
+            for slot_index in range(1, 6):
+                c = chars[slot_index - 1] if slot_index <= len(chars) else {}
                 cid = c.get("id")
                 try:
                     cid = int(cid) if cid else None
                 except (ValueError, TypeError):
                     cid = None
+                if cid is None:
+                    unresolved_slots.append(f"R{team_number}・{slot_index}人目")
                 if cid is not None and cid != 9999:
                     all_char_ids.append(cid)
+
+        if unresolved_slots:
+            raise HTTPException(
+                status_code=400,
+                detail="不明のキャラクターが残っています: " + "、".join(unresolved_slots),
+            )
         
         if len(all_char_ids) != len(set(all_char_ids)):
             raise HTTPException(status_code=400, detail="同じキャラクターを複数の部隊に編成することはできません")
@@ -1123,6 +1146,8 @@ async def save_teams(
             "is_update": is_update,
             "templates_added": templates_added,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         print(f"Error in save_teams: {e}")

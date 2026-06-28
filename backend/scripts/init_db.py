@@ -6,11 +6,36 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import SessionLocal
 from models import Character
 
+EMPTY_SLOT_CHARACTER_ID = 9999
+
+
+def ensure_empty_slot_character(db):
+    empty_slot = db.get(Character, EMPTY_SLOT_CHARACTER_ID)
+    if empty_slot:
+        if empty_slot.name not in ("空枠", "登録なし"):
+            raise RuntimeError(f"ID {EMPTY_SLOT_CHARACTER_ID} は空枠以外のキャラクターに使用されています")
+        empty_slot.name = "空枠"
+        empty_slot.weapon = None
+        empty_slot.element = None
+        empty_slot.burst_phase = None
+        empty_slot.manufacturer = None
+        empty_slot.rarity = None
+        empty_slot.class_type = None
+        empty_slot.is_template_available = False
+    else:
+        name_conflict = db.query(Character).filter(Character.name == "空枠").first()
+        if name_conflict:
+            raise RuntimeError("「空枠」が予約ID以外で登録されています")
+        db.add(Character(id=EMPTY_SLOT_CHARACTER_ID, name="空枠", is_template_available=False))
+    db.commit()
+
+
 def init_db():
     db = SessionLocal()
     
     # 既にデータベースにキャラクターが存在する場合はインポートをスキップ（管理画面での変更を保護）
     if db.query(Character).first() is not None:
+        ensure_empty_slot_character(db)
         print("[Startup] すでにキャラクターデータが存在するため、初期CSVインポートをスキップします。")
         db.close()
         return
@@ -65,6 +90,7 @@ def init_db():
                 added_count += 1
                 
     db.commit()
+    ensure_empty_slot_character(db)
     db.close()
     print(f"Successfully added {added_count} and updated {updated_count} characters.")
 
