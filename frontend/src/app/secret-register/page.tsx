@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 export default function SecretRegisterPage() {
@@ -14,12 +13,15 @@ export default function SecretRegisterPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
-
+  const [isReviewing, setIsReviewing] = useState(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+    if (!isReviewing) {
+      setIsReviewing(true);
+      return;
+    }
     setLoading(true);
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -54,10 +56,8 @@ export default function SecretRegisterPage() {
         throw new Error(data.detail || data.message || '登録に失敗しました。');
       }
 
-      setSuccess('スタッフ登録が完了しました！ログイン画面へ遷移します...');
-      setTimeout(() => {
-        router.push('/secret-login');
-      }, 2000);
+      setSuccess('登録依頼を送信しました。管理者の承認後、メールでお知らせします。');
+      setIsReviewing(false);
     } catch (err: any) {
       setError(err.message || 'サーバーとの通信に失敗しました。');
     } finally {
@@ -85,6 +85,18 @@ export default function SecretRegisterPage() {
         {success && (
           <div className="bg-emerald-950/50 border border-emerald-800 text-emerald-300 px-4 py-3 rounded-lg text-sm mb-6">
             {success}
+          </div>
+        )}
+
+        {isReviewing && (
+          <div className="mb-6 rounded-lg border border-indigo-800 bg-indigo-950/40 p-4 text-sm">
+            <h2 className="mb-3 font-bold text-indigo-300">入力内容の確認</h2>
+            <dl className="grid grid-cols-[7rem_1fr] gap-2">
+              <dt className="text-slate-500">メール</dt><dd className="break-all">{email}</dd>
+              <dt className="text-slate-500">指揮官名</dt><dd>{providerName}</dd>
+              <dt className="text-slate-500">開始日</dt><dd>{gameStartDate}</dd>
+              <dt className="text-slate-500">サーバー</dt><dd>{playServer}</dd>
+            </dl>
           </div>
         )}
 
@@ -188,8 +200,17 @@ export default function SecretRegisterPage() {
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={loading}
           >
-            {loading ? '登録処理中...' : 'アカウント登録'}
+            {loading ? '送信中...' : isReviewing ? '登録依頼を送信' : '入力内容を確認'}
           </button>
+          {isReviewing && (
+            <button
+              type="button"
+              onClick={() => setIsReviewing(false)}
+              className="w-full rounded-lg border border-slate-700 py-3 font-medium text-slate-300 hover:bg-slate-800"
+            >
+              入力内容を修正
+            </button>
+          )}
         </form>
 
         <div className="text-center mt-6 text-sm text-slate-400">

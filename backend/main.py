@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models, schemas
 from typing import List
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 import asyncio
 import contextlib
 import shutil
@@ -34,6 +36,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 from fastapi.staticfiles import StaticFiles
 from services.image_processor import process_images
 from services.character_templates import find_character_template
+from services.registration_email import (
+    send_registration_approved,
+    send_registration_request,
+)
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
@@ -128,13 +134,16 @@ async def startup_event():
                 hashed_password=auth_module.hash_password(first_password),
                 role="admin",
                 provider_name="管理者",
-                game_start_date=default_start_date
+                game_start_date=default_start_date,
+                approval_status="active",
+                approved_at=datetime.now(timezone.utc),
             )
             db.add(admin)
             db.commit()
             print(f"[Startup] 管理者アカウント作成: {first_email}")
         else:
             existing.role = "admin"
+            existing.approval_status = "active"
             if not existing.provider_name:
                 existing.provider_name = "管理者"
             if not existing.game_start_date:
@@ -172,6 +181,7 @@ def serialize_app_user(user: models.AppUser):
         "provider_name": user.provider_name,
         "game_start_date": str(user.game_start_date) if user.game_start_date else None,
         "play_server": user.play_server,
+        "approval_status": user.approval_status,
     }
 
 
@@ -202,6 +212,11 @@ def user_login(body: dict, response: Response, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません")
     if user.is_banned:
         raise HTTPException(status_code=403, detail="このアカウントは停止されています")
+    if user.approval_status != "active":
+        raise HTTPException(
+            status_code=403,
+            detail="管理者による登録承認をお待ちください",
+        )
     token = auth_module.create_access_token({"sub": str(user.id), "role": user.role})
     response.set_cookie("auth_token", token, httponly=True, samesite="lax", max_age=86400 * 7)
     return {"ok": True, "token": token, "user": serialize_app_user(user)}
@@ -217,7 +232,7 @@ def user_logout(response: Response):
 
 @app.post("/api/auth/register")
 def user_register(body: dict, db: Session = Depends(get_db)):
-    """招待コード付きユーザー登録"""
+    """スタッフ登録依頼を作成し、管理者へ承認メールを送信する。"""
     email       = body.get("email", "").strip().lower()
     password    = body.get("password", "")
     invite_code = body.get("inviteCode", "").strip() # 余分なスペースをトリミング
@@ -254,10 +269,87 @@ def user_register(body: dict, db: Session = Depends(get_db)):
         provider_name=provider_name,
         game_start_date=parsed_date,
         play_server=play_server,
+        approval_status="pending",
+        approval_requested_at=datetime.now(timezone.utc),
     )
-    db.add(user)
+    approval_token = secrets.token_urlsafe(32)
+    user.approval_token_hash = hashlib.sha256(
+        approval_token.encode("utf-8")
+    ).hexdigest()
+    try:
+        db.add(user)
+        db.flush()
+        send_registration_request(user, approval_token)
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        print(f"[Registration] Failed to send approval email: {error}")
+        raise HTTPException(
+            status_code=503,
+            detail="登録依頼メールを送信できませんでした。時間をおいて再度お試しください",
+        )
+    return {
+        "ok": True,
+        "status": "pending",
+        "message": "登録依頼を送信しました。管理者の承認をお待ちください",
+    }
+
+
+def get_pending_registration(
+    user_id: int,
+    token: str,
+    db: Session,
+) -> models.AppUser:
+    user = db.query(models.AppUser).filter(models.AppUser.id == user_id).first()
+    if not user or user.approval_status != "pending" or not user.approval_token_hash:
+        raise HTTPException(status_code=404, detail="有効な登録依頼が見つかりません")
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(token_hash, user.approval_token_hash):
+        raise HTTPException(status_code=404, detail="有効な登録依頼が見つかりません")
+    requested_at = user.approval_requested_at
+    if requested_at is None:
+        raise HTTPException(status_code=410, detail="承認リンクの有効期限が切れています")
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - requested_at > timedelta(hours=72):
+        raise HTTPException(status_code=410, detail="承認リンクの有効期限が切れています")
+    return user
+
+
+@app.get("/api/auth/registration-approval")
+def inspect_registration_approval(
+    user_id: int,
+    token: str,
+    db: Session = Depends(get_db),
+):
+    user = get_pending_registration(user_id, token, db)
+    return {
+        "email": user.email,
+        "provider_name": user.provider_name,
+        "game_start_date": str(user.game_start_date) if user.game_start_date else None,
+        "play_server": user.play_server,
+    }
+
+
+@app.post("/api/auth/registration-approval")
+def approve_registration(
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    user_id = body.get("userId")
+    token = body.get("token", "")
+    if not isinstance(user_id, int) or not token:
+        raise HTTPException(status_code=400, detail="承認情報が不足しています")
+    user = get_pending_registration(user_id, token, db)
+    user.approval_status = "active"
+    user.approved_at = datetime.now(timezone.utc)
+    user.approval_token_hash = None
     db.commit()
-    return {"ok": True, "message": "登録が完了しました"}
+    try:
+        send_registration_approved(user)
+    except Exception as error:
+        print(f"[Registration] Approval notice email failed: {error}")
+    return {"ok": True, "message": "スタッフ登録を承認しました"}
 
 
 @app.get("/api/auth/me")
@@ -322,9 +414,45 @@ def list_users(
     """ユーザー一覧（管理者のみ）"""
     users = db.query(models.AppUser).order_by(models.AppUser.created_at).all()
     return [
-        {"id": u.id, "email": u.email, "role": u.role, "is_banned": u.is_banned, "created_at": str(u.created_at)}
+        {
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "is_banned": u.is_banned,
+            "approval_status": u.approval_status,
+            "provider_name": u.provider_name,
+            "created_at": str(u.created_at),
+        }
         for u in users
     ]
+
+
+@app.put("/api/auth/users/{user_id}/approval")
+def change_user_approval(
+    user_id: int,
+    body: dict,
+    current_admin: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    approval_status = body.get("status")
+    if approval_status not in {"active", "rejected"}:
+        raise HTTPException(status_code=400, detail="承認状態が正しくありません")
+    user = db.query(models.AppUser).filter(models.AppUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+    if user.id == current_admin.id and approval_status != "active":
+        raise HTTPException(status_code=400, detail="自分自身を無効化できません")
+    user.approval_status = approval_status
+    user.approved_at = datetime.now(timezone.utc) if approval_status == "active" else None
+    user.approved_by = current_admin.id if approval_status == "active" else None
+    user.approval_token_hash = None
+    db.commit()
+    if approval_status == "active":
+        try:
+            send_registration_approved(user)
+        except Exception as error:
+            print(f"[Registration] Approval notice email failed: {error}")
+    return {"ok": True, "approval_status": user.approval_status}
 
 
 @app.put("/api/auth/users/{user_id}/role")

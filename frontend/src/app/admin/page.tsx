@@ -9,6 +9,8 @@ interface User {
   email: string;
   role: string;
   is_banned: boolean;
+  approval_status: 'pending' | 'active' | 'rejected';
+  provider_name?: string | null;
   created_at: string;
 }
 
@@ -260,7 +262,7 @@ export default function AdminPage() {
     setError('');
     setMessage('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    const newRole = currentRole === 'admin' ? 'contributor' : 'admin';
 
     if (!window.confirm(`権限を ${newRole === 'admin' ? '管理者' : '一般スタッフ'} に変更してもよろしいですか？`)) {
       return;
@@ -281,6 +283,28 @@ export default function AdminPage() {
       fetchUsers();
     } catch (err: any) {
       setError(err.message || 'エラーが発生しました。');
+    }
+  };
+
+  const handleApproval = async (userId: number, status: 'active' | 'rejected') => {
+    const actionLabel = status === 'active' ? '承認' : '拒否';
+    if (!window.confirm(`このスタッフ登録依頼を${actionLabel}しますか？`)) return;
+    setError('');
+    setMessage('');
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    try {
+      const response = await apiFetch(`${apiUrl}/api/auth/users/${userId}/approval`, {
+        method: 'PUT',
+        body: JSON.stringify({ status }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || `${actionLabel}に失敗しました。`);
+      }
+      setMessage(`スタッフ登録依頼を${actionLabel}しました。`);
+      fetchUsers();
+    } catch (err: any) {
+      setError(err.message || `${actionLabel}に失敗しました。`);
     }
   };
 
@@ -505,7 +529,8 @@ export default function AdminPage() {
                       <tr key={u.id} className="hover:bg-slate-900/50 transition">
                         <td className="p-4">{u.id}</td>
                         <td className="p-4 font-medium text-slate-200">
-                          {u.email} {isSelf && <span className="text-indigo-400 text-xs ml-1">(あなた)</span>}
+                          <div>{u.email} {isSelf && <span className="text-indigo-400 text-xs ml-1">(あなた)</span>}</div>
+                          {u.provider_name && <div className="mt-1 text-xs text-slate-500">{u.provider_name}</div>}
                         </td>
                         <td className="p-4">
                           <span className={`px-2.5 py-1 rounded text-xs font-semibold ${
@@ -518,11 +543,19 @@ export default function AdminPage() {
                         </td>
                         <td className="p-4">
                           <span className={`px-2.5 py-1 rounded text-xs font-semibold ${
-                            u.is_banned 
+                            u.approval_status === 'pending'
+                              ? 'bg-amber-950/50 text-amber-300 border border-amber-800/30'
+                              : u.approval_status === 'rejected'
+                              ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                              : u.is_banned
                               ? 'bg-red-950/50 text-red-400 border border-red-800/30' 
                               : 'bg-emerald-950/50 text-emerald-400 border border-emerald-800/30'
                           }`}>
-                            {u.is_banned ? 'アカウント停止中' : 'アクティブ'}
+                            {u.approval_status === 'pending'
+                              ? '承認待ち'
+                              : u.approval_status === 'rejected'
+                              ? '却下'
+                              : u.is_banned ? '停止中' : '有効'}
                           </span>
                         </td>
                         <td className="p-4 text-slate-500">
@@ -530,6 +563,22 @@ export default function AdminPage() {
                         </td>
                         <td className="p-4 text-right">
                           <div className="flex justify-end gap-2">
+                            {u.approval_status === 'pending' && (
+                              <>
+                                <button
+                                  onClick={() => handleApproval(u.id, 'active')}
+                                  className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500"
+                                >
+                                  承認
+                                </button>
+                                <button
+                                  onClick={() => handleApproval(u.id, 'rejected')}
+                                  className="rounded border border-red-800 bg-red-950/40 px-3 py-1.5 text-xs font-bold text-red-300 hover:bg-red-900/60"
+                                >
+                                  拒否
+                                </button>
+                              </>
+                            )}
                             <button
                               onClick={() => handleRoleToggle(u.id, u.role)}
                               className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium px-3 py-1.5 rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
