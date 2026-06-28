@@ -13,7 +13,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // 静的ファイル・公開ルートはスキップ
-  const publicPaths = ["/gate", "/secret-login", "/secret-register"];
+  const publicPaths = ["/gate", "/secret-login", "/secret-register", "/approve-registration"];
   if (publicPaths.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }

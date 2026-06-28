@@ -22,6 +22,11 @@ class AppUser(Base):
     provider_name = Column(String, nullable=True) # 追加: 提供者名
     game_start_date = Column(Date, nullable=True) # 追加: 指揮官のゲーム開始日
     play_server = Column(String, nullable=True)
+    approval_status = Column(String, nullable=False, default="pending", server_default="pending")
+    approval_token_hash = Column(String, nullable=True)
+    approval_requested_at = Column(DateTime(timezone=True), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approved_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     championships = relationship("Championship", back_populates="creator")

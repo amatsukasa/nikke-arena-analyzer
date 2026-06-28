@@ -10,3 +10,4 @@ alembic
 pytesseract
 python-jose[cryptography]
 passlib[bcrypt]
+resend

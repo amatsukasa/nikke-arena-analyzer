@@ -73,7 +73,7 @@ def get_current_user_optional(
     except JWTError:
         return None
     user = db.query(models.AppUser).filter(models.AppUser.id == int(user_id)).first()
-    if not user or user.is_banned:
+    if not user or user.is_banned or user.approval_status != "active":
         return None
     return user
 
