@@ -5,13 +5,27 @@ import { useParams, useSearchParams } from "next/navigation";
 import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 
+type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
+const TOURNAMENT_TABS = new Set<DashboardTab>([
+  "team_winrate",
+  "matchups",
+  "search",
+  "overview",
+  "winrate",
+  "my_dashboard",
+  "best8",
+]);
+
 export default function Dashboard() {
   const params = useParams();
   const searchParams = useSearchParams();
   const id = params.id;
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
-  const initialTab = searchParams.get("tab") as any;
+  const requestedTab = searchParams.get("tab") as DashboardTab | null;
+  const initialTab = requestedTab && TOURNAMENT_TABS.has(requestedTab)
+    ? requestedTab
+    : "team_winrate";
   const initialTeam = searchParams.get("team");
 
   const [tournament, setTournament] = useState<any>(null);
@@ -28,8 +42,7 @@ export default function Dashboard() {
   const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
   const isCrossMode = selectedTournamentIds.length > 1 || (selectedTournamentIds.length === 1 && selectedTournamentIds[0] !== Number(id));
   
-  // トップページと同じくトレンド分析を初期表示にする
-  const [activeTab, setActiveTab] = useState<"my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8">(initialTab || "overview");
+  const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
@@ -447,20 +460,6 @@ export default function Dashboard() {
       {/* Tabs */}
       <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto">
         <button
-          onClick={() => setActiveTab("overview")}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
-        >
-          <TrendingUp size={18} />
-          <span>トレンド分析</span>
-        </button>
-        <button 
-          onClick={() => setActiveTab("winrate")}
-          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
-        >
-          <Trophy size={18} />
-          <span>キャラ別勝率</span>
-        </button>
-        <button 
           onClick={() => setActiveTab("team_winrate")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
@@ -480,6 +479,20 @@ export default function Dashboard() {
         >
           <Search size={18} />
           <span>シナジー逆引き検索</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("overview")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <TrendingUp size={18} />
+          <span>トレンド分析</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("winrate")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <Trophy size={18} />
+          <span>キャラ別勝率</span>
         </button>
         <button
           onClick={() => setActiveTab("my_dashboard")}
