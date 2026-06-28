@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
+import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 
@@ -58,6 +58,7 @@ function DashboardContent() {
   const [filterSeasons, setFilterSeasons] = useState<string[]>([]);
   const [filterStartDates, setFilterStartDates] = useState<string[]>([]);
   const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
+  const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   
   // Default tab is overview for the top page dashboard
   const [activeTab, setActiveTab] = useState<"my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8">(initialTab || "overview");
@@ -440,33 +441,60 @@ function DashboardContent() {
   )).sort() as string[];
 
   return (
-    <main className="p-4 md:p-8 max-w-[1400px] mx-auto space-y-8 pb-24">
+    <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0 mb-8 border-b border-white/10 pb-6">
-        <div className="flex items-center space-x-4">
-          <div className="p-3 bg-gradient-to-br from-blue-500 to-emerald-600 rounded-2xl shadow-lg shadow-blue-500/20">
-            <Trophy size={32} className="text-white" />
+      <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0 mb-2 md:mb-8 border-b border-white/10 pb-4 md:pb-6">
+        <div className="flex min-w-0 items-center space-x-3 md:space-x-4">
+          <div className="shrink-0 p-2.5 md:p-3 bg-gradient-to-br from-blue-500 to-emerald-600 rounded-xl md:rounded-2xl shadow-lg shadow-blue-500/20">
+            <Trophy className="h-6 w-6 text-white md:h-8 md:w-8" />
           </div>
-          <div>
-            <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
               NIKKE Arena Analyzer
             </h1>
-            <p className="text-slate-400 text-sm mt-1">にけあり！ ～チャンアリをもっと楽しむためのファンサイト～</p>
+            <p className="text-slate-400 text-xs md:text-sm mt-1 leading-relaxed">にけあり！ ～チャンアリをもっと楽しむためのファンサイト～</p>
           </div>
         </div>
         
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-8">
+      <div className="flex flex-col xl:flex-row gap-4 xl:gap-8">
         {/* Sidebar for Filters */}
-        <aside className="w-full xl:w-64 shrink-0 space-y-6">
-          <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl sticky top-6">
-            <h3 className="text-lg font-bold text-slate-100 mb-6 flex items-center space-x-2">
+        <aside className="w-full xl:w-64 shrink-0 space-y-3 xl:space-y-6">
+          <button
+            type="button"
+            onClick={() => setIsMobileFiltersOpen(open => !open)}
+            className="flex min-h-14 w-full items-center gap-3 rounded-lg bg-slate-900/90 px-4 py-3 text-left ring-1 ring-white/10 xl:hidden"
+            aria-expanded={isMobileFiltersOpen}
+            aria-controls="mobile-dashboard-filters"
+          >
+            <SlidersHorizontal className="h-5 w-5 shrink-0 text-blue-400" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-bold text-slate-100">分析対象フィルタ</span>
+              <span className="block truncate text-xs text-slate-400">
+                {filterServers.map(server => SERVER_LABELS[server] || server).join("・") || "サーバー未選択"}
+                {" / "}
+                {filterSeasons.join("・") || "シーズン未選択"}
+                {" / 開始日 "}
+                {filterStartDates.length > 0 ? `${filterStartDates.length}件` : "すべて"}
+              </span>
+            </span>
+            <span className="shrink-0 rounded bg-blue-500/15 px-2 py-1 text-xs font-bold text-blue-300">
+              {selectedTournamentIds.length}大会
+            </span>
+            <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition-transform ${isMobileFiltersOpen ? "rotate-180" : ""}`} />
+          </button>
+
+          <div
+            id="mobile-dashboard-filters"
+            className={`${isMobileFiltersOpen ? "block" : "hidden"} bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-5 xl:p-6 rounded-lg sm:rounded-xl xl:rounded-3xl shadow-2xl xl:sticky xl:top-6 xl:block`}
+          >
+            <h3 className="hidden text-lg font-bold text-slate-100 mb-6 xl:flex items-center space-x-2">
               <Search size={18} className="text-blue-400" />
               <span>分析対象フィルタ</span>
             </h3>
             
-            <div className="space-y-6">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 xl:block xl:space-y-6">
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">プレイサーバー</div>
                 <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
@@ -488,7 +516,7 @@ function DashboardContent() {
                 </div>
               </div>
 
-              <div className="h-px w-full bg-white/10"></div>
+              <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">開催期間 (シーズン)</div>
@@ -509,7 +537,7 @@ function DashboardContent() {
                 </div>
               </div>
 
-              <div className="h-px w-full bg-white/10"></div>
+              <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">ゲーム開始日</div>
@@ -531,7 +559,7 @@ function DashboardContent() {
               </div>
             </div>
             
-            <div className="mt-8 p-4 rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20">
+            <div className="hidden mt-8 p-4 rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20 xl:block">
               <div className="text-xs text-blue-400 font-bold mb-1">対象大会数</div>
               <div className="text-2xl font-black text-slate-100">{selectedTournamentIds.length}</div>
             </div>
@@ -539,33 +567,34 @@ function DashboardContent() {
         </aside>
 
         {/* Main Content Area */}
-        <div className="flex-1 space-y-8 min-w-0">
+        <div className="flex-1 space-y-4 md:space-y-8 min-w-0">
           {/* Tabs */}
-          <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto hide-scrollbar">
+          <div className="sticky top-0 z-20 -mx-3 bg-slate-950/95 px-3 py-2 backdrop-blur-xl sm:-mx-4 sm:px-4 md:static md:mx-0 md:bg-transparent md:p-0">
+          <div className="flex snap-x snap-mandatory bg-slate-900/80 backdrop-blur-xl p-1 rounded-lg md:p-1.5 md:rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto hide-scrollbar">
             <button
               onClick={() => setActiveTab("overview")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <TrendingUp size={18} />
               <span>トレンド分析</span>
             </button>
             <button 
               onClick={() => setActiveTab("winrate")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Trophy size={18} />
               <span>キャラ別勝率</span>
             </button>
             <button 
               onClick={() => setActiveTab("team_winrate")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Users size={18} />
               <span>編成別勝率</span>
             </button>
             <button 
               onClick={() => setActiveTab("matchups")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Swords size={18} />
               <span>編成詳細</span>
@@ -573,22 +602,23 @@ function DashboardContent() {
 
             <button 
               onClick={() => setActiveTab("search")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "search" ? "bg-emerald-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "search" ? "bg-emerald-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Search size={18} />
               <span>シナジー逆引き検索</span>
             </button>
             <button
               onClick={() => setActiveTab("my_dashboard")}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+              className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <UserIcon size={18} />
               <span>個人成績</span>
             </button>
           </div>
+          </div>
 
           {/* Content */}
-          <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 md:p-8 rounded-3xl shadow-2xl min-h-[500px]">
+          <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
         
         {/* MY DASHBOARD TAB */}
         {activeTab === "my_dashboard" && (
