@@ -11,16 +11,17 @@ export async function POST(request: NextRequest) {
     // ボディを一切パースせず、生のストリームをそのままバックエンドに転送することで回避する。
     // duplex:'half' はNode.js fetchでストリーミングbodyを使う際に必要だが
     // TypeScriptのRequestInit型に含まれないため、as anyで型チェックを回避する。
-    const res = await fetch(`${BACKEND_URL}/api/analyze/deck`, {
+    const fetchOptions: RequestInit & { duplex?: string } = {
       method: 'POST',
       headers: {
         'content-type': request.headers.get('content-type') || '',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
-      // @ts-ignore - Node.js fetch でリクエストボディをストリーミング転送する
-      body: request.body,
+      body: request.body as unknown as BodyInit,
       duplex: 'half',
-    });
+    };
+
+    const res = await fetch(`${BACKEND_URL}/api/analyze/deck`, fetchOptions as RequestInit);
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error: any) {
