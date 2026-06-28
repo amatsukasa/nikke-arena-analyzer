@@ -5,10 +5,12 @@ const BACKEND_URL = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'h
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    const token = request.cookies.get('auth_token')?.value;
     const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/matchups`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
     });
     const data = await res.json();

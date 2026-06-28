@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models, schemas
 from typing import List
+from datetime import datetime, timezone
 import asyncio
 import contextlib
 import shutil
@@ -670,6 +671,9 @@ def create_tournament(
     
     # 作成者を記録
     data["created_by"] = current_user.id
+    data["publication_status"] = "draft"
+    data["published_at"] = None
+    data["published_by"] = None
     
     # championship_id から名前などの情報を引き継ぐ
     if tournament.championship_id:
@@ -701,6 +705,108 @@ def require_tournament_manager(
         )
     return tournament
 
+
+def require_tournament_viewer(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    tournament = db.query(models.Tournament).filter(
+        models.Tournament.id == tournament_id
+    ).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.publication_status == "published":
+        return tournament
+    if current_user and (
+        current_user.role == "admin" or tournament.created_by == current_user.id
+    ):
+        return tournament
+    raise HTTPException(status_code=404, detail="Tournament not found")
+
+
+def get_published_tournament_ids(
+    tournament_ids: List[int],
+    db: Session,
+) -> List[int]:
+    if not tournament_ids:
+        return []
+    published_ids = {
+        tournament_id
+        for (tournament_id,) in db.query(models.Tournament.id).filter(
+            models.Tournament.id.in_(set(tournament_ids)),
+            models.Tournament.publication_status == "published",
+        ).all()
+    }
+    return [
+        tournament_id
+        for tournament_id in tournament_ids
+        if tournament_id in published_ids
+    ]
+
+
+def get_publication_readiness(tournament: models.Tournament, db: Session):
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament.id
+    ).all()
+    complete_player_count = 0
+    unresolved_slot_count = 0
+
+    for player in players:
+        deck_set = db.query(models.DeckSet).filter(
+            models.DeckSet.player_id == player.id
+        ).order_by(models.DeckSet.created_at.desc(), models.DeckSet.id.desc()).first()
+        if not deck_set:
+            continue
+        teams = db.query(models.DeckTeam).filter(
+            models.DeckTeam.deck_set_id == deck_set.id
+        ).all()
+        teams_by_number = {team.team_number: team for team in teams}
+        player_complete = len(teams_by_number) == 5
+        for team_number in range(1, 6):
+            team = teams_by_number.get(team_number)
+            if not team:
+                unresolved_slot_count += 5
+                player_complete = False
+                continue
+            slots = [
+                team.char1_id,
+                team.char2_id,
+                team.char3_id,
+                team.char4_id,
+                team.char5_id,
+            ]
+            missing = sum(character_id is None for character_id in slots)
+            unresolved_slot_count += missing
+            if missing:
+                player_complete = False
+        if player_complete:
+            complete_player_count += 1
+
+    match_count = db.query(models.Match).filter(
+        models.Match.tournament_id == tournament.id
+    ).count()
+    player_count = len(players)
+    warnings = []
+    if player_count < 64:
+        warnings.append(f"登録プレイヤーが64人未満です（{player_count}人）")
+    if match_count == 0:
+        warnings.append("対戦結果がまだ登録されていません")
+
+    return {
+        "player_count": player_count,
+        "complete_player_count": complete_player_count,
+        "incomplete_player_count": player_count - complete_player_count,
+        "unresolved_slot_count": unresolved_slot_count,
+        "match_count": match_count,
+        "can_publish": (
+            player_count > 0
+            and complete_player_count == player_count
+            and unresolved_slot_count == 0
+        ),
+        "warnings": warnings,
+    }
+
 @app.get("/api/tournaments", response_model=List[schemas.Tournament])
 def get_tournaments(
     mine: bool = False,
@@ -713,6 +819,8 @@ def get_tournaments(
             raise HTTPException(status_code=401, detail="Login required")
         if current_user.role != "admin":
             query = query.filter(models.Tournament.created_by == current_user.id)
+    else:
+        query = query.filter(models.Tournament.publication_status == "published")
     tournaments = query.order_by(
         models.Tournament.created_at.desc(),
         models.Tournament.id.desc(),
@@ -727,11 +835,12 @@ def get_tournaments(
     ]
 
 @app.get("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
-def get_tournament(tournament_id: int, db: Session = Depends(get_db)):
-    db_tournament = db.query(models.Tournament).filter(models.Tournament.id == tournament_id).first()
-    if not db_tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
-    return db_tournament
+def get_tournament(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    return require_tournament_viewer(tournament_id, db, current_user)
 
 @app.put("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
 def update_tournament(
@@ -756,6 +865,51 @@ def update_tournament(
     db.commit()
     db.refresh(db_tournament)
     return db_tournament
+
+
+@app.get("/api/tournaments/{tournament_id}/publication")
+def get_tournament_publication(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    return {
+        "publication_status": tournament.publication_status,
+        "published_at": tournament.published_at,
+        "readiness": get_publication_readiness(tournament, db),
+    }
+
+
+@app.put("/api/tournaments/{tournament_id}/publication")
+def update_tournament_publication(
+    tournament_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    publish = body.get("published") is True
+    readiness = get_publication_readiness(tournament, db)
+
+    if publish and not readiness["can_publish"]:
+        raise HTTPException(
+            status_code=400,
+            detail="未完成の編成データがあるため公開できません",
+        )
+
+    tournament.publication_status = "published" if publish else "draft"
+    tournament.published_at = datetime.now(timezone.utc) if publish else None
+    tournament.published_by = current_user.id if publish else None
+    db.commit()
+    db.refresh(tournament)
+    return {
+        "ok": True,
+        "publication_status": tournament.publication_status,
+        "published_at": tournament.published_at,
+        "published_by": tournament.published_by,
+        "readiness": readiness,
+    }
 
 @app.delete("/api/tournaments/{tournament_id}")
 def delete_tournament(
@@ -827,15 +981,40 @@ def delete_championship(id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 @app.get("/api/championships/{id}/matches", response_model=List[schemas.Tournament])
-def get_championship_matches(id: int, db: Session = Depends(get_db)):
-    return db.query(models.Tournament).filter(models.Tournament.championship_id == id).order_by(models.Tournament.created_at.desc()).all()
+def get_championship_matches(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    query = db.query(models.Tournament).filter(
+        models.Tournament.championship_id == id
+    )
+    if current_user is None:
+        query = query.filter(models.Tournament.publication_status == "published")
+    elif current_user.role != "admin":
+        query = query.filter(
+            (models.Tournament.publication_status == "published")
+            | (models.Tournament.created_by == current_user.id)
+        )
+    return query.order_by(models.Tournament.created_at.desc()).all()
 
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
-def get_players(tournament_id: int, db: Session = Depends(get_db)):
+def get_players(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_viewer(tournament_id, db, current_user)
     return db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
 
 @app.get("/api/tournaments/{tournament_id}/players/{seed_number}/details")
-def get_player_details(tournament_id: int, seed_number: int, db: Session = Depends(get_db)):
+def get_player_details(
+    tournament_id: int,
+    seed_number: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_viewer(tournament_id, db, current_user)
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
@@ -1227,7 +1406,12 @@ async def analyze_match_result(
         delete_upload_file(file_path)
 
 @app.get("/api/tournaments/{tournament_id}/bracket")
-def get_tournament_bracket(tournament_id: int, db: Session = Depends(get_db)):
+def get_tournament_bracket(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_viewer(tournament_id, db, current_user)
     # 全プレイヤーと試合結果を取得
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
     player_by_seed = {p.seed_number: p for p in players}
@@ -1399,7 +1583,13 @@ async def save_match(
     return {"ok": True}
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/stats")
-def get_dashboard_stats(tournament_id: int, seed: int = None, db: Session = Depends(get_db)):
+def get_dashboard_stats(
+    tournament_id: int,
+    seed: int = None,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_viewer(tournament_id, db, current_user)
     query = db.query(models.Player).filter(models.Player.tournament_id == tournament_id)
     if seed:
         query = query.filter(models.Player.seed_number == seed)
@@ -1850,7 +2040,13 @@ def get_dashboard_stats(tournament_id: int, seed: int = None, db: Session = Depe
     }
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/matchups")
-def get_dashboard_matchups(tournament_id: int, seed: int = None, db: Session = Depends(get_db)):
+def get_dashboard_matchups(
+    tournament_id: int,
+    seed: int = None,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_viewer(tournament_id, db, current_user)
     query = db.query(models.Match).filter(models.Match.tournament_id == tournament_id)
     if seed:
         player = db.query(models.Player).filter(models.Player.tournament_id == tournament_id, models.Player.seed_number == seed).first()
@@ -1907,9 +2103,14 @@ def get_dashboard_matchups(tournament_id: int, seed: int = None, db: Session = D
     return {"matchups": matchup_results}
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/best8-decks")
-def get_best8_decks(tournament_id: int, db: Session = Depends(get_db)):
+def get_best8_decks(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
     """ベスト8進出者のプレイヤー名、成績、登録編成をまとめて取得する"""
-    bracket = get_tournament_bracket(tournament_id, db)
+    require_tournament_viewer(tournament_id, db, current_user)
+    bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
     champ_finals = bracket["champion_finals"]
     
@@ -1970,7 +2171,7 @@ class CrossTournamentRequest(PydanticBaseModel):
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     """複数大会を横断したキャラ採用率・編成使用率・勝率を集計する"""
-    tournament_ids = body.tournament_ids
+    tournament_ids = get_published_tournament_ids(body.tournament_ids, db)
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 
@@ -2402,7 +2603,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
 @app.post("/api/dashboard/cross-tournament/matchups")
 def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     """複数大会を横断した対戦データを集計する"""
-    tournament_ids = body.tournament_ids
+    tournament_ids = get_published_tournament_ids(body.tournament_ids, db)
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 

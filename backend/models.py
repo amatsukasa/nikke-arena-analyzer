@@ -25,7 +25,11 @@ class AppUser(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     championships = relationship("Championship", back_populates="creator")
-    tournaments = relationship("Tournament", back_populates="creator")
+    tournaments = relationship(
+        "Tournament",
+        back_populates="creator",
+        foreign_keys="Tournament.created_by",
+    )
 
 class Character(Base):
     __tablename__ = "characters"
@@ -62,11 +66,18 @@ class Tournament(Base):
     owner_name = Column(String, nullable=True) # データ提供者
     championship_id = Column(Integer, ForeignKey("championships.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    publication_status = Column(String, nullable=False, default="draft", server_default="draft")
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    published_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     
-    creator = relationship("AppUser", back_populates="tournaments")
+    creator = relationship(
+        "AppUser",
+        back_populates="tournaments",
+        foreign_keys=[created_by],
+    )
     championship = relationship("Championship", back_populates="tournaments")
     players = relationship("Player", back_populates="tournament")
     matches = relationship("Match", back_populates="tournament")

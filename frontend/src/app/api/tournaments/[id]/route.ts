@@ -8,11 +8,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    const token = request.cookies.get('auth_token')?.value;
     const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}`, {
       method: 'GET',
       cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
     });
     const data = await res.json();
