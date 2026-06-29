@@ -43,6 +43,7 @@ class Tournament(TournamentBase):
     id: int
     created_at: datetime
     created_by: Optional[int] = None
+    creator_email: Optional[str] = None
     publication_status: str = "draft"
     published_at: Optional[datetime] = None
     published_by: Optional[int] = None
