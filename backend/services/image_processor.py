@@ -32,21 +32,14 @@ def process_images(image_paths, tournament_id, seed_number):
         
         modal_roi = None
         if cnts_white:
-            min_x, min_y = float('inf'), float('inf')
-            max_x, max_y = 0, 0
-            valid_found = False
-            for cnt in cnts_white:
+            # 最大面積の白い領域をモーダルとして採用
+            sorted_cnts = sorted(cnts_white, key=cv2.contourArea, reverse=True)
+            for cnt in sorted_cnts:
                 x, y, w, h = cv2.boundingRect(cnt)
-                # モーダルの断片（画面幅の10%以上の幅、かつ5%以上の高さ）を統合する
-                if w > img.shape[1] * 0.1 and h > img.shape[0] * 0.05:
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x + w)
-                    max_y = max(max_y, y + h)
-                    valid_found = True
-            
-            if valid_found and (max_x - min_x) > img.shape[1] * 0.25:
-                modal_roi = (min_x, min_y, max_x - min_x, max_y - min_y)
+                # モーダルらしい条件（画面の25%以上の幅、かつ15%以上の高さ）
+                if w > img.shape[1] * 0.25 and h > img.shape[0] * 0.15:
+                    modal_roi = (x, y, w, h)
+                    break
         
         if modal_roi is None:
             # フォールバック: 画面全体を使う
