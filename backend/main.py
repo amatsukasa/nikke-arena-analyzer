@@ -43,9 +43,12 @@ from services.registration_email import (
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
+    delete_tournament_player_icons,
     delete_upload_file,
     path_from_upload_url,
     stale_age_hours_from_env,
+    PLAYER_ICONS_DIR,
+    _is_within,
 )
 from fastapi.responses import FileResponse
 
@@ -1049,6 +1052,8 @@ def delete_tournament(
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
     db.delete(db_tournament)
     db.commit()
+    # 大会削除時に永続保存アイコンをクリーンアップ
+    delete_tournament_player_icons(tournament_id)
     return {"ok": True}
 
 # ==========================================
@@ -1081,7 +1086,13 @@ def create_championship(
     return db_championship
 
 @app.put("/api/championships/{id}", response_model=schemas.ChampionshipResponse)
-def update_championship(id: int, championship: schemas.ChampionshipCreate, db: Session = Depends(get_db)):
+def update_championship(
+    id: int,
+    championship: schemas.ChampionshipCreate,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    """大会シリーズ情報更新（ログイン必須）"""
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
@@ -1101,7 +1112,12 @@ def update_championship(id: int, championship: schemas.ChampionshipCreate, db: S
     return db_championship
 
 @app.delete("/api/championships/{id}")
-def delete_championship(id: int, db: Session = Depends(get_db)):
+def delete_championship(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    """大会シリーズ削除（ログイン必須）"""
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
@@ -1220,6 +1236,12 @@ def cleanup_replaced_player_icon(
     previous_url: str | None,
     current_url: str | None,
 ):
+    """
+    プレイヤーアイコンが別URLに差し替えられたとき、旧ファイルを削除する。
+
+    削除対象: uploads/cropped/player_icon_*.png（旧形式の一時保存ファイルのみ）
+    削除しない: uploads/player_icons/ 配下（永続保存領域）
+    """
     if not previous_url or previous_url == current_url:
         return
     still_referenced = db.query(models.Player.id).filter(
@@ -1230,9 +1252,13 @@ def cleanup_replaced_player_icon(
     if (
         not still_referenced
         and path is not None
+        # 旧形式（uploads/cropped/player_icon_*.png）のみ削除対象
+        # 永続保存先（uploads/player_icons/）は絶対に削除しない
         and path.name.startswith("player_icon_")
+        and not _is_within(path, PLAYER_ICONS_DIR)
     ):
         delete_upload_file(path)
+
 
 
 @app.post("/api/tournaments/{tournament_id}/players/{seed_number}")
@@ -1295,22 +1321,30 @@ async def save_teams(
             models.Player.tournament_id == tournament_id,
             models.Player.seed_number == seed_number
         ).first()
+        # 編成登録前の icon_url を記録（上書き防止のため）
         previous_icon_url = player.icon_url if player else None
-        
+
         if not player:
+            # Player が存在しない場合は新規作成
+            # icon_url はフロントから送られた場合のみ設定（なければ None のまま）
             player = models.Player(
                 tournament_id=tournament_id,
                 seed_number=seed_number,
                 name=player_name or f"Player {seed_number}",
-                icon_url=player_icon_url
+                icon_url=player_icon_url or None,
             )
             db.add(player)
             db.commit()
             db.refresh(player)
             print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
         else:
-            if player_name: player.name = player_name
-            if player_icon_url: player.icon_url = player_icon_url
+            # 既存 Player 更新
+            if player_name:
+                player.name = player_name
+            # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
+            # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
+            if player_icon_url:
+                player.icon_url = player_icon_url
             db.commit()
             print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
         cleanup_replaced_player_icon(
@@ -1464,18 +1498,73 @@ async def save_teams(
 
 @app.post("/api/upload/player-icon")
 async def upload_player_icon(
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    tournament_id: int = Form(...),
+    seed_number: int = Form(...),
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    # プレイヤーアイコンを保存
-    original_name = Path(image.filename or "player.png").name
-    filename = f"player_icon_{os.urandom(4).hex()}_{original_name}"
-    file_path = os.path.join("uploads/cropped", filename)
-    os.makedirs("uploads/cropped", exist_ok=True)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
-        
-    return {"url": f"/api/uploads/cropped/{filename}"}
+    """
+    プレイヤー顔アイコンを永続保存先に保存し、players.icon_url をDBに保存する。
+
+    Player が存在しない場合は自動作成する（顔画像先行登録ユースケースに対応）。
+    保存先: uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.png
+
+    同一大会・同一シードを同時アップロードした場合は後勝ち（上書き）。
+    異なる大会間でパスが衝突することはない。
+    """
+    # バリデーション
+    if tournament_id <= 0 or seed_number <= 0:
+        raise HTTPException(status_code=422, detail="tournament_id と seed_number は正の整数である必要があります")
+
+    # 権限チェック：admin または大会作成者のみ操作可能
+    require_tournament_manager(tournament_id, db, current_user)
+
+    # tournament_id + seed_number で Player を検索し、存在しなければ自動作成
+    player = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.seed_number == seed_number,
+    ).first()
+    if not player:
+        # 顔画像先行登録：Player を自動作成（名前はデフォルト、後から編成登録時に更新可能）
+        player = models.Player(
+            tournament_id=tournament_id,
+            seed_number=seed_number,
+            name=f"Player {seed_number}",
+        )
+        db.add(player)
+        db.flush()  # player.id を確定させるため flush（commit 前）
+        print(f"[PlayerIcon] Player 自動作成: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+
+    # 永続保存先ディレクトリを作成
+    icon_dir = PLAYER_ICONS_DIR / f"tournament_{tournament_id}"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"seed_{seed_number}.png"
+    file_path = icon_dir / filename
+    icon_url = f"/api/uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.png"
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+
+        # DB の players.icon_url を更新してコミット
+        player.icon_url = icon_url
+        db.commit()
+        db.refresh(player)
+    except Exception as e:
+        db.rollback()
+        # 保存途中のファイルがあれば削除
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
+        print(f"[PlayerIcon] 保存失敗: {e}")
+        raise HTTPException(status_code=500, detail="顔画像の保存中にエラーが発生しました")
+
+    print(f"[PlayerIcon] 保存完了: {file_path} → {icon_url} (player_id={player.id})")
+    return {"url": icon_url, "player_id": player.id}
 
 @app.post("/api/analyze/deck")
 async def analyze_deck(request: Request):

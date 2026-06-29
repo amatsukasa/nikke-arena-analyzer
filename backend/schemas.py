@@ -57,8 +57,10 @@ class PlayerBase(BaseModel):
 
 class Player(PlayerBase):
     id: int
+    icon_url: Optional[str] = None  # プレイヤーアイコンURL
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
 
 class DeckTeamBase(BaseModel):
     team_number: int

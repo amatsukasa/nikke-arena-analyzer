@@ -148,10 +148,29 @@ export default function TournamentDetail() {
       const croppedImage = await getCroppedImg(imageToCrop, croppedAreaPixels);
       const formData = new FormData();
       formData.append("image", croppedImage, "avatar.png");
+      // 永続保存先を特定するために tournament_id と seed_number を必須で付与
+      if (!tournamentId) {
+        alert("大会IDが確定していません。しばらく待ってから再試行してください。");
+        return;
+      }
+      formData.append("tournament_id", String(tournamentId));
+      formData.append("seed_number", String(seed));
 
-      const res = await fetch("/api/upload/player-icon", { method: "POST", body: formData });
+      const res = await fetch("/api/upload/player-icon", {
+        method: "POST",
+        body: formData,
+        credentials: "include", // 認証Cookie（auth_token）を送信する
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData?.detail || `アップロードに失敗しました (HTTP ${res.status})`;
+        alert(errMsg);
+        return;
+      }
+
       const data = await res.json();
-
+      // キャッシュバスターを付与してブラウザキャッシュを回避
       const bustUrl = `${data.url}?t=${Date.now()}`;
 
       // 常に基本フォーム側のアイコンを更新
@@ -166,10 +185,12 @@ export default function TournamentDetail() {
       setImageToCrop(null);
     } catch (e) {
       console.error(e);
+      alert("アップロード中にエラーが発生しました。");
     } finally {
       setIsUploadingIcon(false);
     }
   };
+
 
   const onFileChange = async (e: any) => {
     if (e.target.files && e.target.files.length > 0) {

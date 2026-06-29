@@ -9,6 +9,9 @@ backend_node_bak/uploads/
 !backend/uploads/templates/
 !backend/uploads/templates/*
 
+# 永続プレイヤーアイコン（ランタイム生成、Git管理外）
+backend/uploads/player_icons/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -22,7 +25,17 @@ frontend/.next/
 frontend/out/
 frontend/.env*
 !frontend/.env.example
+frontend/tsconfig.tsbuildinfo
 
 # Local environment
 .env
 .env.*
+
+# デバッグ用スクリプト・テスト画像（開発中の一時ファイル）
+backend/debug_output/
+backend/test_images/
+backend/test_images_2/
+
+# SQLite DB（開発用ローカルDB）
+backend/database.db
+backend/nikke_arena.db
