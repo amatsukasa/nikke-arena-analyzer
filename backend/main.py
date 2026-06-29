@@ -511,10 +511,19 @@ def unban_user(
 
 # ===== 認証ルート ここまで =====
 
-from sqlalchemy import case
+from sqlalchemy import case, func
 
 @app.get("/api/characters", response_model=List[schemas.Character])
 def get_characters(db: Session = Depends(get_db)):
+    # deck_teams の使用回数を集計
+    usage_counts = {}
+    for i in range(1, 6):
+        col = getattr(models.DeckTeam, f"char{i}_id")
+        counts = db.query(col, func.count(col)).group_by(col).all()
+        for char_id, count in counts:
+            if char_id:
+                usage_counts[char_id] = usage_counts.get(char_id, 0) + count
+
     # SSR > SR > R 順、五十音順（名前順）
     rarity_order = case(
         (models.Character.rarity == 'SSR', 1),
@@ -531,7 +540,8 @@ def get_characters(db: Session = Depends(get_db)):
             update={
                 "is_template_available": (
                     find_character_template(UPLOAD_DIR, character.id) is not None
-                )
+                ),
+                "usage_count": usage_counts.get(character.id, 0)
             }
         )
         for character in characters

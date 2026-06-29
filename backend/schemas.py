@@ -15,6 +15,7 @@ class CharacterBase(BaseModel):
 class Character(CharacterBase):
     id: int
     created_at: datetime
+    usage_count: Optional[int] = 0
     model_config = ConfigDict(from_attributes=True)
 
 class ChampionshipBase(BaseModel):

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import Cropper from "react-easy-crop";
-
+import CharacterSearchSelect from "../../../components/CharacterSearchSelect";
 export default function TournamentDetail() {
   const params = useParams();
   const id = params.id;
@@ -1094,19 +1094,14 @@ export default function TournamentDetail() {
                           <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-800/50 ring-1 ring-white/5">
                             {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">-</div>}
                           </div>
-                          <select
-                            className={`h-10 w-full min-w-0 rounded px-2 text-sm ${!selectedTeams[idx]?.characters[c_idx]?.id ? 'bg-red-950/80 text-red-400 border-2 border-red-500 font-bold shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-slate-800 border border-slate-700 text-slate-300'}`}
-                            value={selectedTeams[idx]?.characters[c_idx]?.id || ""}
-                            onChange={(e) => updateSelectedCharacter(idx, c_idx, e.target.value ? parseInt(e.target.value) : null)}
-                            aria-label={`ラウンド${idx + 1} キャラクター${c_idx + 1}`}
-                          >
-                            <option value="">(不明)</option>
-                            {characters.map(c =>
-                              <option key={c.id} value={c.id}>
-                                {c.id === 9999 ? '空枠' : `[${c.rarity}] ${c.name}`}
-                              </option>
-                            )}
-                          </select>
+                          <CharacterSearchSelect
+                            value={selectedTeams[idx]?.characters[c_idx]?.id || null}
+                            onChange={(id) => updateSelectedCharacter(idx, c_idx, id)}
+                            characters={characters}
+                            error={!selectedTeams[idx]?.characters[c_idx]?.id}
+                            className="h-10"
+                            id={`desktop-round-${idx}-character-${c_idx}`}
+                          />
                         </div>
                       ))}
                     </div>
@@ -1121,19 +1116,14 @@ export default function TournamentDetail() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <label className="mb-1 block text-xs text-slate-500" htmlFor={`round-${idx}-character-${c_idx}`}>キャラクター {c_idx + 1}</label>
-                            <select
+                            <CharacterSearchSelect
                               id={`round-${idx}-character-${c_idx}`}
-                              className={`min-h-11 w-full min-w-0 rounded px-3 text-base ${!selectedTeams[idx]?.characters[c_idx]?.id ? 'bg-red-950/80 text-red-400 border-2 border-red-500 font-bold shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-slate-800 border border-slate-700 text-slate-200'}`}
-                              value={selectedTeams[idx]?.characters[c_idx]?.id || ""}
-                              onChange={(e) => updateSelectedCharacter(idx, c_idx, e.target.value ? parseInt(e.target.value) : null)}
-                            >
-                              <option value="">(不明)</option>
-                              {characters.map(c =>
-                                <option key={c.id} value={c.id}>
-                                  {c.id === 9999 ? '空枠' : `[${c.rarity}] ${c.name}`}
-                                </option>
-                              )}
-                            </select>
+                              value={selectedTeams[idx]?.characters[c_idx]?.id || null}
+                              onChange={(id) => updateSelectedCharacter(idx, c_idx, id)}
+                              characters={characters}
+                              error={!selectedTeams[idx]?.characters[c_idx]?.id}
+                              className="min-h-11"
+                            />
                           </div>
                         </div>
                       ))}
