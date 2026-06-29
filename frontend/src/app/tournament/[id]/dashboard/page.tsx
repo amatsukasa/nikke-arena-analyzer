@@ -135,37 +135,11 @@ export default function Dashboard() {
 
   const [tournamentId, setTournamentId] = useState<number | null>(null);
 
-  // 1. Championship ID から紐づく Tournament ID を取得する。無ければ自動作成する。
   useEffect(() => {
     if (isFirstLoad) return;
-    const initTournament = async () => {
-      try {
-        const res = await fetch(`/api/championships/${id}/matches`);
-        const matches = await res.json();
-        
-        if (matches && matches.length > 0) {
-          setTournamentId(matches[0].id);
-        } else {
-          const champRes = await fetch(`/api/championships/${id}`);
-          const champ = await champRes.json();
-          
-          const createRes = await fetch(`/api/tournaments`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: champ.name || `Championship ${id} Tournament`,
-              date: champ.date || new Date().toISOString().split('T')[0],
-              championship_id: parseInt(id as string)
-            })
-          });
-          const newTourn = await createRes.json();
-          setTournamentId(newTourn.id);
-        }
-      } catch (err) {
-        console.error("Tournament initialization failed:", err);
-      }
-    };
-    initTournament();
+    if (id) {
+      setTournamentId(parseInt(id as string));
+    }
   }, [id, isFirstLoad]);
 
   useEffect(() => {

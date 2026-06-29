@@ -57,39 +57,10 @@ export default function TournamentDetail() {
     setBracketData(data);
   };
 
-  // 1. Championship ID から紐づく Tournament ID を取得する。無ければ自動作成する。
   useEffect(() => {
-    const initTournament = async () => {
-      try {
-        // 大会に紐づく対戦/トーナメント一覧を取得
-        const res = await fetch(`/api/championships/${id}/matches`);
-        const matches = await res.json();
-        
-        if (matches && matches.length > 0) {
-          // すでに作成済みのトーナメントがある場合、それを選択
-          setTournamentId(matches[0].id);
-        } else {
-          // 無ければ新しく作成する
-          const champRes = await fetch(`/api/championships/${id}`);
-          const champ = await champRes.json();
-          
-          const createRes = await fetch(`/api/tournaments`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: champ.name || `Championship ${id} Tournament`,
-              date: champ.date || new Date().toISOString().split('T')[0],
-              championship_id: parseInt(id as string)
-            })
-          });
-          const newTourn = await createRes.json();
-          setTournamentId(newTourn.id);
-        }
-      } catch (err) {
-        console.error("Tournament initialization failed:", err);
-      }
-    };
-    initTournament();
+    if (id) {
+      setTournamentId(parseInt(id as string));
+    }
   }, [id]);
 
   useEffect(() => {
@@ -514,7 +485,7 @@ export default function TournamentDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: formPlayerName,
-          icon_url: formPlayerIcon
+          icon_url: formPlayerIcon ? formPlayerIcon.split('?')[0] : ""
         })
       });
       if (res.ok) {
