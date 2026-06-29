@@ -27,34 +27,9 @@ export default function CharacterDetailPage() {
   const [tournamentIdResolved, setTournamentIdResolved] = useState<number | null>(null);
 
   useEffect(() => {
-    const initTournament = async () => {
-      try {
-        const res = await fetch(`/api/championships/${tournamentId}/matches`);
-        const matches = await res.json();
-        
-        if (matches && matches.length > 0) {
-          setTournamentIdResolved(matches[0].id);
-        } else {
-          const champRes = await fetch(`/api/championships/${tournamentId}`);
-          const champ = await champRes.json();
-          
-          const createRes = await fetch(`/api/tournaments`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: champ.name || `Championship ${tournamentId} Tournament`,
-              date: champ.date || new Date().toISOString().split('T')[0],
-              championship_id: parseInt(tournamentId as string)
-            })
-          });
-          const newTourn = await createRes.json();
-          setTournamentIdResolved(newTourn.id);
-        }
-      } catch (err) {
-        console.error("Tournament initialization failed in character page:", err);
-      }
-    };
-    initTournament();
+    if (tournamentId) {
+      setTournamentIdResolved(parseInt(tournamentId as string));
+    }
   }, [tournamentId]);
 
   useEffect(() => {

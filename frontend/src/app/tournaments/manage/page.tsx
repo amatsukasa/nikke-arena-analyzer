@@ -279,7 +279,7 @@ export default function Home() {
           ) : (
             <div className="grid gap-4">
               {tournaments.map(t => (
-                <Link key={t.id} href={`/tournament/${t.championship_id || t.id}`}>
+                <Link key={t.id} href={`/tournament/${t.id}`}>
                   <div className="flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 ring-1 ring-white/5 hover:ring-white/20 transition-all rounded-xl group/item">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
