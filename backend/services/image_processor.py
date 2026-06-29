@@ -60,20 +60,19 @@ def process_images(image_paths, tournament_id, seed_number):
         y_anchor_tab = 400
         x_anchor_tab = 540  # デフォルト: 画面中央
         if cnts_cyan:
-            # R（レア）キャラクターの青い背景を誤検知しないよう、
-            # Y座標が上部（y < 200）にあり、幅が広い（w > 100）ものをタブとして優先する
             valid_cnts = []
+            modal_h = img_res.shape[0]
+            y_limit = int(modal_h * 0.17)
+            
             for cnt in cnts_cyan:
                 x_t, y_t, w_t, h_t = cv2.boundingRect(cnt)
-                if y_t < 200 and w_t > 100:
+                if y_t < y_limit:
                     valid_cnts.append(cnt)
             
             if valid_cnts:
                 c = max(valid_cnts, key=cv2.contourArea)
             else:
-                c = max(cnts_cyan, key=cv2.contourArea)
-                if cv2.contourArea(c) < 100:
-                    c = None
+                c = None
                 
             if c is not None:
                 x_tab, y_tab, w_tab, h_tab = cv2.boundingRect(c)
