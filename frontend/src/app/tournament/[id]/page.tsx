@@ -238,13 +238,50 @@ export default function TournamentDetail() {
     setPreviews([]);
   };
 
+  const compressImage = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        // Maintain original dimensions but convert to JPEG with 0.85 quality
+        // This dramatically reduces file size without losing the HSV hue needed for OpenCV
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(file);
+        
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), {
+                type: "image/jpeg",
+                lastModified: Date.now(),
+              }));
+            } else {
+              resolve(file);
+            }
+          },
+          "image/jpeg",
+          0.85
+        );
+      };
+      img.onerror = () => resolve(file);
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
   const handleUpload = async () => {
     if (files.length === 0 || !tournamentId) return;
     setIsUploading(true);
+    
+    // Compress images before upload to avoid Next.js 10MB body size limit
+    const compressedFiles = await Promise.all(files.map(f => compressImage(f)));
+    
     const formData = new FormData();
     formData.append("tournament_id", tournamentId.toString());
     formData.append("seed_number", seed.toString());
-    files.forEach(f => formData.append("images", f));
+    compressedFiles.forEach(f => formData.append("images", f));
 
     try {
       const res = await fetch("/api/analyze/deck", { method: "POST", body: formData });

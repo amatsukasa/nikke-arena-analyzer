@@ -7,8 +7,8 @@ import secrets
 def process_images(image_paths, tournament_id, seed_number):
     analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
-    lower_cyan = np.array([75, 50, 50])
-    upper_cyan = np.array([105, 255, 255])
+    lower_cyan = np.array([70, 50, 50])
+    upper_cyan = np.array([120, 255, 255])
     
     rounds_data = []
     
@@ -72,11 +72,14 @@ def process_images(image_paths, tournament_id, seed_number):
                 c = max(valid_cnts, key=cv2.contourArea)
             else:
                 c = max(cnts_cyan, key=cv2.contourArea)
+                if cv2.contourArea(c) < 100:
+                    c = None
                 
-            x_tab, y_tab, w_tab, h_tab = cv2.boundingRect(c)
-            # タブの中心X座標を記録（左端ほどROUND01に近い）
-            x_anchor_tab = x_tab + w_tab // 2
-            y_anchor_tab = y_tab
+            if c is not None:
+                x_tab, y_tab, w_tab, h_tab = cv2.boundingRect(c)
+                # タブの中心X座標を記録（左端ほどROUND01に近い）
+                x_anchor_tab = x_tab + w_tab // 2
+                y_anchor_tab = y_tab
             
         rounds_data.append({
             "path": path, 
