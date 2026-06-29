@@ -957,13 +957,22 @@ def get_tournaments(
         models.Tournament.created_at.desc(),
         models.Tournament.id.desc(),
     ).all()
+    
+    result = []
+    for t in tournaments:
+        t_schema = schemas.Tournament.model_validate(t)
+        if t.creator:
+            t_schema.creator_email = t.creator.email
+        result.append(t_schema)
+
     if mine:
-        return tournaments
+        return result
+        
     return [
-        schemas.Tournament.model_validate(tournament).model_copy(
-            update={"owner_name": None, "created_by": None}
+        t_schema.model_copy(
+            update={"owner_name": None, "created_by": None, "creator_email": None}
         )
-        for tournament in tournaments
+        for t_schema in result
     ]
 
 @app.get("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)

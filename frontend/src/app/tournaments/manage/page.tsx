@@ -11,6 +11,8 @@ interface Tournament {
   start_date: string;
   owner_name?: string;
   championship_id?: number;
+  creator_email?: string;
+  created_at?: string;
   publication_status: "draft" | "published";
   published_at?: string | null;
 }
@@ -284,6 +286,7 @@ export default function Home() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-lg font-bold text-slate-200 group-hover/item:text-blue-400 transition-colors">{t.name}</div>
+                        <span className="text-xs text-slate-500 bg-slate-800 px-2 py-0.5 rounded font-mono">ID: {t.id}</span>
                         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ring-1 ${
                           t.publication_status === "published"
                             ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
@@ -293,9 +296,11 @@ export default function Home() {
                           {t.publication_status === "published" ? "公開中" : "下書き"}
                         </span>
                       </div>
-                      {t.date && (
-                        <div className="text-xs text-slate-500 mt-1">開催日: {t.date.split('T')[0]}</div>
-                      )}
+                      <div className="text-xs text-slate-400 mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                        <div>作成者: <span className="text-slate-300 font-medium">{t.owner_name || t.creator_email || "未設定"}</span></div>
+                        <div>開催日: <span className="text-slate-300 font-medium">{t.date ? t.date.split('T')[0] : "未設定"}</span></div>
+                        <div>作成日: <span className="text-slate-300 font-medium">{t.created_at ? new Date(t.created_at).toLocaleString('ja-JP') : "未記録"}</span></div>
+                      </div>
                     </div>
                     <div className="flex shrink-0 items-center space-x-2 sm:space-x-4">
                       <button
