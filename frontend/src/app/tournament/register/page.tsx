@@ -84,7 +84,7 @@ function RegisterForm() {
 
       setSuccess('大会データを登録しました！遷移します...');
       setTimeout(() => {
-        router.push(`/tournament/${selectedChampionshipId}`);
+        router.push(`/tournament/${data.id}`);
       }, 2000);
     } catch (err: any) {
       setError(err.message || '登録中にエラーが発生しました。');
@@ -196,11 +196,7 @@ function RegisterForm() {
               className="btn btn-secondary"
               style={{ flex: 1, padding: '12px' }}
               onClick={() => {
-                if (queryChampionshipId) {
-                  router.push(`/tournament/${queryChampionshipId}`);
-                } else {
-                  router.push('/staff');
-                }
+                router.push('/tournaments/manage');
               }}
             >
               キャンセル
