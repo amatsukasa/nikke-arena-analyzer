@@ -7,8 +7,8 @@ import secrets
 def process_images(image_paths, tournament_id, seed_number):
     analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
-    lower_cyan = np.array([70, 50, 50])
-    upper_cyan = np.array([120, 255, 255])
+    lower_cyan = np.array([75, 50, 50])
+    upper_cyan = np.array([105, 255, 255])
     
     rounds_data = []
     
