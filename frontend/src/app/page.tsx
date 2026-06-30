@@ -61,9 +61,10 @@ function DashboardContent() {
 
   // 大会データとそのフィルタリング
   const [allTournaments, setAllTournaments] = useState<any[]>([]);
-  const [filterServers, setFilterServers] = useState<string[]>(["JP"]);
-  const [filterSeasons, setFilterSeasons] = useState<string[]>([]);
-  const [filterStartDates, setFilterStartDates] = useState<string[]>([]);
+  const [filterServer, setFilterServer] = useState<string>("JP");
+  const [filterSeason, setFilterSeason] = useState<string>("");
+  const [isAllTournamentsSelected, setIsAllTournamentsSelected] = useState<boolean>(true);
+  const [selectedSpecificTournamentIds, setSelectedSpecificTournamentIds] = useState<number[]>([]);
   const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   
@@ -145,68 +146,36 @@ function DashboardContent() {
         
         if (data.length > 0) {
           const availableServers = new Set(data.map(t => t.play_server).filter(Boolean));
-          const availableSeasons = new Set(data.map(t => t.season || "β30").filter(Boolean));
-          const availableStartDates = new Set(data.map(t => t.provider_game_start_date).filter(Boolean));
+          
+          const savedServer = localStorage.getItem('nikke_filter_server');
+          const savedSeason = localStorage.getItem('nikke_filter_season');
+          const savedIsAll = localStorage.getItem('nikke_filter_is_all');
+          const savedSpecificIdsStr = localStorage.getItem('nikke_filter_specific_ids');
 
-          const savedServersStr = localStorage.getItem('nikke_filter_servers');
-          const savedSeasonsStr = localStorage.getItem('nikke_filter_seasons');
-          const savedStartDatesStr = localStorage.getItem('nikke_filter_startDates');
+          const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
+          const initialServer = (savedServer && availableServers.has(savedServer)) ? savedServer : (fallbackServer || "");
+          setFilterServer(initialServer);
 
-          const latest = data.reduce((current, tournament) => {
+          const serverTournaments = data.filter(t => t.play_server === initialServer);
+          const serverSeasons = new Set(serverTournaments.map(t => t.season || "β30").filter(Boolean));
+          
+          const latest = serverTournaments.length > 0 ? serverTournaments.reduce((current, tournament) => {
             const currentTime = new Date(current.date || current.created_at || 0).getTime();
             const tournamentTime = new Date(tournament.date || tournament.created_at || 0).getTime();
             return tournamentTime > currentTime ? tournament : current;
-          });
-          const initialSeason = latest.season || "β30";
+          }) : null;
+          const initialSeasonFallback = latest?.season || "β30";
 
-          // サーバーの個別の復元とフォールバック
-          if (savedServersStr) {
-            try {
-              const parsedServers = JSON.parse(savedServersStr);
-              const validServers = parsedServers.filter((s: string) => availableServers.has(s));
-              if (validServers.length > 0) {
-                setFilterServers(validServers);
-              } else {
-                const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
-                setFilterServers(fallbackServer ? [fallbackServer] : []);
-              }
-            } catch (err) {
-              const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
-              setFilterServers(fallbackServer ? [fallbackServer] : []);
-            }
-          } else {
-            const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
-            setFilterServers(fallbackServer ? [fallbackServer] : []);
+          const initialSeason = (savedSeason && serverSeasons.has(savedSeason)) ? savedSeason : initialSeasonFallback;
+          setFilterSeason(initialSeason);
+
+          if (savedIsAll !== null) {
+            setIsAllTournamentsSelected(savedIsAll === "true");
           }
-
-          // シーズンの個別の復元
-          if (savedSeasonsStr) {
+          if (savedSpecificIdsStr) {
             try {
-              const parsedSeasons = JSON.parse(savedSeasonsStr);
-              const validSeasons = parsedSeasons.filter((s: string) => availableSeasons.has(s));
-              if (validSeasons.length > 0) {
-                setFilterSeasons(validSeasons);
-              } else {
-                setFilterSeasons([initialSeason]);
-              }
-            } catch (err) {
-              setFilterSeasons([initialSeason]);
-            }
-          } else {
-            setFilterSeasons([initialSeason]);
-          }
-
-          // 開始日の個別の復元
-          if (savedStartDatesStr) {
-            try {
-              const parsedStartDates = JSON.parse(savedStartDatesStr);
-              const validStartDates = parsedStartDates.filter((s: string) => availableStartDates.has(s));
-              setFilterStartDates(validStartDates);
-            } catch (err) {
-              setFilterStartDates([]);
-            }
-          } else {
-            setFilterStartDates([]);
+              setSelectedSpecificTournamentIds(JSON.parse(savedSpecificIdsStr));
+            } catch (e) {}
           }
         } else {
           // 大会データが0件のとき、ローディングを終了する
@@ -221,29 +190,29 @@ function DashboardContent() {
     fetchTournaments();
   }, [isFirstLoad, user?.game_start_date]);
 
+  const selectedChampionshipId = allTournaments.find(t => t.play_server === filterServer && t.season === filterSeason)?.championship_id;
+
   // フィルタ状態から selectedTournamentIds を計算
   useEffect(() => {
     if (allTournaments.length === 0) return;
-    let filtered = allTournaments;
-    if (filterServers.length > 0) {
-      filtered = filtered.filter(t => filterServers.includes(t.play_server || ""));
+    let filtered = allTournaments.filter(t => (t.play_server || "") === filterServer && (t.season || "β30") === filterSeason);
+    
+    if (isAllTournamentsSelected) {
+      setSelectedTournamentIds(filtered.map(t => t.id));
+    } else {
+      const validSpecificIds = selectedSpecificTournamentIds.filter(id => filtered.some(t => t.id === id));
+      setSelectedTournamentIds(validSpecificIds.length > 0 ? validSpecificIds : filtered.map(t => t.id));
     }
-    if (filterSeasons.length > 0) {
-      filtered = filtered.filter(t => filterSeasons.includes(t.season || "β30"));
-    }
-    if (filterStartDates.length > 0) {
-      filtered = filtered.filter(t => filterStartDates.includes(t.provider_game_start_date || ""));
-    }
-    setSelectedTournamentIds(filtered.map(t => t.id));
-  }, [filterServers, filterSeasons, filterStartDates, allTournaments]);
+  }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments]);
 
   // フィルタ状態を localStorage に保存
   useEffect(() => {
     if (isFirstLoad || allTournaments.length === 0) return;
-    localStorage.setItem('nikke_filter_servers', JSON.stringify(filterServers));
-    localStorage.setItem('nikke_filter_seasons', JSON.stringify(filterSeasons));
-    localStorage.setItem('nikke_filter_startDates', JSON.stringify(filterStartDates));
-  }, [filterServers, filterSeasons, filterStartDates, allTournaments, isFirstLoad]);
+    localStorage.setItem('nikke_filter_server', filterServer);
+    localStorage.setItem('nikke_filter_season', filterSeason);
+    localStorage.setItem('nikke_filter_is_all', isAllTournamentsSelected.toString());
+    localStorage.setItem('nikke_filter_specific_ids', JSON.stringify(selectedSpecificTournamentIds));
+  }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments, isFirstLoad]);
 
   const [allBracketData, setAllBracketData] = useState<any[]>([]);
 
@@ -282,7 +251,11 @@ function DashboardContent() {
         // myPlayerDetails も全大会分取る必要はない。ブラケットデータがあればシードからプレイヤーを探せる。
 
         // 3. 横断分析APIの呼び出し
-        const reqBody = { tournament_ids: selectedTournamentIds };
+        const reqBody = { 
+          tournament_ids: selectedTournamentIds,
+          play_server: filterServer,
+          championship_id: selectedChampionshipId
+        };
         
         const statsRes = await fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
@@ -310,7 +283,11 @@ function DashboardContent() {
 
     const fetchMatchups = async () => {
       try {
-        const reqBody = { tournament_ids: selectedTournamentIds };
+        const reqBody = { 
+          tournament_ids: selectedTournamentIds,
+          play_server: filterServer,
+          championship_id: selectedChampionshipId
+        };
         const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
         });
@@ -536,11 +513,8 @@ function DashboardContent() {
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-bold text-slate-100">分析対象フィルタ</span>
               <span className="block truncate text-xs text-slate-400">
-                {filterServers.map(server => SERVER_LABELS[server] || server).join("・") || "サーバー未選択"}
-                {" / "}
-                {filterSeasons.join("・") || "シーズン未選択"}
-                {" / 開始日 "}
-                {filterStartDates.length > 0 ? `${filterStartDates.length}件` : "すべて"}
+                分析対象: {SERVER_LABELS[filterServer] || filterServer} / {filterSeason} / 
+                {isAllTournamentsSelected ? `全${allTournaments.filter(t => t.play_server === filterServer && (t.season || "β30") === filterSeason).length}大会` : `${selectedTournamentIds.length}大会`}
               </span>
             </span>
             <span className="shrink-0 rounded bg-blue-500/15 px-2 py-1 text-xs font-bold text-blue-300">
@@ -561,85 +535,95 @@ function DashboardContent() {
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 xl:block xl:space-y-6">
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">プレイサーバー</div>
-                <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                  {playServers.map(server => {
-                    const hasData = availableServers.has(server);
-                    return (
-                    <label key={server} className={`flex items-center space-x-3 ${hasData ? 'cursor-pointer group' : 'cursor-not-allowed opacity-50'}`}>
-                      <input type="checkbox" checked={filterServers.includes(server)}
-                        disabled={!hasData}
-                        onChange={(e) => {
-                          if (e.target.checked) setFilterServers([...filterServers, server]);
-                          else setFilterServers(filterServers.filter(value => value !== server));
-                        }}
-                        className={`w-4 h-4 rounded bg-slate-800 border-white/20 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 transition-colors ${hasData ? 'cursor-pointer' : 'cursor-not-allowed'}`}
-                      />
-                      <span className={`text-sm font-medium transition-colors ${hasData ? 'text-slate-300 group-hover:text-white' : 'text-slate-500'}`}>
-                        {SERVER_LABELS[server] || server}
-                      </span>
-                    </label>
-                  )})}
-                  {playServers.length === 0 && <span className="text-sm text-slate-500">データなし</span>}
-                </div>
+                <select 
+                  value={filterServer}
+                  onChange={(e) => {
+                    const newServer = e.target.value;
+                    setFilterServer(newServer);
+                    const newServerTournaments = allTournaments.filter(t => t.play_server === newServer);
+                    const newServerSeasons = Array.from(new Set(newServerTournaments.map(t => t.season || "β30").filter(Boolean)));
+                    if (newServerSeasons.length > 0 && !newServerSeasons.includes(filterSeason)) {
+                      setFilterSeason(newServerSeasons[0] as string);
+                    }
+                    setIsAllTournamentsSelected(true);
+                    setSelectedSpecificTournamentIds([]);
+                  }}
+                  className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg border border-white/10 px-3 py-2 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  {playServers.map(server => (
+                    <option key={server} value={server} disabled={!availableServers.has(server)}>
+                      {SERVER_LABELS[server] || server}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">開催期間 (シーズン)</div>
-                <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                  {seasons.map(s => (
-                    <label key={s} className="flex items-center space-x-3 cursor-pointer group">
-                      <input type="checkbox" checked={filterSeasons.includes(s)}
-                        onChange={(e) => {
-                          if (e.target.checked) setFilterSeasons([...filterSeasons, s]);
-                          else setFilterSeasons(filterSeasons.filter(x => x !== s));
-                        }}
-                        className="w-4 h-4 rounded bg-slate-800 border-white/20 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
-                      />
-                      <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{s}</span>
-                    </label>
+                <select
+                  value={filterSeason}
+                  onChange={(e) => {
+                    setFilterSeason(e.target.value);
+                    setIsAllTournamentsSelected(true);
+                    setSelectedSpecificTournamentIds([]);
+                  }}
+                  className="w-full bg-slate-800 text-slate-200 text-sm rounded-lg border border-white/10 px-3 py-2 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  {Array.from(new Set(allTournaments.filter(t => t.play_server === filterServer).map(t => t.season || "β30").filter(Boolean))).map((s: any) => (
+                    <option key={s} value={s}>{s}</option>
                   ))}
-                  {seasons.length === 0 && <span className="text-sm text-slate-500">データなし</span>}
-                </div>
+                </select>
               </div>
 
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">ゲーム開始日</div>
-                  {gameStartDates.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (filterStartDates.length === gameStartDates.length) {
-                          setFilterStartDates([]);
-                        } else {
-                          setFilterStartDates([...gameStartDates]);
-                        }
-                      }}
-                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors"
-                    >
-                      {filterStartDates.length === gameStartDates.length ? "全解除" : "全て選択"}
-                    </button>
-                  )}
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">対象大会</div>
+                <div className="flex items-center space-x-4 mb-3 px-1">
+                  <label className="flex items-center space-x-2 cursor-pointer group">
+                    <input type="radio" 
+                      checked={isAllTournamentsSelected} 
+                      onChange={() => setIsAllTournamentsSelected(true)}
+                      className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
+                    />
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">すべて</span>
+                  </label>
+                  <label className="flex items-center space-x-2 cursor-pointer group">
+                    <input type="radio" 
+                      checked={!isAllTournamentsSelected} 
+                      onChange={() => setIsAllTournamentsSelected(false)}
+                      className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
+                    />
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">個別に選ぶ</span>
+                  </label>
                 </div>
-                <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                  {gameStartDates.map(date => (
-                    <label key={date} className="flex items-center space-x-3 cursor-pointer group">
-                      <input type="checkbox" checked={filterStartDates.includes(date)}
-                        onChange={(e) => {
-                          if (e.target.checked) setFilterStartDates([...filterStartDates, date]);
-                          else setFilterStartDates(filterStartDates.filter(value => value !== date));
-                        }}
-                        className="w-4 h-4 rounded bg-slate-800 border-white/20 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
-                      />
-                      <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{date}</span>
-                    </label>
-                  ))}
-                  {gameStartDates.length === 0 && <span className="text-sm text-slate-500">データなし</span>}
-                </div>
+                
+                {!isAllTournamentsSelected && (
+                  <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar mt-2 bg-slate-950/30 p-2 rounded-lg ring-1 ring-white/5">
+                    {allTournaments
+                      .filter(t => (t.play_server || "") === filterServer && (t.season || "β30") === filterSeason)
+                      .sort((a, b) => new Date(a.provider_game_start_date || 0).getTime() - new Date(b.provider_game_start_date || 0).getTime())
+                      .map(t => (
+                      <label key={t.id} className="flex items-center space-x-3 cursor-pointer group">
+                        <input type="checkbox" checked={selectedSpecificTournamentIds.includes(t.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, t.id]);
+                            } else {
+                              setSelectedSpecificTournamentIds(selectedSpecificTournamentIds.filter(id => id !== t.id));
+                            }
+                          }}
+                          className="w-4 h-4 rounded bg-slate-800 border-white/20 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
+                        />
+                        <span className="text-xs font-medium text-slate-300 group-hover:text-white transition-colors truncate">
+                          {t.provider_game_start_date ? `${t.provider_game_start_date}開始` : (t.name || `大会 #${t.id}`)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             
@@ -1217,6 +1201,8 @@ function DashboardContent() {
               <div className="space-y-3">
                 <PaginatedTeamList 
                   tournamentIds={selectedTournamentIds} 
+                  playServer={filterServer}
+                  championshipId={selectedChampionshipId}
                   allCharacters={allCharacters}
                   onTeamClick={handleTeamClick} 
                   selectedTeam={selectedTeam} 
@@ -1634,6 +1620,8 @@ function DashboardContent() {
                 <div className="space-y-3">
                   <PaginatedTeamList 
                     tournamentIds={selectedTournamentIds} 
+                    playServer={filterServer}
+                    championshipId={selectedChampionshipId}
                     allCharacters={allCharacters}
                     characterIds={searchChars} 
                     onTeamClick={handleTeamClick} 

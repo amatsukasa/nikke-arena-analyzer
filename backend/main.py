@@ -1036,6 +1036,7 @@ def get_tournament_publication(
 def update_tournament_publication(
     tournament_id: int,
     body: dict,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
@@ -1049,11 +1050,21 @@ def update_tournament_publication(
             detail="未完成の編成データがあるため公開できません",
         )
 
+    # ステータスが変わった場合のみ処理
+    status_changed = (tournament.publication_status == "published") != publish
+
     tournament.publication_status = "published" if publish else "draft"
     tournament.published_at = datetime.now(timezone.utc) if publish else None
     tournament.published_by = current_user.id if publish else None
     db.commit()
     db.refresh(tournament)
+    
+    if status_changed:
+        if publish:
+            background_tasks.add_task(recompute_snapshot, tournament_id, current_user.id)
+        else:
+            background_tasks.add_task(delete_snapshot, tournament_id)
+
     return {
         "ok": True,
         "publication_status": tournament.publication_status,
@@ -1893,6 +1904,20 @@ def save_snapshot(tournament_id: int, stats: dict, db: Session):
     db.commit()
 
 
+
+def delete_snapshot(tournament_id: int):
+    """BackgroundTasks から呼ばれる。自前でDBセッションを作成・破棄する。"""
+    db = SessionLocal()
+    try:
+        snap = db.query(models.TournamentSnapshot).filter(models.TournamentSnapshot.tournament_id == tournament_id).first()
+        if snap:
+            db.delete(snap)
+            db.commit()
+    except Exception as e:
+        print(f"[delete_snapshot] ERROR tournament_id={tournament_id}: {e}")
+    finally:
+        db.close()
+
 def recompute_snapshot(tournament_id: int, user_id: int):
     """BackgroundTasks から呼ばれる。自前でDBセッションを作成・破棄する。"""
     db = SessionLocal()
@@ -2484,15 +2509,37 @@ def get_best8_decks(
 # ============================================================
 
 from pydantic import BaseModel as PydanticBaseModel
+def resolve_cross_tournament_ids(db, tournament_ids, play_server, championship_id):
+    if not play_server or not championship_id:
+        return tournament_ids if tournament_ids else []
+    
+    # 全ての有効な大会IDを取得
+    valid_tournaments = db.query(models.Tournament.id).filter(
+        models.Tournament.publication_status == "published",
+        models.Tournament.play_server == play_server,
+        models.Tournament.championship_id == championship_id
+    ).all()
+    valid_ids = {t[0] for t in valid_tournaments}
+    
+    if not tournament_ids:
+        # 空の場合はスコープ内の全てを対象とする
+        return list(valid_ids)
+    
+    # フィルタリング（スコープ外を除外）
+    return [tid for tid in tournament_ids if tid in valid_ids]
+
 
 class CrossTournamentRequest(PydanticBaseModel):
     """大会横断検索リクエスト"""
-    tournament_ids: List[int]
+    tournament_ids: List[int] = []
+    play_server: Optional[str] = None
+    championship_id: Optional[int] = None
 
 
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
-    stats = _compute_cross_tournament_stats(body.tournament_ids, db)
+    resolved_ids = resolve_cross_tournament_ids(db, body.tournament_ids, body.play_server, body.championship_id)
+    stats = _compute_cross_tournament_stats(resolved_ids, db)
     if "team_usage" in stats:
         stats["team_usage"] = stats["team_usage"][:50]
     return stats
@@ -2997,7 +3044,9 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
 
 
 class CrossTournamentTeamsRequest(PydanticBaseModel):
-    tournament_ids: List[int]
+    tournament_ids: List[int] = []
+    play_server: Optional[str] = None
+    championship_id: Optional[int] = None
     seed: Optional[int] = None
     character_ids: Optional[List[int]] = None
     limit: Optional[int] = 10
@@ -3071,7 +3120,7 @@ def get_cross_dashboard_teams(
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
     # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
-    tournament_ids = req.tournament_ids or []
+    tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
     snaps = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id.in_(tournament_ids)
     ).all() if tournament_ids else []

@@ -4,6 +4,8 @@ import TeamDisplay from "./TeamDisplay";
 
 interface PaginatedTeamListProps {
   tournamentIds: number[];
+  playServer?: string;
+  championshipId?: number;
   allCharacters: any[];
   characterIds?: number[];
   sortBy?: "count" | "win_rate";
@@ -18,6 +20,8 @@ interface PaginatedTeamListProps {
 
 export default function PaginatedTeamList({
   tournamentIds,
+  playServer,
+  championshipId,
   allCharacters,
   characterIds = [],
   sortBy = "count",
@@ -58,6 +62,8 @@ export default function PaginatedTeamList({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             tournament_ids: tournamentIds,
+            play_server: playServer,
+            championship_id: championshipId,
             limit,
             offset: currentOffset,
             character_ids: characterIds.length > 0 ? characterIds : undefined,
