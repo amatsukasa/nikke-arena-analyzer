@@ -2976,7 +2976,7 @@ def get_dashboard_teams(
         if c_ids:
             filtered = []
             for t in teams:
-                t_cids = [c["id"] for c in t.get("characters", [])]
+                t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
                 if all(cid in t_cids for cid in c_ids):
                     filtered.append(t)
             teams = filtered
@@ -3005,7 +3005,7 @@ def get_cross_dashboard_teams(
         c_ids = req.character_ids
         filtered = []
         for t in teams:
-            t_cids = [c["id"] for c in t.get("characters", [])]
+            t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
             if all(cid in t_cids for cid in c_ids):
                 filtered.append(t)
         teams = filtered
