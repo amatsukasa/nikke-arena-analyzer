@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole } from "lucide-react";
+import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole, RefreshCw } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
 
 interface Tournament {
@@ -40,6 +40,7 @@ export default function Home() {
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [publicationUpdatingId, setPublicationUpdatingId] = useState<number | null>(null);
+  const [rebuildingId, setRebuildingId] = useState<number | null>(null);
 
   const loadTournaments = async () => {
     const res = await fetch(`/api/tournaments?mine=true&_=${Date.now()}`, {
@@ -155,9 +156,32 @@ export default function Home() {
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       alert(data.detail || data.message || "Failed to delete tournament.");
-      return;
+    } else {
+      setTournaments(prev => prev.filter(t => t.id !== id));
     }
-    setTournaments(prev => prev.filter(t => t.id !== id));
+  };
+
+  const handleRebuildSnapshot = async (e: React.MouseEvent, id: number) => {
+    e.preventDefault();
+    if (!confirm("手動でスナップショットを再生成しますか？\n（通常は公開時に自動生成されます）")) return;
+
+    setRebuildingId(id);
+    try {
+      const res = await fetch(`/api/tournaments/${id}/snapshot/rebuild`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        alert("スナップショット再生成を開始しました");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(`再生成リクエストに失敗しました: ${data.message || res.status}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("通信エラーが発生しました");
+    } finally {
+      setRebuildingId(null);
+    }
   };
 
   const handlePublicationToggle = async (e: React.MouseEvent, tournament: Tournament) => {
@@ -322,6 +346,18 @@ export default function Home() {
                             ? "更新中"
                             : t.publication_status === "published" ? "公開中" : "公開する"}
                         </span>
+                      </button>
+                      <button 
+                        onClick={(e) => handleRebuildSnapshot(e, t.id)}
+                        disabled={rebuildingId === t.id}
+                        className={`p-2 rounded-lg transition-all ${
+                          rebuildingId === t.id
+                            ? "text-blue-300 bg-blue-400/20 cursor-wait animate-pulse"
+                            : "text-slate-500 hover:text-blue-400 hover:bg-blue-400/10"
+                        }`}
+                        title="スナップショット再生成"
+                      >
+                        <RefreshCw size={18} className={rebuildingId === t.id ? "animate-spin" : ""} />
                       </button>
                       <button 
                         onClick={(e) => openEditModal(e, t)}

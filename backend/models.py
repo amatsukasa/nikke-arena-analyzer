@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, DateTime, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -159,3 +159,18 @@ class RoundResult(Base):
 
     match = relationship("Match", back_populates="round_results")
     winner = relationship("Player", foreign_keys=[winner_id])
+
+class TournamentSnapshot(Base):
+    """大会単位の集計スナップショット（公開時に生成・非公開時に削除）"""
+    __tablename__ = "tournament_snapshots"
+    id             = Column(Integer, primary_key=True, index=True)
+    tournament_id  = Column(Integer, ForeignKey("tournaments.id"), unique=True, nullable=False)
+    computed_at    = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    team_usage     = Column(JSON, nullable=False, default=list)
+    char_stats     = Column(JSON, nullable=False, default=list)
+    matchups       = Column(JSON, nullable=False, default=list)
+    total_players  = Column(Integer, nullable=True)
+    total_matches  = Column(Integer, nullable=True)
+
+    tournament = relationship("Tournament")
+

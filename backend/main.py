@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query, BackgroundTasks
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from database import engine, Base, get_db
+from database import engine, Base, get_db, SessionLocal
 import models, schemas
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
@@ -1840,6 +1840,26 @@ async def save_match(
     db.commit()
     return {"ok": True}
 
+
+
+@app.post("/api/tournaments/{tournament_id}/snapshot/rebuild")
+def rebuild_tournament_snapshot(
+    tournament_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    """管理者が手動でスナップショットを再生成する"""
+    if current_user.role not in ("admin", "contributor"):
+        raise HTTPException(status_code=403, detail="管理者のみ実行できます")
+    tournament = db.query(models.Tournament).filter(
+        models.Tournament.id == tournament_id
+    ).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="大会が見つかりません")
+    background_tasks.add_task(recompute_snapshot, tournament_id, current_user.id)
+    return {"ok": True, "message": f"tournament_id={tournament_id} のスナップショット再生成を開始しました"}
+
 @app.get("/api/tournaments/{tournament_id}/dashboard/stats")
 def get_dashboard_stats(
     tournament_id: int,
@@ -1852,6 +1872,38 @@ def get_dashboard_stats(
         stats["team_usage"] = stats["team_usage"][:50]
     return stats
 
+
+
+
+# ===== スナップショット管理 =====
+
+def save_snapshot(tournament_id: int, stats: dict, db: Session):
+    """_compute_dashboard_stats の結果を tournament_snapshots テーブルに保存する"""
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is None:
+        snap = models.TournamentSnapshot(tournament_id=tournament_id)
+        db.add(snap)
+    snap.team_usage    = stats.get("team_usage", [])
+    snap.char_stats    = stats.get("character_stats", [])
+    snap.matchups      = stats.get("matchups", [])
+    snap.total_players = stats.get("total_players")
+    snap.total_matches = stats.get("total_matches")
+    db.commit()
+
+
+def recompute_snapshot(tournament_id: int, user_id: int):
+    """BackgroundTasks から呼ばれる。自前でDBセッションを作成・破棄する。"""
+    db = SessionLocal()
+    try:
+        user = db.query(models.AppUser).filter(models.AppUser.id == user_id).first()
+        stats = _compute_dashboard_stats(tournament_id, db, user)
+        save_snapshot(tournament_id, stats, db)
+    except Exception as e:
+        print(f"[recompute_snapshot] ERROR tournament_id={tournament_id}: {e}")
+    finally:
+        db.close()
 
 def _compute_dashboard_stats(
     tournament_id: int,
@@ -2965,11 +3017,22 @@ def get_dashboard_teams(
     offset: int = Query(0, ge=0),
     character_ids: Optional[str] = None,
     sort_by: Optional[str] = None,
+    min_matches: int = 0,
+    min_usage: int = 0,
+    min_win_rate: float = 0,
+    best_result: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
-    teams = stats.get("team_usage", [])
+    # スナップショット優先（なければ既存集計にフォールバック）
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is not None:
+        teams = snap.team_usage or []
+    else:
+        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        teams = stats.get("team_usage", [])
     
     if character_ids:
         c_ids = [int(x) for x in character_ids.split(",") if x.isdigit()]
@@ -2980,6 +3043,15 @@ def get_dashboard_teams(
                 if all(cid in t_cids for cid in c_ids):
                     filtered.append(t)
             teams = filtered
+
+    if min_matches > 0:
+        teams = [t for t in teams if t.get("total_matches", 0) >= min_matches]
+    if min_usage > 0:
+        teams = [t for t in teams if t.get("count", 0) >= min_usage]
+    if min_win_rate > 0:
+        teams = [t for t in teams if t.get("win_rate", 0) >= min_win_rate]
+    if best_result:
+        teams = [t for t in teams if t.get("best_result") == best_result]
 
     if sort_by == "win_rate":
         teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
@@ -2998,8 +3070,43 @@ def get_cross_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    stats = _compute_cross_tournament_stats(req.tournament_ids, db)
-    teams = stats.get("team_usage", [])
+    # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
+    tournament_ids = req.tournament_ids or []
+    snaps = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id.in_(tournament_ids)
+    ).all() if tournament_ids else []
+
+    if snaps:
+        RESULT_SCORES_MERGE = {
+            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8,
+            "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
+        }
+        merged: dict = {}
+        for snap in snaps:
+            for team in (snap.team_usage or []):
+                cid = team.get("canonical_id")
+                if not cid:
+                    continue
+                if cid not in merged:
+                    merged[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
+                merged[cid]["count"]         += team.get("count", 0)
+                merged[cid]["win_count"]     += team.get("win_count", 0)
+                merged[cid]["total_matches"] += team.get("total_matches", 0)
+                # 最高成績を統合（スコアが小さいほど良い成績）
+                cur_score   = RESULT_SCORES_MERGE.get(merged[cid].get("best_result", "不明"), 999)
+                new_score   = RESULT_SCORES_MERGE.get(team.get("best_result", "不明"), 999)
+                if new_score < cur_score:
+                    merged[cid]["best_result"] = team.get("best_result")
+        teams = []
+        for team in merged.values():
+            t = team["total_matches"]
+            w = team["win_count"]
+            team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            teams.append(team)
+    else:
+        # スナップショットがない場合は既存集計にフォールバック
+        stats = _compute_cross_tournament_stats(tournament_ids, db)
+        teams = stats.get("team_usage", [])
     
     if req.character_ids:
         c_ids = req.character_ids
@@ -3010,8 +3117,8 @@ def get_cross_dashboard_teams(
                 filtered.append(t)
         teams = filtered
 
-    if req.min_matches is not None:
-        teams = [t for t in teams if t.get("count", 0) >= req.min_matches]
+    if req.min_matches is not None and req.min_matches > 0:
+        teams = [t for t in teams if t.get("total_matches", 0) >= req.min_matches]
     if req.min_usage is not None:
         teams = [t for t in teams if t.get("count", 0) >= req.min_usage]
     if req.min_win_rate is not None:

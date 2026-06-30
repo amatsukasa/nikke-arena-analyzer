@@ -90,7 +90,9 @@ export default function PaginatedTeamList({
   // Reset and fetch when dependencies change
   useEffect(() => {
     if (tournamentIds.length === 0) return;
+    setTeams([]);
     setOffset(0);
+    setHasMore(true);
     fetchTeams(0, true);
   }, [tournamentIds.join(","), characterIds.join(","), sortBy, sortOrder, minMatches, minUsage, minWinRate, bestResult]);
 
