@@ -71,6 +71,11 @@ function DashboardContent() {
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
+  const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
+  const [isAdoptedPlayersOpen, setIsAdoptedPlayersOpen] = useState(true);
+  const [matchupFilterResult, setMatchupFilterResult] = useState<"ALL" | "WIN" | "LOSE">("ALL");
+  const [matchupFilterSide, setMatchupFilterSide] = useState<"ALL" | "ATTACK" | "DEFENSE">("ALL");
+  const [matchupFilterStage, setMatchupFilterStage] = useState<string>("ALL");
 
   // For search
   const [searchChars, setSearchChars] = useState<number[]>([]);
@@ -1324,10 +1329,17 @@ function DashboardContent() {
               if (positionStats.length === 0) return null;
               return (
                 <div className="space-y-3">
-                  <h3 className="font-bold text-white flex items-center space-x-2">
-                    <span className="text-lg">📊</span>
-                    <span>編成の配置ポジション分析</span>
-                  </h3>
+                  <button 
+                    onClick={() => setIsPositionStatsOpen(!isPositionStatsOpen)}
+                    className="w-full font-bold text-white flex items-center justify-between hover:bg-white/5 p-2 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg">📊</span>
+                      <span>編成の配置ポジション分析</span>
+                    </div>
+                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isPositionStatsOpen ? "" : "-rotate-90"}`} />
+                  </button>
+                  {isPositionStatsOpen && (
                   <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
                     <table className="w-full text-center">
                       <thead>
@@ -1386,6 +1398,7 @@ function DashboardContent() {
                       </tbody>
                     </table>
                   </div>
+                  )}
                 </div>
               );
             })()}
@@ -1406,10 +1419,17 @@ function DashboardContent() {
               };
               return (
                 <div className="mt-6 bg-slate-800/30 rounded-2xl ring-1 ring-white/5 p-5">
-                  <h3 className="font-bold text-white mb-4 flex items-center space-x-2">
-                    <UserIcon size={18} className="text-purple-400" />
-                    <span>この編成を採用した指揮官</span>
-                  </h3>
+                  <button
+                    onClick={() => setIsAdoptedPlayersOpen(!isAdoptedPlayersOpen)}
+                    className="w-full font-bold text-white mb-2 flex items-center justify-between hover:bg-white/5 p-2 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <UserIcon size={18} className="text-purple-400" />
+                      <span>この編成を採用した指揮官</span>
+                    </div>
+                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isAdoptedPlayersOpen ? "" : "-rotate-90"}`} />
+                  </button>
+                  {isAdoptedPlayersOpen && (
                   <div className="space-y-2">
                     {adoptedPlayers.map((ap: any, idx: number) => (
                       <div key={idx} className="flex items-center justify-between bg-slate-900/50 px-4 py-3 rounded-xl ring-1 ring-white/5">
@@ -1425,55 +1445,107 @@ function DashboardContent() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               );
             })()}
 
-            {selectedTeam && matchupDetails.length > 0 && (
+            {selectedTeam && matchupDetails.length > 0 && (() => {
+              const availableStages = Array.from(new Set(matchupDetails.map(m => m.stage || "不明")));
+              const filteredMatchupDetails = matchupDetails.filter((m: any) => {
+                if (matchupFilterResult === "WIN" && !m.isWin) return false;
+                if (matchupFilterResult === "LOSE" && m.isWin) return false;
+                if (matchupFilterSide === "ATTACK" && !m.isAttacker) return false;
+                if (matchupFilterSide === "DEFENSE" && m.isAttacker) return false;
+                if (matchupFilterStage !== "ALL" && (m.stage || "不明") !== matchupFilterStage) return false;
+                return true;
+              });
+
+              return (
               <div className="space-y-4 mt-8">
-                <h3 className="font-bold text-white mb-4">この編成の対戦履歴</h3>
-                <div className="space-y-2">
-                  {matchupDetails.map((m: any, idx: number) => (
-                    <div key={idx} 
-                      onClick={() => handleTeamClick(m.opponentCanonical)}
-                      className="bg-slate-800/30 hover:bg-slate-700/50 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-2"
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
+                  <h3 className="font-bold text-white">この編成の対戦履歴</h3>
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      className="bg-slate-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      value={matchupFilterResult}
+                      onChange={e => setMatchupFilterResult(e.target.value as any)}
                     >
-                      {/* 大会名 & プレイヤー対戦情報 */}
-                      <div className="flex items-center space-x-2 text-xs">
-                        <span className="font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
-                          {m.tournamentName || "不明"}
-                        </span>
-                        <span className="text-slate-400">
-                          {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
-                        </span>
-                      </div>
-                      {/* メイン行: ステージ・攻防・相手編成・勝敗 */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex flex-col items-start space-y-1">
-                            <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
-                              m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" : 
-                              m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
-                              "bg-slate-700/50 text-slate-400 ring-slate-600/50"
-                            }`}>
-                              {m.stage || "不明"}
-                            </div>
-                            <div className={`px-2 py-1 rounded text-xs font-bold w-fit ${m.isAttacker ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
-                              {m.isAttacker ? '攻撃' : '防衛'}
-                            </div>
-                          </div>
-                          <div className="text-slate-400 text-sm mr-2">VS</div>
-                          <TeamDisplay charIds={m.opponent} />
-                        </div>
-                        <div className={`font-black text-lg ${m.isWin ? 'text-emerald-400' : 'text-slate-600'}`}>
-                          {m.isWin ? 'WIN' : 'LOSE'}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      <option value="ALL">勝敗: すべて</option>
+                      <option value="WIN">WIN</option>
+                      <option value="LOSE">LOSE</option>
+                    </select>
+                    <select
+                      className="bg-slate-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      value={matchupFilterSide}
+                      onChange={e => setMatchupFilterSide(e.target.value as any)}
+                    >
+                      <option value="ALL">攻防: すべて</option>
+                      <option value="ATTACK">攻撃</option>
+                      <option value="DEFENSE">防衛</option>
+                    </select>
+                    <select
+                      className="bg-slate-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                      value={matchupFilterStage}
+                      onChange={e => setMatchupFilterStage(e.target.value)}
+                    >
+                      <option value="ALL">ラウンド: すべて</option>
+                      {availableStages.map(stage => (
+                        <option key={stage} value={stage}>{stage}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+                
+                {filteredMatchupDetails.length > 0 ? (
+                  <div className="space-y-2">
+                    {filteredMatchupDetails.map((m: any, idx: number) => (
+                      <div key={idx} 
+                        onClick={() => handleTeamClick(m.opponentCanonical)}
+                        className="bg-slate-800/30 hover:bg-slate-700/50 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-2"
+                      >
+                        {/* 大会名 & プレイヤー対戦情報 */}
+                        <div className="flex items-center space-x-2 text-xs">
+                          <span className="font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
+                            {m.tournamentName || "不明"}
+                          </span>
+                          <span className="text-slate-400">
+                            {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
+                          </span>
+                        </div>
+                        {/* メイン行: ステージ・攻防・相手編成・勝敗 */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-4">
+                            <div className="flex flex-col items-start space-y-1">
+                              <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
+                                m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" : 
+                                m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                                "bg-slate-700/50 text-slate-400 ring-slate-600/50"
+                              }`}>
+                                {m.stage || "不明"}
+                              </div>
+                              <div className={`px-2 py-1 rounded text-xs font-bold w-fit ${m.isAttacker ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
+                                {m.isAttacker ? '攻撃' : '防衛'}
+                              </div>
+                            </div>
+                            <div className="text-slate-400 text-sm mr-2">VS</div>
+                            <TeamDisplay charIds={m.opponent} />
+                          </div>
+                          <div className={`font-black text-lg ${m.isWin ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {m.isWin ? 'WIN' : 'LOSE'}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-800/30 rounded-xl ring-1 ring-white/5 p-8 text-center text-slate-400">
+                    条件に一致する対戦履歴がありません
+                  </div>
+                )}
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
