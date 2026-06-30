@@ -29,7 +29,7 @@ export default function PaginatedTeamList({
   onTeamClick,
   selectedTeam
 }: PaginatedTeamListProps) {
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
   const [teams, setTeams] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -43,7 +43,7 @@ export default function PaginatedTeamList({
     try {
       let res;
       if (tournamentIds.length === 1) {
-        let url = `${API_BASE}/api/tournaments/${tournamentIds[0]}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}`;
+        let url = `/api/tournaments/${tournamentIds[0]}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}`;
         if (characterIds.length > 0) {
           url += `&character_ids=${characterIds.join(",")}`;
         }
@@ -53,7 +53,7 @@ export default function PaginatedTeamList({
         if (bestResult) url += `&best_result=${encodeURIComponent(bestResult)}`;
         res = await fetch(url);
       } else {
-        res = await fetch(`${API_BASE}/api/dashboard/cross-tournament/teams`, {
+        res = await fetch(`/api/dashboard/cross-tournament/teams`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
