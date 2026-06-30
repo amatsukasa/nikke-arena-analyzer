@@ -1451,7 +1451,23 @@ function DashboardContent() {
             })()}
 
             {selectedTeam && matchupDetails.length > 0 && (() => {
-              const availableStages = Array.from(new Set(matchupDetails.map(m => m.stage || "不明")));
+              const stageOrder = [
+                "決勝", "FINAL",
+                "準決勝", "Best 4", "ベスト4",
+                "Best 8", "ベスト8",
+                "Best 16", "ベスト16",
+                "Best 32", "ベスト32",
+                "Best 64", "ベスト64",
+                "不明"
+              ];
+              const availableStages = Array.from(new Set(matchupDetails.map(m => m.stage || "不明"))).sort((a: any, b: any) => {
+                const indexA = stageOrder.indexOf(a);
+                const indexB = stageOrder.indexOf(b);
+                if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                if (indexA !== -1) return -1;
+                if (indexB !== -1) return 1;
+                return a.localeCompare(b);
+              });
               const filteredMatchupDetails = matchupDetails.filter((m: any) => {
                 if (matchupFilterResult === "WIN" && !m.isWin) return false;
                 if (matchupFilterResult === "LOSE" && m.isWin) return false;
