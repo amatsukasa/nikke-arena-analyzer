@@ -138,36 +138,67 @@ function DashboardContent() {
         setAllTournaments(data);
         
         if (data.length > 0) {
+          const availableServers = new Set(data.map(t => t.play_server).filter(Boolean));
+          const availableSeasons = new Set(data.map(t => t.season || "β30").filter(Boolean));
+          const availableStartDates = new Set(data.map(t => t.provider_game_start_date).filter(Boolean));
+
+          const savedServersStr = localStorage.getItem('nikke_filter_servers');
+          const savedSeasonsStr = localStorage.getItem('nikke_filter_seasons');
+          const savedStartDatesStr = localStorage.getItem('nikke_filter_startDates');
+
           const latest = data.reduce((current, tournament) => {
             const currentTime = new Date(current.date || current.created_at || 0).getTime();
             const tournamentTime = new Date(tournament.date || tournament.created_at || 0).getTime();
             return tournamentTime > currentTime ? tournament : current;
           });
           const initialSeason = latest.season || "β30";
-          setFilterSeasons([initialSeason]);
-          setFilterServers(["JP"]);
 
-          const defaultCandidates = data.filter(t =>
-            t.play_server === "JP" && (t.season || "β30") === initialSeason
-          );
-          const startDateSource = defaultCandidates.some(t => t.provider_game_start_date)
-            ? defaultCandidates
-            : data;
-          const startDates = Array.from(new Set(
-            startDateSource.map(t => t.provider_game_start_date).filter(Boolean)
-          )).sort() as string[];
-          if (startDates.length > 0) {
-            const userTime = user?.game_start_date
-              ? new Date(user.game_start_date).getTime()
-              : Number.NaN;
-            const initialStartDate = Number.isNaN(userTime)
-              ? startDates[0]
-              : startDates.reduce((nearest, date) => {
-                  const nearestDiff = Math.abs(new Date(nearest).getTime() - userTime);
-                  const dateDiff = Math.abs(new Date(date).getTime() - userTime);
-                  return dateDiff < nearestDiff ? date : nearest;
-                });
-            setFilterStartDates([initialStartDate]);
+          // サーバーの個別の復元とフォールバック
+          if (savedServersStr) {
+            try {
+              const parsedServers = JSON.parse(savedServersStr);
+              const validServers = parsedServers.filter((s: string) => availableServers.has(s));
+              if (validServers.length > 0) {
+                setFilterServers(validServers);
+              } else {
+                const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
+                setFilterServers(fallbackServer ? [fallbackServer] : []);
+              }
+            } catch (err) {
+              const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
+              setFilterServers(fallbackServer ? [fallbackServer] : []);
+            }
+          } else {
+            const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
+            setFilterServers(fallbackServer ? [fallbackServer] : []);
+          }
+
+          // シーズンの個別の復元
+          if (savedSeasonsStr) {
+            try {
+              const parsedSeasons = JSON.parse(savedSeasonsStr);
+              const validSeasons = parsedSeasons.filter((s: string) => availableSeasons.has(s));
+              if (validSeasons.length > 0) {
+                setFilterSeasons(validSeasons);
+              } else {
+                setFilterSeasons([initialSeason]);
+              }
+            } catch (err) {
+              setFilterSeasons([initialSeason]);
+            }
+          } else {
+            setFilterSeasons([initialSeason]);
+          }
+
+          // 開始日の個別の復元
+          if (savedStartDatesStr) {
+            try {
+              const parsedStartDates = JSON.parse(savedStartDatesStr);
+              const validStartDates = parsedStartDates.filter((s: string) => availableStartDates.has(s));
+              setFilterStartDates(validStartDates);
+            } catch (err) {
+              setFilterStartDates([]);
+            }
           } else {
             setFilterStartDates([]);
           }
@@ -199,6 +230,14 @@ function DashboardContent() {
     }
     setSelectedTournamentIds(filtered.map(t => t.id));
   }, [filterServers, filterSeasons, filterStartDates, allTournaments]);
+
+  // フィルタ状態を localStorage に保存
+  useEffect(() => {
+    if (isFirstLoad || allTournaments.length === 0) return;
+    localStorage.setItem('nikke_filter_servers', JSON.stringify(filterServers));
+    localStorage.setItem('nikke_filter_seasons', JSON.stringify(filterSeasons));
+    localStorage.setItem('nikke_filter_startDates', JSON.stringify(filterStartDates));
+  }, [filterServers, filterSeasons, filterStartDates, allTournaments, isFirstLoad]);
 
   const [allBracketData, setAllBracketData] = useState<any[]>([]);
 
@@ -442,6 +481,7 @@ function DashboardContent() {
 
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
+  const availableServers = new Set(allTournaments.map(t => t.play_server).filter(Boolean));
   const gameStartDates = Array.from(new Set(
     allTournaments.map(t => t.provider_game_start_date).filter(Boolean)
   )).sort() as string[];
@@ -504,20 +544,23 @@ function DashboardContent() {
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">プレイサーバー</div>
                 <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                  {playServers.map(server => (
-                    <label key={server} className="flex items-center space-x-3 cursor-pointer group">
+                  {playServers.map(server => {
+                    const hasData = availableServers.has(server);
+                    return (
+                    <label key={server} className={`flex items-center space-x-3 ${hasData ? 'cursor-pointer group' : 'cursor-not-allowed opacity-50'}`}>
                       <input type="checkbox" checked={filterServers.includes(server)}
+                        disabled={!hasData}
                         onChange={(e) => {
                           if (e.target.checked) setFilterServers([...filterServers, server]);
                           else setFilterServers(filterServers.filter(value => value !== server));
                         }}
-                        className="w-4 h-4 rounded bg-slate-800 border-white/20 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
+                        className={`w-4 h-4 rounded bg-slate-800 border-white/20 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 transition-colors ${hasData ? 'cursor-pointer' : 'cursor-not-allowed'}`}
                       />
-                      <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">
+                      <span className={`text-sm font-medium transition-colors ${hasData ? 'text-slate-300 group-hover:text-white' : 'text-slate-500'}`}>
                         {SERVER_LABELS[server] || server}
                       </span>
                     </label>
-                  ))}
+                  )})}
                   {playServers.length === 0 && <span className="text-sm text-slate-500">データなし</span>}
                 </div>
               </div>
@@ -546,7 +589,24 @@ function DashboardContent() {
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">ゲーム開始日</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">ゲーム開始日</div>
+                  {gameStartDates.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (filterStartDates.length === gameStartDates.length) {
+                          setFilterStartDates([]);
+                        } else {
+                          setFilterStartDates([...gameStartDates]);
+                        }
+                      }}
+                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition-colors"
+                    >
+                      {filterStartDates.length === gameStartDates.length ? "全解除" : "全て選択"}
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-2.5 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                   {gameStartDates.map(date => (
                     <label key={date} className="flex items-center space-x-3 cursor-pointer group">
