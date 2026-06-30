@@ -135,7 +135,7 @@ export default function PlayerStatsPage() {
           return (
             <div key={i} className="w-12 h-12 rounded-lg bg-slate-800 ring-1 ring-white/20 overflow-hidden relative group">
               {c.is_template_available ? (
-                <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+                <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-slate-700">
                   <span className="text-[10px] font-bold text-slate-300">{c.name?.slice(0,3)}</span>

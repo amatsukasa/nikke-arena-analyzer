@@ -241,7 +241,7 @@ export default function Dashboard() {
             <div key={i} className="flex flex-col items-center space-y-1 cursor-pointer group" onClick={(e) => { e.stopPropagation(); setSelectedCharId(c.id); }}>
               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                 {c?.is_template_available ? (
-                  <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c?.name || "不明"} className="w-full h-full object-cover" />
+                  <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
                 )}
@@ -638,7 +638,7 @@ export default function Dashboard() {
                                       >
                                         <div className="w-8 h-8 rounded-md bg-slate-700 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0 group-hover/char:ring-blue-500 transition-all">
                                           {c?.is_template_available ? (
-                                            <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+                                            <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                                           ) : (
                                             <span className="text-[8px] text-slate-500 font-bold">{c.name.slice(0,2)}</span>
                                           )}
@@ -886,7 +886,7 @@ export default function Dashboard() {
                               <div className="flex items-center space-x-3">
                                 <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0">
                                   {c?.is_template_available ? (
-                                    <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+                                    <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                                   ) : (
                                     <span className="text-[10px] text-slate-500 font-bold">{c.name.slice(0,3)}</span>
                                   )}
@@ -1454,7 +1454,7 @@ export default function Dashboard() {
                       title={c.name}
                     >
                       {c.is_template_available ? (
-                         <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+                         <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                       ) : (
                          <div className="w-full h-full bg-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-bold text-center leading-tight">
                            {c.name.slice(0,4)}
@@ -1547,7 +1547,7 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-6">
                       <div className="w-24 h-24 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center">
                         {c.is_template_available ? (
-                          <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+                          <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                         ) : (
                           <span className="text-2xl text-slate-500 font-black">{c.name.slice(0,3)}</span>
                         )}
@@ -1727,7 +1727,7 @@ export default function Dashboard() {
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
                                 {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}
@@ -1751,7 +1751,7 @@ export default function Dashboard() {
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
                                 {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}
@@ -1775,7 +1775,7 @@ export default function Dashboard() {
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
                                 {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}

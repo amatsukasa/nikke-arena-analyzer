@@ -63,7 +63,7 @@ def get_char_icon(char_id: int):
         return FileResponse(
             template_path,
             media_type="image/png",
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
     raise HTTPException(status_code=404, detail="Template not found")
 

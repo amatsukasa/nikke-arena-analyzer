@@ -140,7 +140,7 @@ export default function CharacterDetailPage() {
           >
             <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
               {ch?.is_template_available ? (
-                <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch?.name || "不明"} className="w-full h-full object-cover" />
+                <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch?.name || "不明"} className="w-full h-full object-cover" />
               ) : (
                 <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{ch?.name?.slice(0, 3) || "不明"}</span>
               )}
@@ -197,7 +197,7 @@ export default function CharacterDetailPage() {
         <div className="flex items-center space-x-6 mb-8">
           <div className="w-28 h-28 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center shrink-0">
             {c.is_template_available ? (
-              <img src={`/api/char-icon/${c.id}.png?t=${Date.now()}`} alt={c.name} className="w-full h-full object-cover" />
+              <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
             ) : (
               <span className="text-3xl text-slate-500 font-black">{c.name.slice(0, 3)}</span>
             )}
@@ -275,7 +275,7 @@ export default function CharacterDetailPage() {
                 >
                   <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                     {ch.is_template_available ? (
-                      <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                      <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-[10px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                     )}
@@ -306,7 +306,7 @@ export default function CharacterDetailPage() {
                 >
                   <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-emerald-500 overflow-hidden flex items-center justify-center transition-all">
                     {ch.is_template_available ? (
-                      <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                      <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-[10px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                     )}
@@ -337,7 +337,7 @@ export default function CharacterDetailPage() {
                 >
                   <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-amber-500 overflow-hidden flex items-center justify-center transition-all">
                     {ch.is_template_available ? (
-                      <img src={`/api/char-icon/${ch.id}.png?t=${Date.now()}`} alt={ch.name} className="w-full h-full object-cover" />
+                      <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-[10px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                     )}
