@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
+import PaginatedTeamList from "../components/PaginatedTeamList";
 import { useAuth } from "../context/AuthContext";
 
 const SERVER_LABELS: Record<string, string> = {
@@ -283,20 +284,13 @@ function DashboardContent() {
         // 3. 横断分析APIの呼び出し
         const reqBody = { tournament_ids: selectedTournamentIds };
         
-        const [statsRes, matchupsRes] = await Promise.all([
-          fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
+        const statsRes = await fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
-          }),
-          fetch(`/api/dashboard/cross-tournament/matchups?t=${timestamp}`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
-          })
-        ]);
+          });
         
         const statsData = await statsRes.json();
-        const matchupsData = await matchupsRes.json();
 
         setStats(statsData);
-        setMatchups(matchupsData.matchups || matchupsData); // 互換性
         
         if (statsData.team_usage && statsData.team_usage.length > 0 && !selectedTeam) {
           setSelectedTeam(statsData.team_usage[0].canonical_id);
@@ -309,6 +303,25 @@ function DashboardContent() {
     };
     fetchData();
   }, [selectedTournamentIds, isFirstLoad]);
+
+  useEffect(() => {
+    if (activeTab !== "matchups" && activeTab !== "team_winrate") return;
+    if (matchups.length > 0 || selectedTournamentIds.length === 0) return;
+
+    const fetchMatchups = async () => {
+      try {
+        const reqBody = { tournament_ids: selectedTournamentIds };
+        const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
+        });
+        const data = await res.json();
+        setMatchups(data.matchups || data);
+      } catch(e) {
+        console.error(e);
+      }
+    };
+    fetchMatchups();
+  }, [activeTab, selectedTournamentIds, matchups.length]);
 
   if (loading) return (
     <div className="flex h-screen items-center justify-center">
@@ -1202,68 +1215,17 @@ function DashboardContent() {
               </div>
 
               <div className="space-y-3">
-                {[...(stats?.team_usage ?? [])]
-                  .filter((team: any) => {
-                    if (team.total_matches < teamMinMatches) return false;
-                    if (team.count < teamMinUsage) return false;
-                    if (team.win_rate < teamMinWinRate) return false;
-                    if (teamBestResult && team.best_result !== teamBestResult) return false;
-                    return true;
-                  })
-                  .sort((a: any, b: any) => {
-                    if (teamSortBy === "winrate") {
-                      return b.win_rate - a.win_rate || b.total_matches - a.total_matches;
-                    } else if (teamSortBy === "matches") {
-                      return b.total_matches - a.total_matches || b.win_rate - a.win_rate;
-                    } else {
-                      return b.count - a.count || b.win_rate - a.win_rate;
-                    }
-                  })
-                  .map((team: any, idx: number) => {
-                    const resultColors: Record<string, string> = {
-                      "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                      "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                      "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                      "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                      "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                      "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                      "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-                    };
-                    const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                    return (
-                      <div key={idx} onClick={() => handleTeamClick(team.canonical_id)} className="flex items-center justify-between bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5">
-                        <div className="flex items-center space-x-4">
-                          <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-black text-slate-300 text-xs">
-                            {idx + 1}
-                          </div>
-                          <TeamDisplay charIds={team.character_ids} />
-                        </div>
-                        <div className="flex items-center space-x-6">
-                           {team.best_result && (
-                             <div className="hidden md:block">
-                               <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                                 {team.best_result}
-                               </span>
-                             </div>
-                           )}
-                           <div className="text-right">
-                              <p className="text-[10px] text-slate-500 font-bold uppercase">採用数</p>
-                              <p className="text-sm font-bold text-slate-300">{team.count} 人</p>
-                           </div>
-                           <div className="text-right">
-                              <p className="text-[10px] text-slate-500 font-bold uppercase">Matches</p>
-                              <p className="text-sm font-bold text-slate-300">{team.total_matches} 戦</p>
-                           </div>
-                           <div className={`px-4 py-1.5 rounded-lg font-black text-lg min-w-[100px] text-center ${team.win_rate >= 50 ? 'bg-emerald-400/10 text-emerald-400' : 'bg-amber-400/10 text-amber-400'}`}>
-                             {team.win_rate}%
-                           </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                {(stats?.team_usage?.length ?? 0) === 0 && (
-                  <p className="text-slate-500">データがありません</p>
-                )}
+                <PaginatedTeamList 
+                  tournamentIds={selectedTournamentIds} 
+                  allCharacters={allCharacters}
+                  onTeamClick={handleTeamClick} 
+                  selectedTeam={selectedTeam} 
+                  sortBy={teamSortBy === "matches" ? "count" : "win_rate"}
+                  minMatches={teamMinMatches}
+                  minUsage={teamMinUsage}
+                  minWinRate={teamMinWinRate}
+                  bestResult={teamBestResult}
+                />
               </div>
             </section>
           </div>
@@ -1670,21 +1632,14 @@ function DashboardContent() {
                 <p className="text-slate-500 text-center py-12">キャラクターを選択してください</p>
               ) : (
                 <div className="space-y-3">
-                  {(stats?.team_usage ?? [])
-                    .filter((team: any) => searchChars.every(id => team.character_ids.includes(id)))
-                    .map((team: any, idx: number) => (
-                      <div key={idx} onClick={() => handleTeamClick(team.canonical_id)} className="flex items-center justify-between bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5">
-                        <TeamDisplay charIds={team.character_ids} />
-                        <div className="text-emerald-400 font-bold bg-emerald-400/10 px-4 py-1.5 rounded-lg">
-                          {team.count} 回採用
-                        </div>
-                      </div>
-                    ))}
-                  {(stats?.team_usage ?? []).filter((team: any) => searchChars.every(id => team.character_ids.includes(id))).length === 0 && (
-                    <div className="text-center py-12 bg-slate-800/30 rounded-2xl ring-1 ring-white/5">
-                      <p className="text-slate-400 text-lg">この組み合わせは本大会では採用されていません</p>
-                    </div>
-                  )}
+                  <PaginatedTeamList 
+                    tournamentIds={selectedTournamentIds} 
+                    allCharacters={allCharacters}
+                    characterIds={searchChars} 
+                    onTeamClick={handleTeamClick} 
+                    selectedTeam={selectedTeam} 
+                    sortBy="count"
+                  />
                 </div>
               )}
             </div>

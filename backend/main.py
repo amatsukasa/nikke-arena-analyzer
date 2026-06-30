@@ -1,11 +1,11 @@
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models, schemas
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 import hashlib
 import secrets
@@ -1847,6 +1847,18 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
+    stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+    if "team_usage" in stats:
+        stats["team_usage"] = stats["team_usage"][:50]
+    return stats
+
+
+def _compute_dashboard_stats(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None = None,
+    seed: int = None,
+):
     require_tournament_viewer(tournament_id, db, current_user)
     query = db.query(models.Player).filter(models.Player.tournament_id == tournament_id)
     if seed:
@@ -2428,8 +2440,15 @@ class CrossTournamentRequest(PydanticBaseModel):
 
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
+    stats = _compute_cross_tournament_stats(body.tournament_ids, db)
+    if "team_usage" in stats:
+        stats["team_usage"] = stats["team_usage"][:50]
+    return stats
+
+
+def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session):
     """複数大会を横断したキャラ採用率・編成使用率・勝率を集計する"""
-    tournament_ids = get_published_tournament_ids(body.tournament_ids, db)
+    tournament_ids = get_published_tournament_ids(tournament_ids_input, db)
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 
@@ -2922,3 +2941,96 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
                     })
 
     return {"matchups": matchup_results}
+
+
+
+class CrossTournamentTeamsRequest(PydanticBaseModel):
+    tournament_ids: List[int]
+    seed: Optional[int] = None
+    character_ids: Optional[List[int]] = None
+    limit: Optional[int] = 10
+    offset: Optional[int] = 0
+    sort_by: Optional[str] = None
+    min_matches: Optional[int] = None
+    min_usage: Optional[int] = None
+    min_win_rate: Optional[float] = None
+    best_result: Optional[str] = None
+
+
+@app.get("/api/tournaments/{tournament_id}/dashboard/teams")
+def get_dashboard_teams(
+    tournament_id: int,
+    seed: Optional[int] = None,
+    limit: int = Query(10, ge=1),
+    offset: int = Query(0, ge=0),
+    character_ids: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+):
+    stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+    teams = stats.get("team_usage", [])
+    
+    if character_ids:
+        c_ids = [int(x) for x in character_ids.split(",") if x.isdigit()]
+        if c_ids:
+            filtered = []
+            for t in teams:
+                t_cids = [c["id"] for c in t.get("characters", [])]
+                if all(cid in t_cids for cid in c_ids):
+                    filtered.append(t)
+            teams = filtered
+
+    if sort_by == "win_rate":
+        teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
+    elif sort_by in ("usage", "count"):
+        teams.sort(key=lambda x: x.get("count", 0), reverse=True)
+        
+    return {
+        "teams": teams[offset: offset + limit],
+        "total": len(teams)
+    }
+
+
+@app.post("/api/dashboard/cross-tournament/teams")
+def get_cross_dashboard_teams(
+    req: CrossTournamentTeamsRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+):
+    stats = _compute_cross_tournament_stats(req.tournament_ids, db)
+    teams = stats.get("team_usage", [])
+    
+    if req.character_ids:
+        c_ids = req.character_ids
+        filtered = []
+        for t in teams:
+            t_cids = [c["id"] for c in t.get("characters", [])]
+            if all(cid in t_cids for cid in c_ids):
+                filtered.append(t)
+        teams = filtered
+
+    if req.min_matches is not None:
+        teams = [t for t in teams if t.get("count", 0) >= req.min_matches]
+    if req.min_usage is not None:
+        teams = [t for t in teams if t.get("count", 0) >= req.min_usage]
+    if req.min_win_rate is not None:
+        teams = [t for t in teams if t.get("win_rate", 0) >= req.min_win_rate]
+    if req.best_result is not None:
+        RESULT_SCORES = {
+            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8, "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
+        }
+        target_score = RESULT_SCORES.get(req.best_result, 999)
+        teams = [t for t in teams if RESULT_SCORES.get(t.get("best_result", "不明"), 999) <= target_score]
+
+    if req.sort_by == "win_rate":
+        teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
+    elif req.sort_by in ("usage", "count"):
+        teams.sort(key=lambda x: x.get("count", 0), reverse=True)
+        
+    limit = req.limit or 10
+    offset = req.offset or 0
+    return {
+        "teams": teams[offset: offset + limit],
+        "total": len(teams)
+    }
