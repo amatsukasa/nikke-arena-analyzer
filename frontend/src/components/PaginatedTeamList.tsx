@@ -112,28 +112,63 @@ export default function PaginatedTeamList({
   return (
     <div className="space-y-4">
       <div className="space-y-3">
-        {teams.map((team: any, idx: number) => (
-          <div 
-            key={`${team.canonical_id}-${idx}`} 
-            onClick={() => onTeamClick(team.canonical_id)} 
-            className={`flex items-center justify-between bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ${selectedTeam === team.canonical_id ? 'ring-emerald-500 bg-slate-700/80' : 'ring-white/5'}`}
-          >
-            <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
-            <div className="text-right flex items-center justify-end gap-3">
-              <div className="text-emerald-400 font-bold bg-emerald-400/10 px-3 py-1 rounded-lg">
-                {team.count} 回採用
+        {teams.map((team: any, idx: number) => {
+          const resultColors: Record<string, string> = {
+            "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
+            "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
+            "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
+            "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
+            "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
+            "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
+            "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
+          };
+          const resultColor = resultColors[team.best_result] ?? "bg-slate-700/40 text-slate-400 ring-slate-600/40";
+
+          return (
+            <div
+              key={`${team.canonical_id}-${idx}`}
+              onClick={() => onTeamClick(team.canonical_id)}
+              className={`flex items-center gap-3 bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ${selectedTeam === team.canonical_id ? "ring-emerald-500 bg-slate-700/80" : "ring-white/5"}`}
+            >
+              {/* 順位番号 */}
+              <div className="text-slate-500 font-bold text-sm w-6 text-center shrink-0">
+                {idx + 1}
               </div>
-              <div className="text-sm text-slate-400 hidden sm:block">
-                勝率: {team.win_rate}% ({team.win_count}/{team.total_matches})
+
+              {/* キャラ画像 */}
+              <div className="flex-1 min-w-0">
+                <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
+              </div>
+
+              {/* 中央：最終成績 / 採用数 / 対戦数 */}
+              <div className="flex flex-col items-end gap-1 shrink-0 text-right">
+                {team.best_result && (
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ${resultColor}`}>
+                    {team.best_result}
+                  </span>
+                )}
+                <span className="text-xs text-slate-400">
+                  採用 <span className="text-slate-200 font-semibold">{team.count}</span> 回
+                </span>
+                <span className="text-xs text-slate-400">
+                  対戦 <span className="text-slate-200 font-semibold">{team.total_matches ?? "-"}</span> 回
+                </span>
+              </div>
+
+              {/* 右端：勝率を大きく強調 */}
+              <div className={`px-4 py-1.5 rounded-lg font-black text-lg min-w-[90px] text-center shrink-0 ${
+                team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
+              }`}>
+                {team.win_rate}%
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      
+
       {hasMore && (
-        <button 
-          onClick={handleLoadMore} 
+        <button
+          onClick={handleLoadMore}
           disabled={loading}
           className="w-full py-4 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold rounded-xl ring-1 ring-white/10 transition-colors disabled:opacity-50"
         >
