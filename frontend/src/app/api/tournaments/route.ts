@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const BACKEND_URL = process.env.BACKEND_URL || process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -41,7 +41,15 @@ export async function GET(request: NextRequest) {
         ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
     });
+
+    console.log("[api/tournaments] BACKEND_URL", BACKEND_URL);
+    console.log("[api/tournaments] token exists", Boolean(token));
+    console.log("[api/tournaments] token prefix", token?.slice(0, 20));
+    console.log("[api/tournaments] forward url", url);
+    console.log("[api/tournaments] backend status", res.status);
+
     const data = await readBackendResponse(res);
+    console.log("[api/tournaments] backend response", data);
     return NextResponse.json(data, {
       status: res.status,
       headers: NO_CACHE_HEADERS,

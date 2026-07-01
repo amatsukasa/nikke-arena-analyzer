@@ -175,7 +175,9 @@ export default function Dashboard() {
         const isSingleCurrent = selectedTournamentIds.length === 1 && selectedTournamentIds[0] === Number(id);
         let statsData;
 
-        if (isSingleCurrent) {
+        if (selectedTournamentIds.length === 0) {
+          statsData = { character_stats: [], team_usage: [], total_matches: 0, total_players: 0 };
+        } else if (isSingleCurrent) {
           // 単一大会: 既存APIを使用（パフォーマンス維持）
           const statsRes = await fetch(`/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`, { cache: 'no-store' });
           statsData = await statsRes.json();

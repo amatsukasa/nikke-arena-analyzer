@@ -251,6 +251,15 @@ function DashboardContent() {
         // myPlayerDetails も全大会分取る必要はない。ブラケットデータがあればシードからプレイヤーを探せる。
 
         // 3. 横断分析APIの呼び出し
+        if (
+          selectedTournamentIds.length === 0 ||
+          !filterServer ||
+          !filterSeason ||
+          !selectedChampionshipId
+        ) {
+          return;
+        }
+
         const reqBody = { 
           tournament_ids: selectedTournamentIds,
           play_server: filterServer,
@@ -283,6 +292,15 @@ function DashboardContent() {
 
     const fetchMatchups = async () => {
       try {
+        if (
+          selectedTournamentIds.length === 0 ||
+          !filterServer ||
+          !filterSeason ||
+          !selectedChampionshipId
+        ) {
+          return;
+        }
+
         const reqBody = { 
           tournament_ids: selectedTournamentIds,
           play_server: filterServer,

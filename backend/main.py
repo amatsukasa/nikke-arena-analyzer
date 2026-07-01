@@ -2538,8 +2538,20 @@ class CrossTournamentRequest(PydanticBaseModel):
 
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
-    resolved_ids = resolve_cross_tournament_ids(db, body.tournament_ids, body.play_server, body.championship_id)
-    stats = _compute_cross_tournament_stats(resolved_ids, db)
+    if body.tournament_ids:
+        target_ids = body.tournament_ids
+    else:
+        target_ids = resolve_cross_tournament_ids(
+            db,
+            body.tournament_ids,
+            body.play_server,
+            body.championship_id
+        )
+
+    print("[cross stats] body.tournament_ids:", body.tournament_ids)
+    print("[cross stats] target_ids:", target_ids)
+
+    stats = _compute_cross_tournament_stats(target_ids, db)
     if "team_usage" in stats:
         stats["team_usage"] = stats["team_usage"][:50]
     return stats
@@ -3119,8 +3131,14 @@ def get_cross_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
+    if req.tournament_ids:
+        tournament_ids = req.tournament_ids
+    else:
+        tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
+
+    print("[cross teams] req.tournament_ids:", req.tournament_ids)
+    print("[cross teams] target_ids:", tournament_ids)
     # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
-    tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
     snaps = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id.in_(tournament_ids)
     ).all() if tournament_ids else []
