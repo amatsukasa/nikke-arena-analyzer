@@ -1,7 +1,7 @@
 "use client";
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, Suspense } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import PaginatedTeamList from "../components/PaginatedTeamList";
@@ -17,6 +17,19 @@ const SERVER_LABELS: Record<string, string> = {
 
 type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
 const PUBLIC_TABS = new Set<DashboardTab>(["team_winrate", "matchups", "search", "overview"]);
+
+function makeTeamKey(input: number[] | string | undefined | null): string {
+  if (!input) return "";
+  if (typeof input === "string") {
+    const parts = input.split(/[,-]/).map(x => parseInt(x.trim(), 10)).filter(x => !isNaN(x));
+    if (parts.length === 0) return input;
+    return parts.sort((a, b) => a - b).join("-");
+  }
+  if (Array.isArray(input)) {
+    return [...input].map(Number).filter(x => !isNaN(x)).sort((a, b) => a - b).join("-");
+  }
+  return "";
+}
 
 function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
   const [failed, setFailed] = useState(false);
@@ -42,13 +55,14 @@ function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
 function DashboardContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
   const initialTab = requestedTab && PUBLIC_TABS.has(requestedTab)
     ? requestedTab
     : "team_winrate";
-  const initialTeam = searchParams.get("team");
+  const initialTeam = searchParams.get("teamKey") || searchParams.get("team");
 
   const [tournament, setTournament] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
@@ -73,6 +87,7 @@ function DashboardContent() {
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
+  const [knownTeamsMap, setKnownTeamsMap] = useState<Record<string, any>>({});
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
   const [isAdoptedPlayersOpen, setIsAdoptedPlayersOpen] = useState(true);
   const [matchupFilterResult, setMatchupFilterResult] = useState<"ALL" | "WIN" | "LOSE">("ALL");
@@ -80,7 +95,10 @@ function DashboardContent() {
   const [matchupFilterStage, setMatchupFilterStage] = useState<string>("ALL");
 
   // For search
-  const [searchChars, setSearchChars] = useState<number[]>([]);
+  const initialSynergy = searchParams.get("synergy")
+    ? searchParams.get("synergy")!.split(",").map(x => parseInt(x.trim(), 10)).filter(x => !isNaN(x))
+    : [];
+  const [searchChars, setSearchChars] = useState<number[]>(initialSynergy);
   const [filterRarity, setFilterRarity] = useState<string>("");
   const [filterManufacturer, setFilterManufacturer] = useState<string>("");
   const [filterBurst, setFilterBurst] = useState<string>("");
@@ -107,12 +125,39 @@ function DashboardContent() {
   // For My Dashboard Tab Search
   const [seedSearchQuery, setSeedSearchQuery] = useState<string>("");
 
-  const handleTeamClick = (canonicalId: string) => {
+  const handleTeamClick = (canonicalId: string, teamObj?: any) => {
     if (!canonicalId) return;
-    setSelectedTeam(canonicalId);
+    const tIds = teamObj?.character_ids || teamObj?.characters?.map((c: any) => c.id) || [];
+    const teamKey = tIds.length > 0 ? makeTeamKey(tIds) : makeTeamKey(canonicalId);
+    const targetVal = teamKey || canonicalId;
+    
+    console.log("[Cross-Tournament Click] Clicked canonical_id:", canonicalId);
+    console.log("[Cross-Tournament Click] Generated URL team param:", targetVal);
+    
+    if (teamObj) {
+      setKnownTeamsMap(prev => ({
+        ...prev,
+        [targetVal]: teamObj,
+        [canonicalId]: teamObj
+      }));
+    }
+    
+    setSelectedTeam(targetVal);
     setActiveTab("matchups");
     setSelectedCharId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "matchups");
+    params.set("teamKey", targetVal);
+    params.set("team", targetVal);
+    if (selectedTournamentIds.length > 0) {
+      params.set("tournaments", selectedTournamentIds.join(","));
+    }
+    if (searchChars.length > 0) {
+      params.set("synergy", searchChars.join(","));
+    }
+    router.push(`/?${params.toString()}`, { scroll: false });
   };
 
   // 分析対象のシード番号 (1-64)
@@ -316,8 +361,22 @@ function DashboardContent() {
           const statsData = await statsRes.json();
           setStats(statsData);
           
+          if (statsData.team_usage && Array.isArray(statsData.team_usage)) {
+            setKnownTeamsMap(prev => {
+              const next = { ...prev };
+              statsData.team_usage.forEach((t: any) => {
+                const k = makeTeamKey(t.character_ids || t.characters?.map((c: any) => c.id) || t.canonical_id);
+                if (k) next[k] = t;
+                if (t.canonical_id) next[t.canonical_id] = t;
+              });
+              return next;
+            });
+          }
+          
           if (statsData.team_usage && statsData.team_usage.length > 0 && !selectedTeam) {
-            setSelectedTeam(statsData.team_usage[0].canonical_id);
+            const firstTeam = statsData.team_usage[0];
+            const firstKey = makeTeamKey(firstTeam.character_ids || firstTeam.characters?.map((c: any) => c.id) || firstTeam.canonical_id);
+            setSelectedTeam(firstKey || firstTeam.canonical_id);
           }
         }
       } catch (e) {
@@ -438,15 +497,51 @@ function DashboardContent() {
     );
   };
 
+  // Merge stats.team_usage and knownTeamsMap into a unified list of unique teams
+  const allAvailableTeams = (() => {
+    const list: any[] = [];
+    const seen = new Set<string>();
+    const sourceTeams = [
+      ...Object.values(knownTeamsMap),
+      ...(stats?.team_usage ?? [])
+    ];
+    sourceTeams.forEach((t: any) => {
+      if (!t) return;
+      const key = makeTeamKey(t.character_ids || t.characters?.map((c: any) => c.id) || t.canonical_id);
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        list.push({ ...t, teamKey: key });
+      }
+    });
+    return list;
+  })();
+
+  const currentSelectedTeamData = (() => {
+    const targetKey = makeTeamKey(selectedTeam || searchParams.get("teamKey") || searchParams.get("team"));
+    if (!targetKey) return undefined;
+    const found = allAvailableTeams.find((team: any) => {
+      const ids = team.character_ids || team.characters?.map((c: any) => c.id) || [];
+      return makeTeamKey(ids) === targetKey || makeTeamKey(team.canonical_id) === targetKey;
+    });
+    if (found) {
+      console.log("[Cross-Tournament Matchup Tab] Selected canonical_id:", found.canonical_id);
+      console.log("[Cross-Tournament Matchup Tab] Displayed character_ids:", found.character_ids || found.characters?.map((c: any) => c.id));
+    }
+    return found;
+  })();
+
   // --- Matchups logic ---
-  const teamMatchups = matchups.filter(m => m.canonical_attacker === selectedTeam || m.canonical_defender === selectedTeam);
+  const targetMatchupKey = makeTeamKey(selectedTeam || searchParams.get("teamKey") || searchParams.get("team"));
+  const teamMatchups = matchups.filter(m => {
+    return makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey || makeTeamKey(m.canonical_defender || m.defender_team) === targetMatchupKey;
+  });
   let totalWins = 0, totalLosses = 0;
   let attackWins = 0, attackLosses = 0;
   let defenseWins = 0, defenseLosses = 0;
   const matchupDetails: any[] = [];
 
   teamMatchups.forEach(m => {
-    const isAttacker = m.canonical_attacker === selectedTeam;
+    const isAttacker = makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey;
     const isWin = m.winner_is_attacker ? isAttacker : !isAttacker;
     if (isWin) totalWins++; else totalLosses++;
     if (isAttacker) { if (isWin) attackWins++; else attackLosses++; }
@@ -863,7 +958,7 @@ function DashboardContent() {
                       const totalPlayers = 64;
                       const adoptionPct = Math.round((team.count / totalPlayers) * 100);
                       return (
-                        <tr key={idx} className="hover:bg-white/5 transition-colors cursor-pointer group" onClick={() => handleTeamClick(team.canonical_id)}>
+                        <tr key={idx} className="hover:bg-white/5 transition-colors cursor-pointer group" onClick={() => handleTeamClick(team.canonical_id, team)}>
                           <td className="p-4 text-center">
                             <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
                               idx + 1 === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
@@ -1005,20 +1100,30 @@ function DashboardContent() {
               <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>
               <select 
                 className="w-full bg-slate-900 border border-purple-500/30 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4"
-                value={selectedTeam}
-                onChange={e => setSelectedTeam(e.target.value)}
+                value={makeTeamKey(selectedTeam) || selectedTeam}
+                onChange={e => {
+                  const val = e.target.value;
+                  setSelectedTeam(val);
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set("teamKey", val);
+                  params.set("team", val);
+                  router.push(`/?${params.toString()}`, { scroll: false });
+                }}
               >
-                {(stats?.team_usage ?? []).map((team: any, idx: number) => (
-                  <option key={idx} value={team.canonical_id}>
-                    [{team.count}回採用] {team.characters.map((c:any) => c.id === 9999 ? '空枠' : c.name).join(" / ")}
-                  </option>
-                ))}
+                {allAvailableTeams.map((team: any, idx: number) => {
+                  const optionKey = team.teamKey || makeTeamKey(team.canonical_id);
+                  return (
+                    <option key={idx} value={optionKey}>
+                      [{team.count}回採用] {team.characters?.map((c:any) => c.id === 9999 ? '空枠' : c.name).join(" / ")}
+                    </option>
+                  );
+                })}
               </select>
               
               {selectedTeam && (
                 <div className="pt-4 border-t border-purple-500/20 flex flex-col space-y-2">
                   <span className="text-xs font-bold text-purple-400">選択中の編成:</span>
-                  <TeamDisplay charIds={(stats?.team_usage ?? []).find((t:any) => t.canonical_id === selectedTeam)?.character_ids || []} />
+                  <TeamDisplay charIds={currentSelectedTeamData?.character_ids || currentSelectedTeamData?.characters?.map((c:any)=>c.id) || []} />
                 </div>
               )}
             </div>
@@ -1053,7 +1158,7 @@ function DashboardContent() {
 
             {/* 編成の配置ポジション分析セクション */}
             {selectedTeam && (() => {
-              const selectedTeamData = stats?.team_usage?.find((t:any) => t.canonical_id === selectedTeam);
+              const selectedTeamData = currentSelectedTeamData;
               const positionStats = selectedTeamData?.position_stats || [];
               if (positionStats.length === 0) return null;
               return (
@@ -1134,7 +1239,7 @@ function DashboardContent() {
 
             {/* 採用した指揮官セクション */}
             {selectedTeam && (() => {
-              const selectedTeamData = stats?.team_usage?.find((t:any) => t.canonical_id === selectedTeam);
+              const selectedTeamData = currentSelectedTeamData;
               const adoptedPlayers = selectedTeamData?.adopted_players || [];
               if (adoptedPlayers.length === 0) return null;
               const resultColors: Record<string, string> = {
@@ -1246,7 +1351,7 @@ function DashboardContent() {
                   <div className="space-y-2">
                     {filteredMatchupDetails.map((m: any, idx: number) => (
                       <div key={idx} 
-                        onClick={() => handleTeamClick(m.opponentCanonical)}
+                        onClick={() => handleTeamClick(m.opponentCanonical, { character_ids: m.opponent, canonical_id: m.opponentCanonical })}
                         className="bg-slate-800/30 hover:bg-slate-700/50 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-2"
                       >
                         {/* 大会名 & プレイヤー対戦情報 */}
@@ -1744,7 +1849,7 @@ function DashboardContent() {
                         };
                         const teamResultClass = teamResultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
                         return (
-                          <div key={idx} onClick={() => handleTeamClick(team.canonical_id)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
+                          <div key={idx} onClick={() => handleTeamClick(team.canonical_id, team)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
                             {/* 編成アイコン行 */}
                             <div className="flex items-center justify-between">
                               <TeamDisplay charIds={team.character_ids} />

@@ -16,7 +16,7 @@ interface PaginatedTeamListProps {
   minUsage?: number;
   minWinRate?: number;
   bestResult?: string;
-  onTeamClick: (canonicalId: string) => void;
+  onTeamClick: (canonicalId: string, teamObj?: any) => void;
   selectedTeam?: string;
 }
 
@@ -157,11 +157,16 @@ export default function PaginatedTeamList({
           };
           const resultColor = resultColors[team.best_result] ?? "bg-slate-700/40 text-slate-400 ring-slate-600/40";
 
+          const tIds = team.character_ids || team.characters?.map((c: any) => c.id) || [];
+          const tKeyHyphen = [...tIds].map(Number).sort((a, b) => a - b).join("-");
+          const tKeyComma = [...tIds].map(Number).sort((a, b) => a - b).join(",");
+          const isSelected = selectedTeam && (selectedTeam === team.canonical_id || selectedTeam === tKeyHyphen || selectedTeam === tKeyComma);
+
           return (
             <div
               key={`${team.canonical_id}-${idx}`}
-              onClick={() => onTeamClick(team.canonical_id)}
-              className={`flex items-center gap-3 bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ${selectedTeam === team.canonical_id ? "ring-emerald-500 bg-slate-700/80" : "ring-white/5"}`}
+              onClick={() => onTeamClick(team.canonical_id, team)}
+              className={`flex items-center gap-3 bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ${isSelected ? "ring-emerald-500 bg-slate-700/80" : "ring-white/5"}`}
             >
               {/* 順位番号 */}
               <div className="text-slate-500 font-bold text-sm w-6 text-center shrink-0">

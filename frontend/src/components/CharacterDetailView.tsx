@@ -495,7 +495,9 @@ export default function CharacterDetailView({
                   key={idx}
                   onClick={() => {
                     if (mode === "cross") {
-                      router.push(`/?tab=matchups&team=${encodeURIComponent(team.canonical_id)}&tournaments=${tournamentIds?.join(',') || ''}`);
+                      const tIds = team.character_ids || team.characters?.map((c:any) => c.id) || [];
+                      const tKey = tIds.length > 0 ? [...tIds].map(Number).sort((a, b) => a - b).join("-") : team.canonical_id;
+                      router.push(`/?tab=matchups&teamKey=${encodeURIComponent(tKey)}&team=${encodeURIComponent(tKey)}&tournaments=${tournamentIds?.join(',') || ''}`);
                     } else {
                       router.push(`/tournament/${tournamentId}/dashboard?tab=matchups&team=${encodeURIComponent(team.canonical_id)}`);
                     }
