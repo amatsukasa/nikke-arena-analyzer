@@ -141,7 +141,9 @@ function DashboardContent() {
     const fetchTournaments = async () => {
       try {
         const res = await fetch(`/api/tournaments?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
         const data: any[] = await res.json();
+        if (!Array.isArray(data)) return;
         setAllTournaments(data);
         
         if (data.length > 0) {
@@ -273,13 +275,15 @@ function DashboardContent() {
         
         // 1. 全キャラクター情報取得
         const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store' });
-        setAllCharacters(await charsRes.json());
+        if (charsRes.ok) {
+          setAllCharacters(await charsRes.json());
+        }
 
         // 2. 選択された大会の BracketData などを並列取得
         const brackets = await Promise.all(
           selectedTournamentIds.map(async (id) => {
             const res = await fetch(`/api/tournaments/${id}/bracket?t=${timestamp}`);
-            const data = await res.json();
+            const data = res.ok ? await res.json() : null;
             return { tournamentId: id, data };
           })
         );
@@ -308,12 +312,13 @@ function DashboardContent() {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
           });
         
-        const statsData = await statsRes.json();
-
-        setStats(statsData);
-        
-        if (statsData.team_usage && statsData.team_usage.length > 0 && !selectedTeam) {
-          setSelectedTeam(statsData.team_usage[0].canonical_id);
+        if (statsRes.ok) {
+          const statsData = await statsRes.json();
+          setStats(statsData);
+          
+          if (statsData.team_usage && statsData.team_usage.length > 0 && !selectedTeam) {
+            setSelectedTeam(statsData.team_usage[0].canonical_id);
+          }
         }
       } catch (e) {
         console.error(e);
@@ -347,6 +352,7 @@ function DashboardContent() {
         const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
         });
+        if (!res.ok) return;
         const data = await res.json();
         setMatchups(data.matchups || data);
       } catch(e) {
@@ -973,6 +979,7 @@ function DashboardContent() {
 
               <div className="space-y-3">
                 <PaginatedTeamList 
+                  mode="cross"
                   tournamentIds={selectedTournamentIds} 
                   playServer={filterServer}
                   championshipId={selectedChampionshipId}
@@ -1392,6 +1399,7 @@ function DashboardContent() {
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
+                    mode="cross"
                     tournamentIds={selectedTournamentIds} 
                     playServer={filterServer}
                     championshipId={selectedChampionshipId}

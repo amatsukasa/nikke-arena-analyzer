@@ -43,16 +43,18 @@ export default function PaginatedTeamList({
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const limit = 10;
 
   const fetchTeams = async (currentOffset: number, reset: boolean) => {
     setLoading(true);
+    setError(null);
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
 
-      const isSingle = mode === "single" || tournamentId !== undefined || tournamentIds.length === 1;
+      const isSingle = mode === "single" || (mode !== "cross" && tournamentId !== undefined);
       const targetId = tournamentId !== undefined ? tournamentId : tournamentIds[0];
       let res;
       if (isSingle && targetId) {
@@ -86,17 +88,31 @@ export default function PaginatedTeamList({
         });
       }
       
-      const data = await res.json();
-      
-      if (reset) {
-        setTeams(data.teams);
-      } else {
-        setTeams(prev => [...prev, ...data.teams]);
+      if (!res.ok) {
+        console.error("API error in PaginatedTeamList:", res.status);
+        if (res.status === 401) {
+          setError("データを取得できませんでした（認証が必要です）");
+        } else {
+          setError("データを取得できませんでした");
+        }
+        if (reset) setTeams([]);
+        setTotal(0);
+        setHasMore(false);
+        return;
       }
-      setTotal(data.total);
-      setHasMore(currentOffset + data.teams.length < data.total);
+
+      const data = await res.json();
+      const newTeams = Array.isArray(data.teams) ? data.teams : [];
+      if (reset) {
+        setTeams(newTeams);
+      } else {
+        setTeams(prev => [...prev, ...newTeams]);
+      }
+      setTotal(data.total || 0);
+      setHasMore(currentOffset + newTeams.length < (data.total || 0));
     } catch (e) {
       console.error("Failed to fetch teams", e);
+      setError("データを取得できませんでした");
     } finally {
       setLoading(false);
     }
@@ -121,7 +137,7 @@ export default function PaginatedTeamList({
   if (teams.length === 0 && !loading) {
     return (
       <div className="text-center py-12 bg-slate-800/30 rounded-2xl ring-1 ring-white/5">
-        <p className="text-slate-400 text-lg">該当する編成はありません</p>
+        <p className="text-slate-400 text-lg">{error || "該当する編成はありません"}</p>
       </div>
     );
   }
