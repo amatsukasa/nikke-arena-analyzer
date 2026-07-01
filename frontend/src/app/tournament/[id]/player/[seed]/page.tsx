@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trophy, ShieldAlert, User as UserIcon, ChevronLeft, Share2 } from "lucide-react";
 
@@ -8,6 +8,15 @@ export default function PlayerStatsPage() {
   const params = useParams();
   const id = params.id as string;
   const seed = parseInt(params.seed as string);
+  const router = useRouter();
+
+  const handleBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push(`/tournament/${id}`);
+    }
+  };
 
   const [loading, setLoading] = useState(true);
   const [tournament, setTournament] = useState<any>(null);
@@ -67,9 +76,13 @@ export default function PlayerStatsPage() {
         <UserIcon size={64} className="text-slate-700 mb-4" />
         <h1 className="text-2xl font-bold text-slate-300">個人成績を表示できません</h1>
         <p className="text-slate-500 mt-2">{error}</p>
-        <Link href="/" className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors">
-          ダッシュボードへ戻る
-        </Link>
+        <button
+          type="button"
+          onClick={handleBack}
+          className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors cursor-pointer"
+        >
+          前のページに戻る
+        </button>
       </div>
     );
   }
@@ -80,9 +93,13 @@ export default function PlayerStatsPage() {
         <UserIcon size={64} className="text-slate-700 mb-4" />
         <h1 className="text-2xl font-bold text-slate-300">データが見つかりません</h1>
         <p className="text-slate-500 mt-2">指定されたシード({seed})のプレイヤー情報は登録されていません。</p>
-        <Link href="/" className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors">
-          ダッシュボードへ戻る
-        </Link>
+        <button
+          type="button"
+          onClick={handleBack}
+          className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors cursor-pointer"
+        >
+          前のページに戻る
+        </button>
       </div>
     );
   }
@@ -165,10 +182,14 @@ export default function PlayerStatsPage() {
         
         {/* Navigation */}
         <div className="flex items-center justify-between mb-8">
-          <Link href="/" className="flex items-center space-x-2 text-slate-400 hover:text-white transition-colors">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="flex items-center space-x-2 text-slate-400 hover:text-white transition-colors cursor-pointer"
+          >
             <ChevronLeft size={20} />
-            <span className="font-bold text-sm">ダッシュボードへ戻る</span>
-          </Link>
+            <span className="font-bold text-sm">前のページに戻る</span>
+          </button>
           <button onClick={handleShare} className="flex items-center space-x-2 px-4 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white rounded-full font-bold transition-all ring-1 ring-blue-500/50">
             <Share2 size={16} />
             <span className="text-sm">結果をシェア</span>

@@ -3,7 +3,9 @@ import { useState, useEffect } from "react";
 import TeamDisplay from "./TeamDisplay";
 
 interface PaginatedTeamListProps {
-  tournamentIds: number[];
+  tournamentIds?: number[];
+  tournamentId?: number;
+  mode?: "single" | "cross";
   playServer?: string;
   championshipId?: number;
   allCharacters: any[];
@@ -19,7 +21,9 @@ interface PaginatedTeamListProps {
 }
 
 export default function PaginatedTeamList({
-  tournamentIds,
+  tournamentIds = [],
+  tournamentId,
+  mode,
   playServer,
   championshipId,
   allCharacters,
@@ -45,9 +49,14 @@ export default function PaginatedTeamList({
   const fetchTeams = async (currentOffset: number, reset: boolean) => {
     setLoading(true);
     try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
+
+      const isSingle = mode === "single" || tournamentId !== undefined || tournamentIds.length === 1;
+      const targetId = tournamentId !== undefined ? tournamentId : tournamentIds[0];
       let res;
-      if (tournamentIds.length === 1) {
-        let url = `/api/tournaments/${tournamentIds[0]}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}`;
+      if (isSingle && targetId) {
+        let url = `/api/tournaments/${targetId}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}`;
         if (characterIds.length > 0) {
           url += `&character_ids=${characterIds.join(",")}`;
         }
@@ -55,11 +64,11 @@ export default function PaginatedTeamList({
         if (minUsage > 0) url += `&min_usage=${minUsage}`;
         if (minWinRate > 0) url += `&min_win_rate=${minWinRate}`;
         if (bestResult) url += `&best_result=${encodeURIComponent(bestResult)}`;
-        res = await fetch(url);
+        res = await fetch(url, { headers: authHeaders });
       } else {
         res = await fetch(`/api/dashboard/cross-tournament/teams`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({
             tournament_ids: tournamentIds,
             play_server: playServer,

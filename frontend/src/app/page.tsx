@@ -101,6 +101,8 @@ function DashboardContent() {
   
   // For Character Modal
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
+  const [selectedCharacterDetail, setSelectedCharacterDetail] = useState<any>(null);
+  const [selectedCharacterDetailLoading, setSelectedCharacterDetailLoading] = useState(false);
 
   // For My Dashboard Tab Search
   const [seedSearchQuery, setSeedSearchQuery] = useState<string>("");
@@ -213,6 +215,44 @@ function DashboardContent() {
   }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments, isFirstLoad]);
 
   const [allBracketData, setAllBracketData] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!selectedCharId || selectedTournamentIds.length === 0) {
+      setSelectedCharacterDetail(null);
+      return;
+    }
+
+    const fetchCharacterDetail = async () => {
+      setSelectedCharacterDetailLoading(true);
+      try {
+        const res = await fetch("/api/dashboard/cross-tournament/character-detail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            character_id: selectedCharId,
+            tournament_ids: selectedTournamentIds,
+            play_server: filterServer,
+            championship_id: selectedChampionshipId,
+          }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("character detail API error", res.status, text.slice(0, 300));
+          return;
+        }
+
+        const data = await res.json();
+        setSelectedCharacterDetail(data);
+      } catch (e) {
+        console.error("failed to fetch selected character detail", e);
+      } finally {
+        setSelectedCharacterDetailLoading(false);
+      }
+    };
+
+    fetchCharacterDetail();
+  }, [selectedCharId, selectedTournamentIds, filterServer, selectedChampionshipId]);
 
   useEffect(() => {
     if (isFirstLoad) return;
@@ -690,100 +730,6 @@ function DashboardContent() {
           {/* Content */}
           <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
         
-        {/* MY DASHBOARD TAB */}
-        {activeTab === "my_dashboard" && (
-           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
-             <div className="text-center mb-8">
-                <h2 className="text-2xl font-black text-slate-100">参加者一覧 (個人成績)</h2>
-                <p className="text-slate-400 mt-1">シードを選択して詳細成績を確認してください</p>
-             </div>
-
-             <div className="max-w-md mx-auto mb-8 relative">
-               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                 <Search className="h-5 w-5 text-slate-500" />
-               </div>
-               <input
-                 type="text"
-                 placeholder="シード番号 または プレイヤー名で検索..."
-                 value={seedSearchQuery}
-                 onChange={(e) => setSeedSearchQuery(e.target.value)}
-                 className="w-full bg-slate-900/50 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all placeholder:text-slate-500 shadow-inner"
-               />
-               {seedSearchQuery && (
-                 <button onClick={() => setSeedSearchQuery("")} className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-white transition-colors">
-                   <X size={16} />
-                 </button>
-               )}
-             </div>
-             
-             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-4">
-                {(() => {
-                  // フラットなリストを作成
-                  const allPlayers: any[] = [];
-                  allBracketData.forEach((tData) => {
-                    const tid = tData.tournamentId;
-                    const bData = tData.data;
-                    const tournamentInfo = allTournaments.find(t => t.id === tid);
-                    const tName = tournamentInfo?.name || `大会ID ${tid}`;
-                    const tSeason = tournamentInfo?.season || "";
-                    
-                    seeds.forEach(seed => {
-                      let playerName = null;
-                      let playerIconUrl = null;
-                      if (bData && bData.groups) {
-                        bData.groups.forEach((g: any) => {
-                          const found = g.players.find((p:any) => (p.original_seed || p.seed) === seed && p.id !== null);
-                          if (found) {
-                            playerName = found.name;
-                            playerIconUrl = found.icon_url || null;
-                          }
-                        });
-                      }
-                      allPlayers.push({
-                        tournamentId: tid,
-                        tournamentName: tName,
-                        season: tSeason,
-                        seed: seed,
-                        playerName: playerName,
-                        playerIconUrl: playerIconUrl
-                      });
-                    });
-                  });
-
-                  // 検索クエリでフィルタ
-                  const q = seedSearchQuery.trim().toLowerCase();
-                  const filtered = q ? allPlayers.filter(p => 
-                    p.seed.toString() === q || (p.playerName && p.playerName.toLowerCase().includes(q))
-                  ) : allPlayers;
-
-                  return filtered.map((p, idx) => (
-                    <Link key={`${p.tournamentId}-${p.seed}-${idx}`} href={`/tournament/${p.tournamentId}/player/${p.seed}`}>
-                      <div className="flex flex-col items-center justify-center p-4 rounded-xl ring-1 ring-white/10 hover:ring-amber-500 hover:bg-slate-800 transition-all cursor-pointer bg-slate-900/50 h-full group relative overflow-hidden">
-                         <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-amber-500 to-orange-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                         
-                         <div className="mb-3 flex flex-col items-center">
-                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">{p.season}</span>
-                           <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full ring-1 ring-white/5 truncate max-w-full text-center" title={p.tournamentName}>
-                             {p.tournamentName.slice(0, 10)}{p.tournamentName.length > 10 ? '...' : ''}
-                           </span>
-                         </div>
-
-                         <PlayerAvatar url={p.playerIconUrl} seed={p.seed} />
-                         <div className="text-xs text-center font-bold text-slate-300 break-all line-clamp-2 group-hover:text-amber-300 transition-colors">
-                            {p.playerName || <span className="text-slate-600 font-normal">未登録</span>}
-                         </div>
-                      </div>
-                    </Link>
-                  ));
-                })()}
-                {allBracketData.length === 0 && (
-                  <div className="col-span-full text-center py-12 text-slate-500">
-                    対象の大会が見つかりません。左のフィルタから大会を選択してください。
-                  </div>
-                )}
-             </div>
-           </div>
-        )}
 
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
@@ -972,179 +918,7 @@ function DashboardContent() {
           </div>
         )}
 
-        {/* WINRATE TAB */}
-        {activeTab === "winrate" && (
-           <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
-            <section>
-              <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
-                <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-                  <Trophy className="text-amber-400" />
-                  <span>キャラクター別勝率ランキング</span>
-                </h2>
-                
-                {/* フィルタコントロール群 */}
-                <div className="flex flex-wrap gap-2 items-center">
-                  <select
-                    value={winrateMinMatches}
-                    onChange={(e) => setWinrateMinMatches(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value={1}>1戦以上</option>
-                    <option value={10}>10戦以上</option>
-                    <option value={30}>30戦以上</option>
-                    <option value={50}>50戦以上</option>
-                    <option value={100}>100戦以上</option>
-                  </select>
-                  <select
-                    value={winrateBurstPhase}
-                    onChange={(e) => setWinrateBurstPhase(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">全バースト</option>
-                    <option value="1">バースト1</option>
-                    <option value="2">バースト2</option>
-                    <option value="3">バースト3</option>
-                  </select>
-                  <select
-                    value={winrateWeapon}
-                    onChange={(e) => setWinrateWeapon(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">全武器種</option>
-                    <option value="AR">AR</option>
-                    <option value="SMG">SMG</option>
-                    <option value="SG">SG</option>
-                    <option value="RL">RL</option>
-                    <option value="SR">SR</option>
-                    <option value="MG">MG</option>
-                  </select>
-                  <select
-                    value={winrateElement}
-                    onChange={(e) => setWinrateElement(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">全属性</option>
-                    <option value="灼熱">灼熱</option>
-                    <option value="水冷">水冷</option>
-                    <option value="風圧">風圧</option>
-                    <option value="電撃">電撃</option>
-                    <option value="鉄甲">鉄甲</option>
-                  </select>
-                  <select
-                    value={winrateManufacturer}
-                    onChange={(e) => setWinrateManufacturer(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">全企業</option>
-                    <option value="エリシオン">エリシオン</option>
-                    <option value="ミシリス">ミシリス</option>
-                    <option value="テトラ">テトラ</option>
-                    <option value="ピルグリム">ピルグリム</option>
-                    <option value="アブノーマル">アブノーマル</option>
-                  </select>
-                </div>
-              </div>
 
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-                <table className="w-full text-left border-collapse min-w-[900px]">
-                  <thead>
-                    <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                      <th className="p-4 font-medium text-center w-16">順位</th>
-                      <th className="p-4 font-medium">キャラクター</th>
-                      <th className="p-4 font-medium text-right w-32">勝率</th>
-                      <th className="p-4 font-medium text-right w-32">戦績 (勝/敗)</th>
-                      <th className="p-4 font-medium text-center w-32">最終成績</th>
-                      <th className="p-4 font-medium text-right w-24">採用数</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {[...(stats?.character_usage ?? [])]
-                      .filter((e: any) => {
-                        if (e.total_matches < winrateMinMatches) return false;
-                        const c = allCharacters.find(char => char.id === e.id);
-                        if (!c) return true;
-                        
-                        if (winrateBurstPhase) {
-                          const charBurst = String(c.burst_phase);
-                          // バースト段階が一致するか、またはバーストA（全段階対応）であれば表示
-                          if (charBurst !== winrateBurstPhase && charBurst !== "A") {
-                            return false;
-                          }
-                        }
-                        if (winrateWeapon && c.weapon !== winrateWeapon) return false;
-                        if (winrateElement && c.element !== winrateElement) return false;
-                        if (winrateManufacturer && c.manufacturer !== winrateManufacturer) return false;
-                        
-                        return true;
-                      })
-                      .sort((a: any, b: any) => b.win_rate - a.win_rate)
-                      .map((entry: any, index: number) => {
-                        const c = allCharacters.find(char => char.id === entry.id) || entry;
-                        const resultColors: Record<string, string> = {
-                          "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                          "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                          "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                          "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                          "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                          "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                          "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-                        };
-                        const resultClass = resultColors[entry.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                        return (
-                          <tr key={index} className="hover:bg-white/5 transition-colors cursor-pointer group" onClick={() => setSelectedCharId(c.id)}>
-                            <td className="p-4 text-center">
-                              <span className="text-slate-500 font-bold">{index + 1}</span>
-                            </td>
-                            <td className="p-4">
-                              <div className="flex items-center space-x-3">
-                                <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0">
-                                  {c?.is_template_available ? (
-                                    <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                                  ) : (
-                                    <span className="text-[10px] text-slate-500 font-bold">{c.name.slice(0,3)}</span>
-                                  )}
-                                </div>
-                                <span className="font-bold text-slate-200">{c.name}</span>
-                              </div>
-                            </td>
-                            <td className="p-4 text-right">
-                              <span className={`text-xl font-black ${entry.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                {entry.win_rate}%
-                              </span>
-                            </td>
-                            <td className="p-4 text-right">
-                               <div className="flex flex-col text-xs font-bold">
-                                  <span className="text-emerald-400">{entry.win_count} WIN</span>
-                                  <span className="text-slate-500">{entry.total_matches - entry.win_count} LOSE</span>
-                               </div>
-                            </td>
-                            <td className="p-4 text-center">
-                              {entry.best_result ? (
-                                <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                                  {entry.best_result}
-                                </span>
-                              ) : (
-                                <span className="text-slate-600 text-xs">-</span>
-                              )}
-                            </td>
-                            <td className="p-4 text-right text-slate-400 font-bold">
-                              {entry.count}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    {(stats?.character_usage?.length ?? 0) === 0 && (
-                      <tr>
-                        <td colSpan={6} className="p-8 text-center text-slate-500">データがありません</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-          </div>
-        )}
 
         {/* TEAM WINRATE TAB */}
         {activeTab === "team_winrate" && (
@@ -1640,23 +1414,33 @@ function DashboardContent() {
       {selectedCharId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="bg-slate-900 ring-1 ring-white/10 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
-            {(() => {
+            {selectedCharacterDetailLoading ? (
+              <div className="p-16 flex flex-col items-center justify-center space-y-4">
+                <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full" />
+                <p className="text-slate-400 text-sm font-bold">キャラクター詳細を取得中...</p>
+              </div>
+            ) : (() => {
               const c = allCharacters.find(x => x.id === selectedCharId);
               if (!c) return null;
               
-              const usageData = stats?.character_usage?.find((x:any) => x.id === selectedCharId);
+              const usageData = selectedCharacterDetail?.character_usage?.[0];
+              const relatedTeams = (selectedCharacterDetail?.team_usage ?? []).map((t: any) => ({
+                ...t,
+                character_ids: t.character_ids || (t.characters || []).map((ch: any) => typeof ch === 'object' ? ch.id : ch)
+              }));
               const usageCount = usageData?.count || 0;
               const winRate = usageData?.win_rate || 0;
               const charWins = usageData?.win_count || 0;
               const totalMatches = usageData?.total_matches || 0;
               const charLosses = totalMatches - charWins;
-              const relatedTeams = stats?.team_usage?.filter((t:any) => t.character_ids.includes(selectedCharId)) || [];
+              const hasPositionStats = Array.isArray(usageData?.position_stats) && usageData.position_stats.length > 0;
+              const hasTeamPositionStats = Array.isArray(usageData?.team_position_stats) && usageData.team_position_stats.length > 0;
 
               const synergyCounts: Record<number, number> = {};
               relatedTeams.forEach((t: any) => {
-                t.character_ids.forEach((cid: number) => {
-                  if (cid !== selectedCharId) {
-                    synergyCounts[cid] = (synergyCounts[cid] || 0) + t.count;
+                (t.character_ids || []).forEach((cid: number) => {
+                  if (Number(cid) !== Number(selectedCharId)) {
+                    synergyCounts[Number(cid)] = (synergyCounts[Number(cid)] || 0) + (t.count || 0);
                   }
                 });
               });
@@ -1693,7 +1477,7 @@ function DashboardContent() {
                     </div>
                     <div className="flex items-center space-x-2">
                       <Link
-                        href={`/tournament/${selectedTournamentIds.length > 0 ? selectedTournamentIds[0] : 0}/dashboard/character/${selectedCharId}${selectedTournamentIds.length > 0 ? `?tournaments=${selectedTournamentIds.join(',')}` : ''}`}
+                        href={`/character/${selectedCharId}?tournaments=${selectedTournamentIds.join(',')}`}
                         className="flex items-center space-x-1.5 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl text-sm font-bold ring-1 ring-blue-500/30 transition-all whitespace-nowrap"
                         onClick={() => setSelectedCharId(null)}
                       >
@@ -1719,7 +1503,7 @@ function DashboardContent() {
                   </div>
 
                   {/* 編成順（配置ポジション分析） */}
-                  {usageData?.position_stats && (
+                  {hasPositionStats && (
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>
@@ -1775,7 +1559,7 @@ function DashboardContent() {
                   )}
 
                   {/* 編成の配置傾向 */}
-                  {usageData?.team_position_stats && (
+                  {hasTeamPositionStats && (
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>

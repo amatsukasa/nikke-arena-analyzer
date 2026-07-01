@@ -38,10 +38,7 @@ export default function Dashboard() {
   const [best8Data, setBest8Data] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 大会横断検索用
-  const [allTournaments, setAllTournaments] = useState<any[]>([]);
-  const [selectedTournamentIds, setSelectedTournamentIds] = useState<number[]>([]);
-  const isCrossMode = selectedTournamentIds.length > 1 || (selectedTournamentIds.length === 1 && selectedTournamentIds[0] !== Number(id));
+  const [authError, setAuthError] = useState(false);
   
   const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
 
@@ -100,38 +97,6 @@ export default function Dashboard() {
     }
   }, [selectedSeed, id, isFirstLoad]);
 
-  // 大会リストの初回取得と selectedTournamentIds の初期化
-  useEffect(() => {
-    if (isFirstLoad) return;
-    const fetchTournaments = async () => {
-      try {
-        const res = await fetch(`/api/tournaments?t=${Date.now()}`, { cache: 'no-store' });
-        const data = await res.json();
-        setAllTournaments(data);
-        // デフォルトは現在の大会のみ選択
-        if (selectedTournamentIds.length === 0) {
-          setSelectedTournamentIds([Number(id)]);
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    };
-    fetchTournaments();
-  }, [id, isFirstLoad]);
-
-  // 大会選択ボタンのトグル処理
-  const toggleTournament = (tid: number) => {
-    setSelectedTournamentIds(prev => {
-      if (prev.includes(tid)) {
-        // 最低1つは選択されている必要がある
-        if (prev.length <= 1) return prev;
-        return prev.filter(x => x !== tid);
-      } else {
-        return [...prev, tid];
-      }
-    });
-  };
-
   const [tournamentId, setTournamentId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -142,56 +107,67 @@ export default function Dashboard() {
   }, [id, isFirstLoad]);
 
   useEffect(() => {
-    if (isFirstLoad || selectedTournamentIds.length === 0 || !tournamentId) return;
+    if (isFirstLoad || !tournamentId) return;
 
     const fetchData = async () => {
       setLoading(true);
       try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const timestamp = Date.now();
-        // 現在の大会の基本情報は常に取得
-        const tournRes = await fetch(`/api/tournaments/${tournamentId}?t=${timestamp}`, { cache: 'no-store' });
+        
+        const tournUrl = `/api/tournaments/${tournamentId}?t=${timestamp}`;
+        const tournRes = await fetch(tournUrl, { cache: 'no-store', headers: authHeaders });
+        if (!tournRes.ok) {
+          if (tournRes.status === 401) setAuthError(true);
+          else {
+            const text = await tournRes.text();
+            console.error("API error", tournRes.status, tournUrl, text.slice(0, 300));
+          }
+          setLoading(false);
+          return;
+        }
         const tournData = await tournRes.json();
         setTournament(tournData);
 
-        // 大会固有データ（ブラケット、マイ・ダッシュ、Best8）は常に現在の大会から取得
-        const [charsRes, bracketRes, detailsRes, best8Res] = await Promise.all([
-          fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store' }),
-          fetch(`/api/tournaments/${tournamentId}/bracket?t=${timestamp}`, { cache: 'no-store' }),
-          fetch(`/api/tournaments/${tournamentId}/players/${selectedSeed}/details?t=${timestamp}`, { cache: 'no-store' }),
-          fetch(`/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`, { cache: 'no-store' })
-        ]);
-        const charsData = await charsRes.json();
-        const bracketDataRaw = await bracketRes.json();
-        const detailsData = await detailsRes.json();
-        const best8DataRaw = await best8Res.json();
+        const urls = [
+          `/api/characters?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`
+        ];
+        const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders })));
+
+        for (let i = 0; i < responses.length; i++) {
+          const res = responses[i];
+          if (!res.ok) {
+            if (res.status === 401) {
+              setAuthError(true);
+              setLoading(false);
+              return;
+            }
+            const text = await res.text();
+            console.error("API error", res.status, urls[i], text.slice(0, 300));
+          }
+        }
+
+        if (responses.some(res => !res.ok)) {
+          setLoading(false);
+          return;
+        }
+
+        const [charsData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
+          responses.map(res => res.json())
+        );
+
         setAllCharacters(charsData);
         setBracketData(bracketDataRaw);
         setMyPlayerDetails(detailsData);
         setBest8Data(best8DataRaw);
-
-        // Stats と Matchups は選択した大会範囲で取得
-        const isSingleCurrent = selectedTournamentIds.length === 1 && selectedTournamentIds[0] === Number(id);
-        let statsData;
-
-        if (selectedTournamentIds.length === 0) {
-          statsData = { character_stats: [], team_usage: [], total_matches: 0, total_players: 0 };
-        } else if (isSingleCurrent) {
-          // 単一大会: 既存APIを使用（パフォーマンス維持）
-          const statsRes = await fetch(`/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`, { cache: 'no-store' });
-          statsData = await statsRes.json();
-        } else {
-          // 横断検索: 新APIを使用
-          const statsRes = await fetch('/api/dashboard/cross-tournament/stats', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tournament_ids: selectedTournamentIds })
-            });
-          statsData = await statsRes.json();
-        }
-
         setStats(statsData);
         
-        if (statsData.team_usage.length > 0) {
+        if (statsData.team_usage && statsData.team_usage.length > 0) {
           setSelectedTeam(statsData.team_usage[0].canonical_id);
         }
       } catch (e) {
@@ -201,15 +177,27 @@ export default function Dashboard() {
       }
     };
     fetchData();
-  }, [id, selectedSeed, isFirstLoad, selectedTournamentIds, tournamentId]);
+  }, [id, selectedSeed, isFirstLoad, tournamentId]);
 
   useEffect(() => {
     if (activeTab !== "best8" || !tournamentId) return;
-    if (best8Data) return;
+    if (best8Data && best8Data.length > 0) return;
 
     const fetchBest8 = async () => {
       try {
-        const res = await fetch(`/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${Date.now()}`, { cache: 'no-store' });
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
+        const url = `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${Date.now()}`;
+        const res = await fetch(url, { cache: 'no-store', headers: authHeaders });
+        if (!res.ok) {
+          if (res.status === 401) {
+            setAuthError(true);
+            return;
+          }
+          const text = await res.text();
+          console.error("API error", res.status, url, text.slice(0, 300));
+          return;
+        }
         const data = await res.json();
         setBest8Data(data);
       } catch (e) {
@@ -221,31 +209,62 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (activeTab !== "matchups" && activeTab !== "team_winrate") return;
-    if (matchups.length > 0 || selectedTournamentIds.length === 0 || !tournamentId) return;
+    if (matchups.length > 0 || !tournamentId) return;
 
     const fetchMatchups = async () => {
       try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const timestamp = Date.now();
-        const isSingleCurrent = selectedTournamentIds.length === 1 && selectedTournamentIds[0] === tournamentId;
-        let matchupsData;
-        if (isSingleCurrent) {
-          const res = await fetch(`/api/tournaments/${tournamentId}/dashboard/matchups?t=${timestamp}`, { cache: 'no-store' });
-          matchupsData = await res.json();
-        } else {
-          const res = await fetch('/api/dashboard/cross-tournament/matchups', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tournament_ids: selectedTournamentIds })
-          });
-          matchupsData = await res.json();
+        const url = `/api/tournaments/${tournamentId}/dashboard/matchups?t=${timestamp}`;
+        const res = await fetch(url, { cache: 'no-store', headers: authHeaders });
+        if (!res.ok) {
+          if (res.status === 401) {
+            setAuthError(true);
+            return;
+          }
+          const text = await res.text();
+          console.error("API error", res.status, url, text.slice(0, 300));
+          return;
         }
+        const matchupsData = await res.json();
         setMatchups(matchupsData.matchups || matchupsData);
       } catch (e) {
         console.error(e);
       }
     };
     fetchMatchups();
-  }, [activeTab, selectedTournamentIds, tournamentId, matchups.length]);
+  }, [activeTab, tournamentId, matchups.length]);
+
+  if (authError) return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+      <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
+        <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto text-blue-400 text-3xl">
+          🔒
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-black text-white">ログインが必要です</h2>
+          <p className="text-slate-400 text-sm">
+            メンバー専用ダッシュボードを閲覧するには、アカウントへのログイン（または権限の認証）が必要です。
+          </p>
+        </div>
+        <div className="flex flex-col gap-3">
+          <Link
+            href="/secret-login"
+            className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all text-center"
+          >
+            ログインページへ
+          </Link>
+          <Link
+            href={`/tournament/${id}`}
+            className="w-full py-3 px-4 bg-white/5 hover:bg-white/10 text-slate-300 font-bold rounded-xl transition-all text-center text-sm"
+          >
+            トーナメント表に戻る
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
 
   if (loading) return (
     <div className="flex h-screen items-center justify-center">
@@ -420,48 +439,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 大会横断検索セレクター */}
-      {showTournamentSelector && allTournaments.length > 1 && (
-        <div className="bg-slate-900/80 backdrop-blur-xl p-5 rounded-2xl ring-1 ring-white/10 shadow-2xl space-y-3">
-          <div className="flex items-center space-x-2 mb-3">
-            <Globe size={16} className={isCrossMode ? "text-cyan-400" : "text-slate-500"} />
-            <span className="text-sm font-bold text-slate-300">分析対象大会</span>
-            {isCrossMode && (
-              <span className="text-[10px] font-black bg-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded-full ring-1 ring-cyan-500/30 ml-2">
-                横断モード: {selectedTournamentIds.length}大会
-              </span>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {allTournaments
-              .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
-              .map((t: any) => {
-                const isSelected = selectedTournamentIds.includes(t.id);
-                const isCurrent = t.id === Number(id);
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => toggleTournament(t.id)}
-                    className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ring-1 ${
-                      isSelected
-                        ? isCurrent
-                          ? 'bg-blue-500/20 text-blue-400 ring-blue-500/50 shadow-[0_0_10px_rgba(59,130,246,0.2)]'
-                          : 'bg-cyan-500/20 text-cyan-400 ring-cyan-500/50 shadow-[0_0_10px_rgba(6,182,212,0.2)]'
-                        : 'bg-slate-800/50 text-slate-500 ring-white/5 hover:bg-slate-700/50 hover:text-slate-300 hover:ring-white/10'
-                    }`}
-                  >
-                    {isCurrent && '📍 '}{t.name}
-                  </button>
-                );
-              })}
-          </div>
-          <p className="text-[10px] text-slate-600 mt-1">
-            {isCrossMode
-              ? '選択した大会のデータを統合して分析しています'
-              : '他の大会ボタンを押すと横断分析が可能です'}
-          </p>
-        </div>
-      )}
+      {/* 単体大会分析専用モード */}
 
       {/* Tabs */}
       <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto">
@@ -1018,7 +996,9 @@ export default function Dashboard() {
 
               <div className="space-y-3">
                 <PaginatedTeamList 
-                  tournamentIds={selectedTournamentIds} 
+                  mode="single"
+                  tournamentId={Number(id)}
+                  tournamentIds={[Number(id)]} 
                   allCharacters={allCharacters}
                   onTeamClick={handleTeamClick} 
                   selectedTeam={selectedTeam} 
@@ -1446,7 +1426,9 @@ export default function Dashboard() {
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
-                    tournamentIds={selectedTournamentIds} 
+                    mode="single"
+                    tournamentId={Number(id)}
+                    tournamentIds={[Number(id)]} 
                     allCharacters={allCharacters}
                     characterIds={searchChars} 
                     onTeamClick={handleTeamClick} 
@@ -1518,7 +1500,7 @@ export default function Dashboard() {
                     </div>
                     <div className="flex items-center space-x-2">
                       <Link
-                        href={`/tournament/${id}/dashboard/character/${selectedCharId}${selectedTournamentIds.length > 0 ? `?tournaments=${selectedTournamentIds.join(',')}` : ''}`}
+                        href={`/tournament/${id}/dashboard/character/${selectedCharId}`}
                         className="flex items-center space-x-1.5 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl text-sm font-bold ring-1 ring-blue-500/30 transition-all whitespace-nowrap"
                         onClick={() => setSelectedCharId(null)}
                       >

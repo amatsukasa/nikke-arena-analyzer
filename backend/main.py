@@ -42,6 +42,79 @@ RESULT_SCORES = {
     "ベスト64": 64,
     "不明": 999,
 }
+
+
+def _merge_char_position_stats(merged_chars, char_stat, cid):
+    if "_pos_map" not in merged_chars[cid]:
+        merged_chars[cid]["_pos_map"] = {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)}
+    if "_team_pos_map" not in merged_chars[cid]:
+        merged_chars[cid]["_team_pos_map"] = {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
+        
+    for ps in (char_stat.get("position_stats") or []):
+        pos = ps.get("position")
+        if pos in merged_chars[cid]["_pos_map"]:
+            merged_chars[cid]["_pos_map"][pos]["count"] += ps.get("count", 0)
+            merged_chars[cid]["_pos_map"][pos]["wins"] += ps.get("wins", 0)
+            merged_chars[cid]["_pos_map"][pos]["total"] += ps.get("total", 0)
+            
+    for tps in (char_stat.get("team_position_stats") or []):
+        pos = tps.get("position")
+        if pos in merged_chars[cid]["_team_pos_map"]:
+            merged_chars[cid]["_team_pos_map"][pos]["count"] += tps.get("count", 0)
+            merged_chars[cid]["_team_pos_map"][pos]["wins"] += tps.get("wins", 0)
+            merged_chars[cid]["_team_pos_map"][pos]["total"] += tps.get("total", 0)
+            cur_br = merged_chars[cid]["_team_pos_map"][pos]["best_result"]
+            new_br = tps.get("best_result")
+            if new_br and new_br != "不明" and new_br != "-":
+                if not cur_br or RESULT_SCORES.get(new_br, 999) < RESULT_SCORES.get(cur_br, 999):
+                    merged_chars[cid]["_team_pos_map"][pos]["best_result"] = new_br
+
+def _finalize_char_position_stats(char):
+    usage_count = char.get("count", 0)
+    if usage_count > 0 and "_pos_map" in char and "_team_pos_map" in char:
+        pos_stats = []
+        for p in range(1, 6):
+            data = char["_pos_map"][p]
+            c_val = data["count"]
+            w_val = data["wins"]
+            t_val = data["total"]
+            pct = round((c_val / usage_count) * 100, 1) if usage_count > 0 else 0.0
+            wr = round((w_val / t_val) * 100, 1) if t_val > 0 else (0.0 if c_val > 0 else None)
+            pos_stats.append({
+                "position": p,
+                "count": c_val,
+                "pct": pct,
+                "wins": w_val,
+                "total": t_val,
+                "win_rate": wr
+            })
+        char["position_stats"] = pos_stats
+        
+        team_pos_stats = []
+        for p in range(1, 6):
+            data = char["_team_pos_map"][p]
+            c_val = data["count"]
+            w_val = data["wins"]
+            t_val = data["total"]
+            pct = round((c_val / usage_count) * 100, 1) if usage_count > 0 else 0.0
+            wr = round((w_val / t_val) * 100, 1) if t_val > 0 else (0.0 if c_val > 0 else None)
+            team_pos_stats.append({
+                "position": p,
+                "count": c_val,
+                "pct": pct,
+                "wins": w_val,
+                "total": t_val,
+                "win_rate": wr,
+                "best_result": data["best_result"]
+            })
+        char["team_position_stats"] = team_pos_stats
+    else:
+        char["position_stats"] = []
+        char["team_position_stats"] = []
+        
+    char.pop("_pos_map", None)
+    char.pop("_team_pos_map", None)
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from fastapi.staticfiles import StaticFiles
@@ -876,6 +949,20 @@ def require_tournament_viewer(
     ):
         return tournament
     raise HTTPException(status_code=404, detail="Tournament not found")
+
+
+def require_tournament_dashboard_viewer(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    tournament = require_tournament_viewer(tournament_id, db, current_user)
+    # メンバー専用ダッシュボードの閲覧権限チェック:
+    # 現時点では、ログイン・認証済みユーザーであることをチェック（管理者は常に許可）
+    if not current_user:
+        raise HTTPException(status_code=401, detail="認証が必要です。ログインしてください。")
+    # TODO: 将来的には、ここで user_id または player_id が tournament の参加メンバーかどうかの判定を追加する
+    return tournament
 
 
 def get_published_tournament_ids(
@@ -1889,6 +1976,7 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
     stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
     if "team_usage" in stats:
         stats["team_usage"] = stats["team_usage"][:50]
@@ -2410,7 +2498,7 @@ def get_dashboard_matchups(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_viewer(tournament_id, db, current_user)
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
     query = db.query(models.Match).filter(models.Match.tournament_id == tournament_id)
     if seed:
         player = db.query(models.Player).filter(models.Player.tournament_id == tournament_id, models.Player.seed_number == seed).first()
@@ -2473,7 +2561,7 @@ def get_best8_decks(
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
     """ベスト8進出者のプレイヤー名、成績、登録編成をまとめて取得する"""
-    require_tournament_viewer(tournament_id, db, current_user)
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
     bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
     champ_finals = bracket["champion_finals"]
@@ -2553,6 +2641,13 @@ class CrossTournamentRequest(PydanticBaseModel):
     championship_id: Optional[int] = None
 
 
+class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
+    character_id: int
+    tournament_ids: List[int] = []
+    play_server: Optional[str] = None
+    championship_id: Optional[int] = None
+
+
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     if body.tournament_ids:
@@ -2604,7 +2699,9 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                         # but we can initialize them as empty if the frontend doesn't strictly need accurate position breakdown for cross-tournament top level.
                         # Wait, the prompt says "存在する数値項目を合算". So we will just sum the top level ones.
                         "position_stats": [],
-                        "team_position_stats": []
+                        "team_position_stats": [],
+                        "_pos_map": {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)},
+                        "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
                     }
                 merged_chars[cid]["count"] += char_stat.get("count", 0)
                 merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
@@ -2614,6 +2711,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
                 if new_score < cur_score:
                     merged_chars[cid]["best_result"] = char_stat.get("best_result")
+                _merge_char_position_stats(merged_chars, char_stat, cid)
                     
             # team_usage merging
             for team in (snap.team_usage or []):
@@ -2636,6 +2734,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             t = char["total_matches"]
             w = char["win_count"]
             char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            _finalize_char_position_stats(char)
             char_list.append(char)
         char_list.sort(key=lambda x: x["count"], reverse=True)
 
@@ -3192,6 +3291,7 @@ def get_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
     # スナップショット優先（なければ既存集計にフォールバック）
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
@@ -3311,3 +3411,257 @@ def get_cross_dashboard_teams(
         "teams": teams[offset: offset + limit],
         "total": len(teams)
     }
+
+
+@app.post("/api/dashboard/cross-tournament/character-detail")
+def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailRequest, db: Session = Depends(get_db)):
+    if req.tournament_ids:
+        target_ids = req.tournament_ids
+    else:
+        target_ids = resolve_cross_tournament_ids(
+            db,
+            req.tournament_ids,
+            req.play_server,
+            req.championship_id
+        )
+    target_ids = get_published_tournament_ids(target_ids, db)
+    if not target_ids:
+        return {"character_usage": [], "team_usage": []}
+
+    snaps = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id.in_(target_ids)
+    ).all() if target_ids else []
+
+    if target_ids and len(snaps) == len(target_ids):
+        print(f"[cross char detail] using snapshots: {len(snaps)} / {len(target_ids)}")
+        merged_chars = {}
+        merged_teams = {}
+        
+        for snap in snaps:
+            for char_stat in (snap.char_stats or []):
+                cid = char_stat.get("id") or char_stat.get("character_id")
+                try:
+                    cid_int = int(cid) if cid is not None else None
+                except (ValueError, TypeError):
+                    cid_int = None
+                try:
+                    req_cid_int = int(req.character_id) if req.character_id is not None else None
+                except (ValueError, TypeError):
+                    req_cid_int = None
+                if cid_int is None or cid_int != req_cid_int: continue
+                if cid_int not in merged_chars:
+                    merged_chars[cid_int] = {
+                        "id": cid_int,
+                        "character_id": cid_int,
+                        "name": char_stat.get("name"),
+                        "rarity": char_stat.get("rarity"),
+                        "count": 0,
+                        "win_count": 0,
+                        "total_matches": 0,
+                        "best_result": char_stat.get("best_result", "不明"),
+                        "position_stats": [],
+                        "team_position_stats": [],
+                        "_pos_map": {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)},
+                        "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
+                    }
+                merged_chars[cid_int]["count"] += char_stat.get("count", 0)
+                merged_chars[cid_int]["win_count"] += char_stat.get("win_count", 0)
+                merged_chars[cid_int]["total_matches"] += char_stat.get("total_matches", 0)
+                
+                cur_score = RESULT_SCORES.get(merged_chars[cid_int]["best_result"], 999)
+                new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
+                if new_score < cur_score:
+                    merged_chars[cid_int]["best_result"] = char_stat.get("best_result")
+                _merge_char_position_stats(merged_chars, char_stat, cid_int)
+                    
+            for team in (snap.team_usage or []):
+                t_cids = team.get("character_ids") or [c["id"] for c in team.get("characters", []) if isinstance(c, dict) and "id" in c]
+                t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
+                if int(req.character_id) not in t_cids_int: continue
+                cid = team.get("canonical_id")
+                if not cid: continue
+                if cid not in merged_teams:
+                    merged_teams[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
+                merged_teams[cid]["count"] += team.get("count", 0)
+                merged_teams[cid]["win_count"] += team.get("win_count", 0)
+                merged_teams[cid]["total_matches"] += team.get("total_matches", 0)
+                
+                cur_score = RESULT_SCORES.get(merged_teams[cid].get("best_result", "不明"), 999)
+                new_score = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
+                if new_score < cur_score:
+                    merged_teams[cid]["best_result"] = team.get("best_result")
+
+        char_list = []
+        for char in merged_chars.values():
+            t = char["total_matches"]
+            w = char["win_count"]
+            char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            char["id"] = int(char["id"])
+            char["character_id"] = int(char["id"])
+            _finalize_char_position_stats(char)
+            char_list.append(char)
+            
+        if not char_list:
+            char_model = db.query(models.Character).filter(models.Character.id == req.character_id).first()
+            char_name = char_model.name if char_model else "不明"
+            rarity = char_model.rarity if char_model else "SSR"
+            char_list = [{
+                "id": int(req.character_id),
+                "character_id": int(req.character_id),
+                "name": char_name,
+                "rarity": rarity,
+                "count": 0,
+                "win_count": 0,
+                "total_matches": 0,
+                "win_rate": 0.0,
+                "best_result": "不明",
+                "position_stats": [],
+                "team_position_stats": []
+            }]
+            
+        team_list = []
+        for team in merged_teams.values():
+            t = team["total_matches"]
+            w = team["win_count"]
+            team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            team_list.append(team)
+        team_list.sort(key=lambda x: x["count"], reverse=True)
+        
+        return {
+            "character_usage": char_list,
+            "team_usage": team_list
+        }
+    else:
+        print("[cross char detail] fallback raw compute")
+        stats = _compute_cross_tournament_stats(target_ids, db)
+        char_stats = stats.get("character_stats", [])
+        team_usage = stats.get("team_usage", [])
+        
+        char_item = next((x for x in char_stats if (int(x.get("id") or 0) == int(req.character_id) or int(x.get("character_id") or 0) == int(req.character_id))), None)
+        if char_item:
+            char_item["id"] = int(char_item.get("id") or char_item.get("character_id") or req.character_id)
+            char_item["character_id"] = char_item["id"]
+        else:
+            char_model = db.query(models.Character).filter(models.Character.id == req.character_id).first()
+            char_name = char_model.name if char_model else "不明"
+            rarity = char_model.rarity if char_model else "SSR"
+            char_item = {
+                "id": int(req.character_id),
+                "character_id": int(req.character_id),
+                "name": char_name,
+                "rarity": rarity,
+                "count": 0,
+                "win_count": 0,
+                "total_matches": 0,
+                "win_rate": 0.0,
+                "best_result": "不明",
+                "position_stats": [],
+                "team_position_stats": []
+            }
+        related_teams = []
+        for t in team_usage:
+            t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
+            t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
+            if int(req.character_id) in t_cids_int:
+                related_teams.append(t)
+        
+        return {
+            "character_usage": [char_item] if char_item else [],
+            "team_usage": related_teams
+        }
+
+
+@app.get("/api/tournaments/{tournament_id}/dashboard/character-winrates")
+def get_dashboard_character_winrates(
+    tournament_id: int,
+    seed: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is not None and snap.char_stats:
+        char_stats = snap.char_stats
+    else:
+        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        char_stats = stats.get("character_stats", [])
+    return {"character_winrates": char_stats, "character_stats": char_stats}
+
+
+@app.get("/api/tournaments/{tournament_id}/dashboard/character/{character_id}")
+def get_dashboard_character_detail(
+    tournament_id: int,
+    character_id: int,
+    seed: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is not None and snap.char_stats is not None and snap.team_usage is not None:
+        char_stats = snap.char_stats
+        team_usage = snap.team_usage
+    else:
+        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        char_stats = stats.get("character_usage", stats.get("character_stats", []))
+        team_usage = stats.get("team_usage", [])
+
+    char_item = next((x for x in char_stats if (int(x.get("id") or 0) == int(character_id) or int(x.get("character_id") or 0) == int(character_id))), None)
+    if char_item:
+        char_item["id"] = int(char_item.get("id") or char_item.get("character_id") or character_id)
+        char_item["character_id"] = char_item["id"]
+        if char_item.get("count", 0) > 0 and (not char_item.get("position_stats") or not char_item.get("team_position_stats")):
+            comp_stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+            comp_chars = comp_stats.get("character_usage", comp_stats.get("character_stats", []))
+            comp_item = next((x for x in comp_chars if (int(x.get("id") or 0) == int(character_id) or int(x.get("character_id") or 0) == int(character_id))), None)
+            if comp_item:
+                if not char_item.get("position_stats"):
+                    char_item["position_stats"] = comp_item.get("position_stats", [])
+                if not char_item.get("team_position_stats"):
+                    char_item["team_position_stats"] = comp_item.get("team_position_stats", [])
+    else:
+        char_model = db.query(models.Character).filter(models.Character.id == character_id).first()
+        char_name = char_model.name if char_model else "不明"
+        rarity = char_model.rarity if char_model else "SSR"
+        char_item = {
+            "id": int(character_id),
+            "character_id": int(character_id),
+            "name": char_name,
+            "rarity": rarity,
+            "count": 0,
+            "win_count": 0,
+            "total_matches": 0,
+            "win_rate": 0.0,
+            "best_result": "不明",
+            "position_stats": [],
+            "team_position_stats": []
+        }
+    related_teams = []
+    for t in team_usage:
+        t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
+        t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
+        if int(character_id) in t_cids_int:
+            related_teams.append(t)
+
+    return {
+        "character_usage": [char_item] if char_item else [],
+        "team_usage": related_teams
+    }
+
+
+@app.get("/api/tournaments/{tournament_id}/dashboard/player-stats")
+def get_dashboard_player_stats(
+    tournament_id: int,
+    seed: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+):
+    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if seed is not None:
+        return get_player_details(tournament_id, seed, db, current_user)
+    players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).order_by(models.Player.seed_number).all()
+    return {"players": [schemas.Player.from_orm(p) for p in players]}

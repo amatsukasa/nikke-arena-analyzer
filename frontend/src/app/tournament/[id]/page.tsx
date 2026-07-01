@@ -746,7 +746,15 @@ export default function TournamentDetail() {
           </Link>
           <h1 className="text-2xl md:text-3xl font-black text-slate-100">トーナメント表</h1>
         </div>
-
+        <div className="flex items-center space-x-3">
+          <Link
+            href={`/tournament/${id}/dashboard`}
+            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-blue-500/20 transition-all text-sm ring-1 ring-white/10"
+          >
+            <span>📊</span>
+            <span>この大会の分析を見る（メンバー専用）</span>
+          </Link>
+        </div>
       </div>
 
       {/* Bracket View Area */}
