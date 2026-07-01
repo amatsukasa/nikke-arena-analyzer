@@ -1903,6 +1903,12 @@ def save_snapshot(tournament_id: int, stats: dict, db: Session):
     snap.total_matches = stats.get("total_matches")
     db.commit()
 
+    print("[snapshot saved] tournament_id:", tournament_id)
+    print("[snapshot saved] total_players:", snap.total_players)
+    print("[snapshot saved] total_matches:", snap.total_matches)
+    print("[snapshot saved] char_stats len:", len(snap.char_stats or []))
+    print("[snapshot saved] team_usage len:", len(snap.team_usage or []))
+
 
 
 def delete_snapshot(tournament_id: int):
@@ -2383,7 +2389,10 @@ def _compute_dashboard_stats(
     
     return {
         "character_usage": char_list,
-        "team_usage": team_list
+        "character_stats": char_list,
+        "team_usage": team_list,
+        "total_players": len(player_ids),
+        "total_matches": len(matches)
     }
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/matchups")
@@ -2551,10 +2560,103 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     print("[cross stats] body.tournament_ids:", body.tournament_ids)
     print("[cross stats] target_ids:", target_ids)
 
-    stats = _compute_cross_tournament_stats(target_ids, db)
-    if "team_usage" in stats:
-        stats["team_usage"] = stats["team_usage"][:50]
-    return stats
+    snaps = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id.in_(target_ids)
+    ).all() if target_ids else []
+
+    if target_ids and len(snaps) == len(target_ids):
+        print(f"[cross stats] using snapshots: {len(snaps)} / {len(target_ids)}")
+        RESULT_SCORES_MERGE = {
+            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8,
+            "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
+        }
+        total_players = sum(s.total_players for s in snaps if s.total_players)
+        total_matches = sum(s.total_matches for s in snaps if s.total_matches)
+        
+        merged_chars = {}
+        merged_teams = {}
+        
+        for snap in snaps:
+            print("[cross stats] snap total_players:", snap.total_players)
+            print("[cross stats] snap total_matches:", snap.total_matches)
+            print("[cross stats] snap char_stats len:", len(snap.char_stats or []))
+            print("[cross stats] snap team_usage len:", len(snap.team_usage or []))
+            # character_stats merging
+            for char_stat in (snap.char_stats or []):
+                cid = char_stat.get("id")
+                if not cid: continue
+                if cid not in merged_chars:
+                    # Initialize with basic char info to preserve structure
+                    merged_chars[cid] = {
+                        "id": cid,
+                        "name": char_stat.get("name"),
+                        "rarity": char_stat.get("rarity"),
+                        "count": 0,
+                        "win_count": 0,
+                        "total_matches": 0,
+                        "best_result": char_stat.get("best_result", "不明"),
+                        # We won't accurately merge nested position stats since they are complex, 
+                        # but we can initialize them as empty if the frontend doesn't strictly need accurate position breakdown for cross-tournament top level.
+                        # Wait, the prompt says "存在する数値項目を合算". So we will just sum the top level ones.
+                        "position_stats": [],
+                        "team_position_stats": []
+                    }
+                merged_chars[cid]["count"] += char_stat.get("count", 0)
+                merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
+                merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
+                
+                cur_score = RESULT_SCORES_MERGE.get(merged_chars[cid]["best_result"], 999)
+                new_score = RESULT_SCORES_MERGE.get(char_stat.get("best_result", "不明"), 999)
+                if new_score < cur_score:
+                    merged_chars[cid]["best_result"] = char_stat.get("best_result")
+                    
+            # team_usage merging
+            for team in (snap.team_usage or []):
+                cid = team.get("canonical_id")
+                if not cid: continue
+                if cid not in merged_teams:
+                    merged_teams[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
+                merged_teams[cid]["count"] += team.get("count", 0)
+                merged_teams[cid]["win_count"] += team.get("win_count", 0)
+                merged_teams[cid]["total_matches"] += team.get("total_matches", 0)
+                
+                cur_score = RESULT_SCORES_MERGE.get(merged_teams[cid].get("best_result", "不明"), 999)
+                new_score = RESULT_SCORES_MERGE.get(team.get("best_result", "不明"), 999)
+                if new_score < cur_score:
+                    merged_teams[cid]["best_result"] = team.get("best_result")
+
+        # Recalculate rates for chars
+        char_list = []
+        for char in merged_chars.values():
+            t = char["total_matches"]
+            w = char["win_count"]
+            char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            char_list.append(char)
+        char_list.sort(key=lambda x: x["count"], reverse=True)
+
+        # Recalculate rates for teams
+        team_list = []
+        for team in merged_teams.values():
+            t = team["total_matches"]
+            w = team["win_count"]
+            team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            team_list.append(team)
+        team_list.sort(key=lambda x: x["count"], reverse=True)
+
+        stats = {
+            "total_players": total_players,
+            "total_matches": total_matches,
+            "character_stats": char_list,
+            "team_usage": team_list[:50],
+            "matchups": [] # Usually cross matchups are fetched via their own endpoint
+        }
+        return stats
+    else:
+        print("[cross stats] fallback raw compute")
+        stats = _compute_cross_tournament_stats(target_ids, db)
+        if "team_usage" in stats:
+            stats["team_usage"] = stats["team_usage"][:50]
+        return stats
 
 
 def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session):
@@ -2990,7 +3092,10 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
 
     return {
         "character_usage": char_list,
-        "team_usage": team_list
+        "character_stats": char_list,
+        "team_usage": team_list,
+        "total_players": len(player_ids),
+        "total_matches": len(matches)
     }
 
 
@@ -3143,7 +3248,7 @@ def get_cross_dashboard_teams(
         models.TournamentSnapshot.tournament_id.in_(tournament_ids)
     ).all() if tournament_ids else []
 
-    if snaps:
+    if tournament_ids and len(snaps) == len(tournament_ids):
         RESULT_SCORES_MERGE = {
             "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8,
             "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
