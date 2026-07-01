@@ -95,12 +95,10 @@ function DashboardContent() {
   const [winrateManufacturer, setWinrateManufacturer] = useState<string>("");
 
   // For team filters
-  const [teamMinMatches, setTeamMinMatches] = useState<number>(1);
+  const [teamMinMatches, setTeamMinMatches] = useState<number>(10);
   const [teamBestResult, setTeamBestResult] = useState<string>("");
-  const [teamSortBy, setTeamSortBy] = useState<string>("winrate"); // "usage", "winrate", "matches"
-  const [teamMinWinRate, setTeamMinWinRate] = useState<number>(0);
-  const [teamMinUsage, setTeamMinUsage] = useState<number>(1);
-
+    const [teamMinWinRate, setTeamMinWinRate] = useState<number>(0);
+  
   // For Character Modal
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
 
@@ -1161,57 +1159,40 @@ function DashboardContent() {
                 {/* 編成フィルタコントロール群 */}
                 <div className="flex flex-wrap gap-2 items-center">
                   <select
-                    value={teamSortBy}
-                    onChange={(e) => setTeamSortBy(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold text-emerald-400"
-                  >
-                    <option value="winrate">勝率順</option>
-                    <option value="usage">採用数順</option>
-                    <option value="matches">対戦数順</option>
-                  </select>
-                  <select
                     value={teamMinMatches}
                     onChange={(e) => setTeamMinMatches(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={1}>1戦以上</option>
-                    <option value={10}>10戦以上</option>
-                    <option value={30}>30戦以上</option>
-                    <option value={50}>50戦以上</option>
+                    <option value={1}>対戦数：1戦以上</option>
+                    <option value={10}>対戦数：10戦以上</option>
+                    <option value={30}>対戦数：30戦以上</option>
+                    <option value={50}>対戦数：50戦以上</option>
                   </select>
-                  <select
-                    value={teamMinUsage}
-                    onChange={(e) => setTeamMinUsage(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value={1}>1人以上採用</option>
-                    <option value={2}>2人以上採用</option>
-                    <option value={3}>3人以上採用</option>
-                    <option value={5}>5人以上採用</option>
-                  </select>
+
                   <select
                     value={teamMinWinRate}
                     onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={0}>勝率指定なし</option>
-                    <option value={50}>勝率50%以上</option>
-                    <option value={60}>勝率60%以上</option>
-                    <option value={70}>勝率70%以上</option>
+                    <option value={0}>勝率：指定なし</option>
+                    <option value={50}>勝率：50%以上</option>
+                    <option value={60}>勝率：60%以上</option>
+                    <option value={70}>勝率：70%以上</option>
+                    <option value={80}>勝率：80%以上</option>
                   </select>
+
                   <select
                     value={teamBestResult}
                     onChange={(e) => setTeamBestResult(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value="">最高到達ラウンド：全て</option>
-                    <option value="優勝">優勝</option>
-                    <option value="準優勝">準優勝</option>
-                    <option value="ベスト4">ベスト4</option>
-                    <option value="ベスト8">ベスト8</option>
-                    <option value="ベスト16">ベスト16</option>
-                    <option value="ベスト32">ベスト32</option>
-                    <option value="ベスト64">ベスト64</option>
+                    <option value="">最終成績：すべて</option>
+                    <option value="優勝">最終成績：優勝のみ</option>
+                    <option value="準優勝">最終成績：準優勝以上</option>
+                    <option value="ベスト4">最終成績：ベスト4以上</option>
+                    <option value="ベスト8">最終成績：ベスト8以上</option>
+                    <option value="ベスト16">最終成績：ベスト16以上</option>
+                    <option value="ベスト32">最終成績：ベスト32以上</option>
                   </select>
                 </div>
               </div>
@@ -1224,9 +1205,9 @@ function DashboardContent() {
                   allCharacters={allCharacters}
                   onTeamClick={handleTeamClick} 
                   selectedTeam={selectedTeam} 
-                  sortBy={teamSortBy === "matches" ? "count" : "win_rate"}
+                  sortBy="win_rate"
                   minMatches={teamMinMatches}
-                  minUsage={teamMinUsage}
+                  
                   minWinRate={teamMinWinRate}
                   bestResult={teamBestResult}
                 />

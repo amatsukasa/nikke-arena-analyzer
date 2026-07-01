@@ -3217,7 +3217,8 @@ def get_dashboard_teams(
     if min_win_rate > 0:
         teams = [t for t in teams if t.get("win_rate", 0) >= min_win_rate]
     if best_result:
-        teams = [t for t in teams if t.get("best_result") == best_result]
+        target_score = RESULT_SCORES.get(best_result, 999)
+        teams = [t for t in teams if RESULT_SCORES.get(t.get("best_result", "不明"), 999) <= target_score]
 
     if sort_by == "win_rate":
         teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
