@@ -31,6 +31,17 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = "uploads"
+
+RESULT_SCORES = {
+    "優勝": 1,
+    "準優勝": 2,
+    "ベスト4": 4,
+    "ベスト8": 8,
+    "ベスト16": 16,
+    "ベスト32": 32,
+    "ベスト64": 64,
+    "不明": 999,
+}
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from fastapi.staticfiles import StaticFiles
@@ -2112,10 +2123,7 @@ def _compute_dashboard_stats(
     player_by_id = {p.id: p for p in all_players}
 
     # player_id -> 成績スコア（小さいほど良い）と成績文字列
-    RESULT_SCORES = {
-        "優勝": 1, "準優勝": 2, "ベスト4": 4,
-        "ベスト8": 8, "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
-    }
+
 
     def get_winner_between(pid1, pid2):
         """2人のプレイヤー間の試合勝者IDを返す"""
@@ -2566,10 +2574,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
 
     if target_ids and len(snaps) == len(target_ids):
         print(f"[cross stats] using snapshots: {len(snaps)} / {len(target_ids)}")
-        RESULT_SCORES_MERGE = {
-            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8,
-            "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
-        }
+
         total_players = sum(s.total_players for s in snaps if s.total_players)
         total_matches = sum(s.total_matches for s in snaps if s.total_matches)
         
@@ -2605,8 +2610,8 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
                 merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
                 
-                cur_score = RESULT_SCORES_MERGE.get(merged_chars[cid]["best_result"], 999)
-                new_score = RESULT_SCORES_MERGE.get(char_stat.get("best_result", "不明"), 999)
+                cur_score = RESULT_SCORES.get(merged_chars[cid]["best_result"], 999)
+                new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
                 if new_score < cur_score:
                     merged_chars[cid]["best_result"] = char_stat.get("best_result")
                     
@@ -2620,8 +2625,8 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 merged_teams[cid]["win_count"] += team.get("win_count", 0)
                 merged_teams[cid]["total_matches"] += team.get("total_matches", 0)
                 
-                cur_score = RESULT_SCORES_MERGE.get(merged_teams[cid].get("best_result", "不明"), 999)
-                new_score = RESULT_SCORES_MERGE.get(team.get("best_result", "不明"), 999)
+                cur_score = RESULT_SCORES.get(merged_teams[cid].get("best_result", "不明"), 999)
+                new_score = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
                 if new_score < cur_score:
                     merged_teams[cid]["best_result"] = team.get("best_result")
 
@@ -2831,10 +2836,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
 
     # 各大会ごとの最終成績を計算するためのキャッシュ
     # {tournament_id: {player_id: result_string}}
-    RESULT_SCORES = {
-        "優勝": 1, "準優勝": 2, "ベスト4": 4,
-        "ベスト8": 8, "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
-    }
+
 
     # 大会ごとにプレイヤー成績を計算
     per_tournament_results = {}
@@ -3250,10 +3252,7 @@ def get_cross_dashboard_teams(
     ).all() if tournament_ids else []
 
     if tournament_ids and len(snaps) == len(tournament_ids):
-        RESULT_SCORES_MERGE = {
-            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8,
-            "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
-        }
+
         merged: dict = {}
         for snap in snaps:
             for team in (snap.team_usage or []):
@@ -3266,8 +3265,8 @@ def get_cross_dashboard_teams(
                 merged[cid]["win_count"]     += team.get("win_count", 0)
                 merged[cid]["total_matches"] += team.get("total_matches", 0)
                 # 最高成績を統合（スコアが小さいほど良い成績）
-                cur_score   = RESULT_SCORES_MERGE.get(merged[cid].get("best_result", "不明"), 999)
-                new_score   = RESULT_SCORES_MERGE.get(team.get("best_result", "不明"), 999)
+                cur_score   = RESULT_SCORES.get(merged[cid].get("best_result", "不明"), 999)
+                new_score   = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
                 if new_score < cur_score:
                     merged[cid]["best_result"] = team.get("best_result")
         teams = []
@@ -3296,10 +3295,8 @@ def get_cross_dashboard_teams(
         teams = [t for t in teams if t.get("count", 0) >= req.min_usage]
     if req.min_win_rate is not None:
         teams = [t for t in teams if t.get("win_rate", 0) >= req.min_win_rate]
-    if req.best_result is not None:
-        RESULT_SCORES = {
-            "優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8, "ベスト16": 16, "ベスト32": 32, "ベスト64": 64
-        }
+    if req.best_result:
+
         target_score = RESULT_SCORES.get(req.best_result, 999)
         teams = [t for t in teams if RESULT_SCORES.get(t.get("best_result", "不明"), 999) <= target_score]
 
