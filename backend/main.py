@@ -2750,6 +2750,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
         stats = {
             "total_players": total_players,
             "total_matches": total_matches,
+            "character_usage": char_list,
             "character_stats": char_list,
             "team_usage": team_list[:50],
             "matchups": [] # Usually cross matchups are fetched via their own endpoint

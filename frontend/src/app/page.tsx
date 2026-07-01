@@ -750,7 +750,8 @@ function DashboardContent() {
                   // 採用数でグループ化
                   const grouped: { count: number; entries: any[] }[] = [];
                   if (!stats) return <div className="py-12 text-center text-slate-500">データ読み込み中...</div>;
-                  const sorted = [...(stats.character_usage ?? [])].sort((a: any, b: any) => b.count - a.count);
+                  const charList = stats?.character_usage ?? stats?.character_stats ?? [];
+                  const sorted = [...charList].sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
                   sorted.forEach((entry: any) => {
                     const last = grouped[grouped.length - 1];
                     if (last && last.count === entry.count) {
@@ -819,7 +820,7 @@ function DashboardContent() {
                             </tr>
                           );
                         })}
-                        {(stats?.character_usage?.length ?? 0) === 0 && (
+                        {charList.length === 0 && (
                           <tr>
                             <td colSpan={3} className="p-8 text-center text-slate-500">データがありません</td>
                           </tr>
