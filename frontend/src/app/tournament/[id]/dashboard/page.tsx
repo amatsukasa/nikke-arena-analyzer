@@ -680,7 +680,8 @@ export default function Dashboard() {
                 <Users className="text-emerald-400" />
                 <span>編成（5名組み合わせ）使用率ランキング</span>
               </h2>
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
+              {/* PC表示: テーブル */}
+              <div className="hidden md:block overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 <table className="w-full text-left border-collapse min-w-[900px]">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
@@ -765,6 +766,73 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
+
+              {/* スマホ表示: カード型 */}
+              <div className="md:hidden space-y-3">
+                {stats.team_usage.slice(0, 15).map((team: any, idx: number) => {
+                  const resultColors: Record<string, string> = {
+                    "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
+                    "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
+                    "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
+                    "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
+                    "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
+                    "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
+                    "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
+                  };
+                  const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
+                  const totalPlayers = 64;
+                  const adoptionPct = Math.round((team.count / totalPlayers) * 100);
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => handleTeamClick(team.canonical_id)}
+                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 space-y-3"
+                    >
+                      <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 font-bold text-base">#{idx + 1}</span>
+                          {team.best_result && (
+                            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultClass}`}>
+                              {team.best_result}
+                            </span>
+                          )}
+                        </div>
+                        {team.total_matches > 0 ? (
+                          <div className={`px-3 py-1 rounded-lg font-black text-base text-center shrink-0 ${
+                            team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
+                          }`}>
+                            勝率: {team.win_rate}%
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">対戦なし</span>
+                        )}
+                      </div>
+
+                      <div className="flex justify-center py-1 overflow-x-auto">
+                        <TeamDisplay charIds={team.character_ids} />
+                      </div>
+
+                      <div className="flex items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
+                        <div>
+                          採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
+                        </div>
+                        {team.total_matches > 0 && (
+                          <>
+                            <div className="w-px h-3 bg-white/10" />
+                            <div>
+                              勝敗: <span className="font-bold text-emerald-400">{team.win_count}W</span>
+                              <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {stats.team_usage.length === 0 && (
+                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
+                )}
+              </div>
             </section>
           </div>
         )}
@@ -842,7 +910,8 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
+              {/* PC表示: テーブル */}
+              <div className="hidden md:block overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 <table className="w-full text-left border-collapse min-w-[900px]">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
@@ -937,6 +1006,85 @@ export default function Dashboard() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* スマホ表示: カード型 */}
+              <div className="md:hidden space-y-3">
+                {[...stats.character_usage]
+                  .filter((e: any) => {
+                    if (e.total_matches < winrateMinMatches) return false;
+                    const c = allCharacters.find(char => char.id === e.id);
+                    if (!c) return true;
+                    
+                    if (winrateBurstPhase) {
+                      const charBurst = String(c.burst_phase);
+                      if (charBurst !== winrateBurstPhase && charBurst !== "A") {
+                        return false;
+                      }
+                    }
+                    if (winrateWeapon && c.weapon !== winrateWeapon) return false;
+                    if (winrateElement && c.element !== winrateElement) return false;
+                    if (winrateManufacturer && c.manufacturer !== winrateManufacturer) return false;
+                    
+                    return true;
+                  })
+                  .sort((a: any, b: any) => b.win_rate - a.win_rate)
+                  .map((entry: any, index: number) => {
+                    const c = allCharacters.find(char => char.id === entry.id) || entry;
+                    const resultColors: Record<string, string> = {
+                      "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
+                      "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
+                      "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
+                      "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
+                      "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
+                      "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
+                      "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
+                    };
+                    const resultClass = resultColors[entry.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
+                    return (
+                      <div
+                        key={index}
+                        onClick={() => setSelectedCharId(c.id)}
+                        className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-slate-500 font-bold text-base shrink-0">#{index + 1}</span>
+                          <div className="w-12 h-12 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0">
+                            {c?.is_template_available ? (
+                              <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-xs text-slate-500 font-bold">{c.name.slice(0,3)}</span>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-100 truncate text-base">{c.name}</div>
+                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              {entry.best_result && (
+                                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ring-1 ${resultClass}`}>
+                                  {entry.best_result}
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-400">採用: <span className="font-bold text-slate-200">{entry.count}</span></span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <div className={`text-xl font-black ${entry.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {entry.win_rate}%
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-400">
+                            <span className="text-emerald-400">{entry.win_count}W</span>
+                            {" / "}
+                            <span className="text-rose-400">{entry.total_matches - entry.win_count}L</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                {stats.character_usage.length === 0 && (
+                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
+                )}
               </div>
             </section>
 
@@ -1077,7 +1225,7 @@ export default function Dashboard() {
                     <span className="text-lg">📊</span>
                     <span>編成の配置ポジション分析</span>
                   </h3>
-                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                     <table className="w-full text-center">
                       <thead>
                         <tr className="border-b border-white/10 bg-slate-900/50">
@@ -1237,89 +1385,138 @@ export default function Dashboard() {
                <p className="text-slate-500 mt-2 text-sm italic">※ 編成をタップすると詳細分析へ遷移します</p>
             </div>
 
-            <div className="overflow-x-auto rounded-2xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-              <table className="w-full text-left border-collapse min-w-[1200px]">
-                <thead>
-                  <tr className="bg-slate-800/80 text-slate-400 text-[10px] uppercase tracking-wider border-b border-white/10">
-                    <th className="p-4 font-black text-center w-24">項目</th>
-                    {best8Data.map((data, idx) => (
-                      <th key={idx} className="p-4 font-black text-center border-l border-white/5">
-                        Player {idx + 1}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {/* Player Name Row */}
-                  <tr className="bg-blue-500/5">
-                    <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">名前</td>
-                    {best8Data.map((data, idx) => (
-                      <td key={idx} className="p-4 text-center border-l border-white/5">
-                        <div className="flex flex-col items-center space-y-2">
-                          <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
-                            {data.player.icon_url ? (
-                              <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="Icon" className="w-full h-full object-cover" />
-                            ) : (
-                              <UserIcon size={20} className="text-slate-600" />
-                            )}
+              {/* PC表示: テーブル */}
+              <div className="hidden md:block overflow-x-auto rounded-2xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
+                <table className="w-full text-left border-collapse min-w-[1200px]">
+                  <thead>
+                    <tr className="bg-slate-800/80 text-slate-400 text-[10px] uppercase tracking-wider border-b border-white/10">
+                      <th className="p-4 font-black text-center w-24">項目</th>
+                      {best8Data.map((data, idx) => (
+                        <th key={idx} className="p-4 font-black text-center border-l border-white/5">
+                          Player {idx + 1}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {/* Player Name Row */}
+                    <tr className="bg-blue-500/5">
+                      <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">名前</td>
+                      {best8Data.map((data, idx) => (
+                        <td key={idx} className="p-4 text-center border-l border-white/5">
+                          <div className="flex flex-col items-center space-y-2">
+                            <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
+                              {data.player.icon_url ? (
+                                <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="Icon" className="w-full h-full object-cover" />
+                              ) : (
+                                <UserIcon size={20} className="text-slate-600" />
+                              )}
+                            </div>
+                            <span className="font-black text-white text-sm whitespace-nowrap">{data.player.name}</span>
                           </div>
-                          <span className="font-black text-white text-sm whitespace-nowrap">{data.player.name}</span>
-                        </div>
-                      </td>
+                        </td>
+                      ))}
+                    </tr>
+                    
+                    {/* Result Row */}
+                    <tr className="bg-slate-800/20">
+                      <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">成績</td>
+                      {best8Data.map((data, idx) => (
+                        <td key={idx} className="p-4 text-center border-l border-white/5">
+                          <div className={`px-3 py-1 rounded-full text-[10px] font-black inline-block ring-1 ${
+                            data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
+                            data.result === "準優勝" ? "bg-slate-400/20 text-slate-300 ring-slate-400/30" :
+                            data.result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                            "bg-slate-800 text-slate-500 ring-white/5"
+                          }`}>
+                            {data.result}
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                    
+                    {/* Deck Rows 1-5 */}
+                    {[1, 2, 3, 4, 5].map(teamNum => (
+                      <tr key={teamNum} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="p-4 font-bold text-slate-500 text-center bg-slate-800/30">
+                          <div className="flex flex-col items-center">
+                            <span className="text-[10px] opacity-50 uppercase tracking-tighter">Team</span>
+                            <span className="text-lg font-black">{teamNum}</span>
+                          </div>
+                        </td>
+                        {best8Data.map((data, idx) => {
+                          const deck = data.decks.find((d: any) => d.team_number === teamNum);
+                          return (
+                            <td key={idx} className="p-4 border-l border-white/5 align-middle">
+                              {deck ? (
+                                <div 
+                                  onClick={() => handleTeamClick(deck.canonical_id)}
+                                  className="hover:bg-slate-800/50 p-2 rounded-xl transition-all cursor-pointer ring-1 ring-transparent hover:ring-indigo-500/30 hover:shadow-lg group flex justify-center"
+                                >
+                                  <TeamDisplay charIds={deck.character_ids} />
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center h-16 text-slate-700 italic text-xs">
+                                  未登録
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
                     ))}
-                  </tr>
-                  
-                  {/* Result Row */}
-                  <tr className="bg-slate-800/20">
-                    <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">成績</td>
-                    {best8Data.map((data, idx) => (
-                      <td key={idx} className="p-4 text-center border-l border-white/5">
-                        <div className={`px-3 py-1 rounded-full text-[10px] font-black inline-block ring-1 ${
-                          data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
-                          data.result === "準優勝" ? "bg-slate-400/20 text-slate-300 ring-slate-400/30" :
-                          data.result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
-                          "bg-slate-800 text-slate-500 ring-white/5"
-                        }`}>
-                          {data.result}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* スマホ表示: カード型 */}
+              <div className="md:hidden space-y-4">
+                {best8Data.map((data, idx) => (
+                  <div key={idx} className="bg-slate-800/50 rounded-2xl ring-1 ring-white/10 p-4 space-y-4">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                      <div className="flex items-center space-x-3">
+                        <span className="text-xs font-bold text-slate-500">#{idx + 1}</span>
+                        <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center shrink-0">
+                          {data.player.icon_url ? (
+                            <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <UserIcon size={20} className="text-slate-600" />
+                          )}
                         </div>
-                      </td>
-                    ))}
-                  </tr>
-                  
-                  {/* Deck Rows 1-5 */}
-                  {[1, 2, 3, 4, 5].map(teamNum => (
-                    <tr key={teamNum} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="p-4 font-bold text-slate-500 text-center bg-slate-800/30">
-                        <div className="flex flex-col items-center">
-                          <span className="text-[10px] opacity-50 uppercase tracking-tighter">Team</span>
-                          <span className="text-lg font-black">{teamNum}</span>
-                        </div>
-                      </td>
-                      {best8Data.map((data, idx) => {
+                        <span className="font-black text-white text-base">{data.player.name}</span>
+                      </div>
+                      <div className={`px-3 py-1 rounded-full text-xs font-black inline-block ring-1 ${
+                        data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
+                        data.result === "準優勝" ? "bg-slate-400/20 text-slate-300 ring-slate-400/30" :
+                        data.result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                        "bg-slate-800 text-slate-500 ring-white/5"
+                      }`}>
+                        {data.result}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {[1, 2, 3, 4, 5].map(teamNum => {
                         const deck = data.decks.find((d: any) => d.team_number === teamNum);
+                        if (!deck) return null;
                         return (
-                          <td key={idx} className="p-4 border-l border-white/5 align-middle">
-                            {deck ? (
-                              <div 
-                                onClick={() => handleTeamClick(deck.canonical_id)}
-                                className="hover:bg-slate-800/50 p-2 rounded-xl transition-all cursor-pointer ring-1 ring-transparent hover:ring-indigo-500/30 hover:shadow-lg group flex justify-center"
-                              >
-                                <TeamDisplay charIds={deck.character_ids} />
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-center h-16 text-slate-700 italic text-xs">
-                                未登録
-                              </div>
-                            )}
-                          </td>
+                          <div
+                            key={teamNum}
+                            onClick={() => handleTeamClick(deck.canonical_id)}
+                            className="bg-slate-900/50 hover:bg-slate-800/80 p-3 rounded-xl transition-all cursor-pointer ring-1 ring-white/5 flex items-center justify-between gap-2"
+                          >
+                            <span className="text-xs font-black text-slate-400 shrink-0 w-16">Team {teamNum}</span>
+                            <div className="flex justify-center overflow-x-auto py-1">
+                              <TeamDisplay charIds={deck.character_ids} />
+                            </div>
+                          </div>
                         );
                       })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
         )}
 
         {/* SEARCH TAB */}
@@ -1532,7 +1729,7 @@ export default function Dashboard() {
                         <span className="text-lg">📊</span>
                         <span>部隊内の配置傾向</span>
                       </h3>
-                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10">
@@ -1588,7 +1785,7 @@ export default function Dashboard() {
                         <span className="text-lg">📊</span>
                         <span>編成の配置傾向</span>
                       </h3>
-                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10 bg-slate-900/50">

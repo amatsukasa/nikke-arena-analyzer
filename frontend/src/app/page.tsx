@@ -956,7 +956,8 @@ function DashboardContent() {
                 <Users className="text-emerald-400" />
                 <span>編成（5名組み合わせ）使用率ランキング</span>
               </h2>
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
+              {/* PC表示: テーブル */}
+              <div className="hidden md:block overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 <table className="w-full text-left border-collapse min-w-[900px]">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
@@ -1040,6 +1041,73 @@ function DashboardContent() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* スマホ表示: カード型 */}
+              <div className="md:hidden space-y-3">
+                {(stats?.team_usage ?? []).slice(0, 15).map((team: any, idx: number) => {
+                  const resultColors: Record<string, string> = {
+                    "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
+                    "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
+                    "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
+                    "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
+                    "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
+                    "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
+                    "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
+                  };
+                  const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
+                  const totalPlayers = 64;
+                  const adoptionPct = Math.round((team.count / totalPlayers) * 100);
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => handleTeamClick(team.canonical_id, team)}
+                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 space-y-3"
+                    >
+                      <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400 font-bold text-base">#{idx + 1}</span>
+                          {team.best_result && (
+                            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultClass}`}>
+                              {team.best_result}
+                            </span>
+                          )}
+                        </div>
+                        {team.total_matches > 0 ? (
+                          <div className={`px-3 py-1 rounded-lg font-black text-base text-center shrink-0 ${
+                            team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
+                          }`}>
+                            勝率: {team.win_rate}%
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">対戦なし</span>
+                        )}
+                      </div>
+
+                      <div className="flex justify-center py-1 overflow-x-auto">
+                        <TeamDisplay charIds={team.character_ids} />
+                      </div>
+
+                      <div className="flex items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
+                        <div>
+                          採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
+                        </div>
+                        {team.total_matches > 0 && (
+                          <>
+                            <div className="w-px h-3 bg-white/10" />
+                            <div>
+                              勝敗: <span className="font-bold text-emerald-400">{team.win_count}W</span>
+                              <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(stats?.team_usage?.length ?? 0) === 0 && (
+                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
+                )}
               </div>
             </section>
           </div>
@@ -1199,7 +1267,7 @@ function DashboardContent() {
                     <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isPositionStatsOpen ? "" : "-rotate-90"}`} />
                   </button>
                   {isPositionStatsOpen && (
-                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                     <table className="w-full text-center">
                       <thead>
                         <tr className="border-b border-white/10 bg-slate-900/50">
@@ -1648,7 +1716,7 @@ function DashboardContent() {
                         <span className="text-lg">📊</span>
                         <span>部隊内の配置傾向</span>
                       </h3>
-                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10">
@@ -1704,7 +1772,7 @@ function DashboardContent() {
                         <span className="text-lg">📊</span>
                         <span>編成の配置傾向</span>
                       </h3>
-                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+                      <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10 bg-slate-900/50">

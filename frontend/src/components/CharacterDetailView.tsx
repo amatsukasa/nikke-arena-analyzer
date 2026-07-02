@@ -347,17 +347,17 @@ export default function CharacterDetailView({
 
       {/* 配置ポジション分析 */}
       {hasPositionStats && (
-        <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-3xl shadow-2xl space-y-4">
-          <h3 className="text-xl font-black text-white flex items-center space-x-2">
+        <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-4">
+          <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
             <span className="text-lg">📊</span>
             <span>部隊内の配置傾向</span>
           </h3>
-          <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+          <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
             <table className="w-full text-center">
               <thead>
                 <tr className="border-b border-white/10">
                   {[1, 2, 3, 4, 5].map(p => (
-                    <th key={p} className="py-4 px-4 text-slate-400 font-black text-xl">{p}</th>
+                    <th key={p} className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-black text-base sm:text-xl">{p}</th>
                   ))}
                 </tr>
               </thead>
@@ -365,35 +365,35 @@ export default function CharacterDetailView({
                 {/* 配置回数（割合） */}
                 <tr className="border-b border-white/5">
                   {usageData.position_stats.map((ps: any) => (
-                    <td key={ps.position} className="py-4 px-4">
-                      <span className="text-white font-bold text-2xl">{ps.count}</span>
-                      <span className="text-slate-500 text-sm ml-0.5">回</span>
+                    <td key={ps.position} className="py-3 sm:py-4 px-1 sm:px-4">
+                      <span className="text-white font-bold text-lg sm:text-2xl">{ps.count}</span>
+                      <span className="text-slate-500 text-xs sm:text-sm ml-0.5">回</span>
                       <br />
-                      <span className="text-slate-400 text-sm">({ps.pct}%)</span>
+                      <span className="text-slate-400 text-xs sm:text-sm">({ps.pct}%)</span>
                     </td>
                   ))}
                 </tr>
                 {/* ポジション別勝率 */}
                 <tr>
                   {usageData.position_stats.map((ps: any) => (
-                    <td key={ps.position} className="py-4 px-4">
+                    <td key={ps.position} className="py-3 sm:py-4 px-1 sm:px-4">
                       {ps.win_rate !== null ? (
                         <>
-                          <span className={`font-black text-2xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          <span className={`font-black text-lg sm:text-2xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                             {ps.win_rate}%
                           </span>
                           <br />
-                          <span className="text-slate-500 text-xs">{ps.wins}W {ps.total - ps.wins}L</span>
+                          <span className="text-slate-500 text-[10px] sm:text-xs">{ps.wins}W {ps.total - ps.wins}L</span>
                         </>
                       ) : (
-                        <span className="text-slate-600 text-sm">-</span>
+                        <span className="text-slate-600 text-xs sm:text-sm">-</span>
                       )}
                     </td>
                   ))}
                 </tr>
               </tbody>
             </table>
-            <div className="px-4 py-3 bg-slate-900/50 border-t border-white/5 flex justify-between text-xs text-slate-500">
+            <div className="px-4 py-3 bg-slate-900/50 border-t border-white/5 flex justify-between text-[10px] sm:text-xs text-slate-500">
               <span>上段: 配置回数（割合）</span>
               <span>下段: そのポジションでの勝率</span>
             </div>
@@ -403,19 +403,19 @@ export default function CharacterDetailView({
 
       {/* 編成の配置傾向 */}
       {hasTeamPositionStats && (
-        <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-3xl shadow-2xl space-y-4">
-          <h3 className="text-xl font-black text-white flex items-center space-x-2">
+        <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-4">
+          <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
             <span className="text-lg">📊</span>
             <span>編成の配置傾向</span>
           </h3>
-          <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden">
+          <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
             <table className="w-full text-center">
               <thead>
                 <tr className="border-b border-white/10 bg-slate-900/50">
-                  <th className="py-4 px-4 text-slate-400 font-bold text-sm">〇番目</th>
-                  <th className="py-4 px-4 text-slate-400 font-bold text-sm">採用数</th>
-                  <th className="py-4 px-4 text-slate-400 font-bold text-sm">勝率</th>
-                  <th className="py-4 px-4 text-slate-400 font-bold text-sm">最終成績</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">〇番目</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">採用数</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">勝率</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">最終成績</th>
                 </tr>
               </thead>
               <tbody>
@@ -423,29 +423,29 @@ export default function CharacterDetailView({
                   const ps = usageData.team_position_stats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
                   return (
                     <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                      <td className="py-4 px-4 text-white font-black text-lg">{pos}番目</td>
-                      <td className="py-4 px-4">
-                        <span className="text-white font-bold text-xl">{ps.count}</span>
-                        <span className="text-slate-500 text-sm ml-0.5">人</span>
+                      <td className="py-3 sm:py-4 px-2 sm:px-4 text-white font-black text-sm sm:text-lg">{pos}番目</td>
+                      <td className="py-3 sm:py-4 px-2 sm:px-4">
+                        <span className="text-white font-bold text-base sm:text-xl">{ps.count}</span>
+                        <span className="text-slate-500 text-xs sm:text-sm ml-0.5">人</span>
                         <br />
-                        <span className="text-slate-400 text-sm">({ps.pct}%)</span>
+                        <span className="text-slate-400 text-xs sm:text-sm">({ps.pct}%)</span>
                       </td>
-                      <td className="py-4 px-4">
+                      <td className="py-3 sm:py-4 px-2 sm:px-4">
                         {ps.win_rate !== null ? (
                           <>
-                            <span className={`font-black text-xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            <span className={`font-black text-base sm:text-xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                               {ps.win_rate}%
                             </span>
                             <br />
-                            <span className="text-slate-500 text-xs">{ps.wins}W {ps.total - ps.wins}L</span>
+                            <span className="text-slate-500 text-[10px] sm:text-xs">{ps.wins}W {ps.total - ps.wins}L</span>
                           </>
                         ) : (
-                          <span className="text-slate-600 text-sm">対戦なし</span>
+                          <span className="text-slate-600 text-xs sm:text-sm">対戦なし</span>
                         )}
                       </td>
-                      <td className="py-4 px-4">
+                      <td className="py-3 sm:py-4 px-2 sm:px-4">
                         {ps.best_result ? (
-                          <span className={`inline-block px-3 py-1 text-sm font-bold rounded-full ring-1 ${
+                          <span className={`inline-block px-2.5 py-1 text-xs sm:text-sm font-bold rounded-full ring-1 ${
                             ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
                             ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
                             ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
@@ -457,7 +457,7 @@ export default function CharacterDetailView({
                             {ps.best_result}
                           </span>
                         ) : (
-                          <span className="text-slate-600 text-sm">-</span>
+                          <span className="text-slate-600 text-xs sm:text-sm">-</span>
                         )}
                       </td>
                     </tr>
@@ -470,8 +470,8 @@ export default function CharacterDetailView({
       )}
 
       {/* 採用されている編成リスト */}
-      <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-3xl shadow-2xl space-y-6">
-        <h3 className="text-xl font-black text-white flex items-center space-x-2">
+      <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-6">
+        <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
           <Users size={20} className="text-slate-400" />
           <span>採用されている編成リスト</span>
           <span className="text-sm font-bold text-slate-500 ml-2">({relatedTeams.length}件)</span>
@@ -502,25 +502,27 @@ export default function CharacterDetailView({
                       router.push(`/tournament/${tournamentId}/dashboard?tab=matchups&team=${encodeURIComponent(team.canonical_id)}`);
                     }
                   }}
-                  className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 transition-colors p-5 rounded-xl ring-1 ring-white/5 hover:ring-purple-500/30 space-y-3 cursor-pointer"
+                  className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 transition-colors p-4 sm:p-5 rounded-xl ring-1 ring-white/5 hover:ring-purple-500/30 space-y-3 cursor-pointer"
                 >
                   {/* 編成アイコン行 */}
-                  <div className="flex items-center justify-between">
-                    <TeamDisplay charIds={team.character_ids || []} />
-                    <div className="flex items-center space-x-2 shrink-0 ml-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0">
+                    <div className="flex justify-center sm:justify-start overflow-x-auto py-1">
+                      <TeamDisplay charIds={team.character_ids || []} />
+                    </div>
+                    <div className="flex items-center justify-center sm:justify-end space-x-2 shrink-0">
                       {team.best_result && (
                         <span className={`inline-block px-2 py-0.5 text-xs font-bold rounded-full ring-1 ${teamResultClass}`}>
                           {team.best_result}
                         </span>
                       )}
-                      <span className="text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-lg ring-1 ring-white/10 text-xs">
+                      <span className="text-slate-400 font-bold bg-slate-900 px-2.5 py-1 rounded-lg ring-1 ring-white/10 text-xs">
                         {team.count} 採用
                       </span>
                     </div>
                   </div>
                   {/* 勝率・勝敗行 */}
                   {team.total_matches > 0 && (
-                    <div className="flex items-center space-x-4 pt-2 border-t border-white/5">
+                    <div className="flex items-center justify-around sm:justify-start space-x-0 sm:space-x-4 pt-2 border-t border-white/5">
                       <div className="flex items-center space-x-2">
                         <span className="text-[10px] text-slate-500 font-bold uppercase">勝率</span>
                         <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
