@@ -678,10 +678,11 @@ def get_characters(db: Session = Depends(get_db)):
     res = []
     for character in characters:
         tpl_filename = getattr(character, "template_filename", None)
-        is_avail = bool(getattr(character, "is_template_available", False) or tpl_filename or (find_character_template(UPLOAD_DIR, character.id) is not None))
-        if tpl_filename:
-            icon_url = f"/api/uploads/templates/{tpl_filename}"
-        elif is_avail:
+        is_avail = bool(
+            getattr(character, "is_template_available", False)
+            or getattr(character, "template_filename", None)
+        )
+        if is_avail:
             icon_url = f"/api/char-icon/{character.id}.png"
         else:
             icon_url = None
