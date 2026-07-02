@@ -14,6 +14,7 @@ import contextlib
 import shutil
 import os
 from pathlib import Path
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 app = FastAPI(
     title="NIKKE Arena Analysis API",
@@ -137,14 +138,42 @@ from services.upload_cleanup import (
 from fastapi.responses import FileResponse
 
 
+IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+NO_STORE_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+
+
 class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code >= 400:
+                exc.headers = {
+                    **(exc.headers or {}),
+                    "Cache-Control": NO_STORE_CACHE_CONTROL,
+                }
+            raise
+        except Exception as exc:
+            raise StarletteHTTPException(
+                status_code=500,
+                detail="Static file error",
+                headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+            ) from exc
+
+        if response.status_code >= 400:
+            response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
+        return response
+
     def file_response(self, full_path: str, stat_result, scope, status_code: int = 200):
         response = super().file_response(full_path, stat_result, scope, status_code)
-        path_str = str(full_path)
-        if "cropped" in path_str and "crop_" in path_str:
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        if response.status_code >= 400:
+            response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
         else:
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            path_str = str(full_path)
+            if "cropped" in path_str and "crop_" in path_str:
+                response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
+            else:
+                response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
         return response
 
 
@@ -156,7 +185,11 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
     """キャラクターの代表テンプレート画像を返す（旧形式・新形式両対応）"""
     char = db.query(models.Character).filter(models.Character.id == char_id).first()
     if not char:
-        raise HTTPException(status_code=404, detail="Character not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Character not found",
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
     
     # DBに template_filename が保存されている場合は優先してチェック
     template_filename = getattr(char, "template_filename", None)
@@ -166,7 +199,7 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
             return FileResponse(
                 tpl_path,
                 media_type="image/png",
-                headers={"Cache-Control": "public, max-age=31536000, immutable"},
+                headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
             )
         else:
             # ファイルが存在しない場合は一旦クリア
@@ -188,7 +221,7 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
         return FileResponse(
             template_path,
             media_type="image/png",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
         )
     
     if getattr(char, "is_template_available", False) or getattr(char, "template_filename", None):
@@ -199,7 +232,11 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
         except Exception:
             db.rollback()
 
-    raise HTTPException(status_code=404, detail="Template not found")
+    raise HTTPException(
+        status_code=404,
+        detail="Template not found",
+        headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+    )
 
 @app.get("/")
 def read_root():
