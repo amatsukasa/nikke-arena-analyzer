@@ -302,6 +302,17 @@ function DashboardContent() {
   }, [selectedCharId, selectedTournamentIds, filterServer, selectedChampionshipId]);
 
   useEffect(() => {
+    if (!selectedCharId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedCharId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedCharId]);
+
+  useEffect(() => {
     if (isFirstLoad) return;
     // allTournamentsにデータがあるのにフィルタ後0件の場合もローディング終了
     if (allTournaments.length > 0 && selectedTournamentIds.length === 0) {
@@ -1619,8 +1630,23 @@ function DashboardContent() {
 
   {/* Character Details Modal */}
       {selectedCharId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-slate-900 ring-1 ring-white/10 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onClick={() => setSelectedCharId(null)}
+        >
+          <div
+            className="bg-slate-900 ring-1 ring-white/10 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="sticky top-0 z-50 flex justify-end p-4 -mb-14 pointer-events-none">
+              <button
+                onClick={() => setSelectedCharId(null)}
+                className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-slate-900/90 text-slate-300 ring-1 ring-white/20 shadow-xl backdrop-blur hover:bg-slate-800 hover:text-white transition-all"
+                aria-label="閉じる"
+              >
+                <X size={20} />
+              </button>
+            </div>
             {selectedCharacterDetailLoading ? (
               <div className="p-16 flex flex-col items-center justify-center space-y-4">
                 <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full" />
@@ -1665,10 +1691,10 @@ function DashboardContent() {
               const burst3Chars = synergisticChars.filter((ch: any) => ch.burst_phase === "3");
 
               return (
-                <div className="p-8 space-y-8 animate-in fade-in zoom-in-95 duration-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-6">
-                      <div className="w-24 h-24 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center">
+                <div className="p-6 sm:p-8 space-y-8 animate-in fade-in zoom-in-95 duration-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pr-12 sm:pr-14">
+                    <div className="flex items-center space-x-4 sm:space-x-6">
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center shrink-0">
                         {c.is_template_available ? (
                           <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                         ) : (
@@ -1676,13 +1702,13 @@ function DashboardContent() {
                         )}
                       </div>
                       <div>
-                        <h2 className="text-3xl font-black text-white mb-2">{c.name}</h2>
-                        <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-sm">
+                        <h2 className="text-2xl sm:text-3xl font-black text-white mb-2">{c.name}</h2>
+                        <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-xs sm:text-sm">
                           レアリティ: {c.rarity || "不明"}
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center self-start sm:self-auto">
                       <Link
                         href={`/character/${selectedCharId}?tournaments=${selectedTournamentIds.join(',')}`}
                         className="flex items-center space-x-1.5 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl text-sm font-bold ring-1 ring-blue-500/30 transition-all whitespace-nowrap"
@@ -1691,9 +1717,6 @@ function DashboardContent() {
                         <span>📄</span>
                         <span>フルページで詳細を見る</span>
                       </Link>
-                      <button onClick={() => setSelectedCharId(null)} className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-slate-400 hover:text-white transition-all">
-                        <X size={24} />
-                      </button>
                     </div>
                   </div>
                   
