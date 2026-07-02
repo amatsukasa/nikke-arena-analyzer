@@ -136,7 +136,19 @@ from services.upload_cleanup import (
 )
 from fastapi.responses import FileResponse
 
-app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+class CachedStaticFiles(StaticFiles):
+    def file_response(self, full_path: str, stat_result, scope, status_code: int = 200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        path_str = str(full_path)
+        if "cropped" in path_str and "crop_" in path_str:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+app.mount("/api/uploads", CachedStaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/api/char-icon/{char_id}.png")
@@ -154,7 +166,7 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
             return FileResponse(
                 tpl_path,
                 media_type="image/png",
-                headers={"Cache-Control": "public, max-age=86400, immutable"},
+                headers={"Cache-Control": "public, max-age=31536000, immutable"},
             )
         else:
             # ファイルが存在しない場合は一旦クリア
@@ -176,7 +188,7 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
         return FileResponse(
             template_path,
             media_type="image/png",
-            headers={"Cache-Control": "public, max-age=86400, immutable"},
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
     
     if getattr(char, "is_template_available", False) or getattr(char, "template_filename", None):
@@ -663,18 +675,27 @@ def get_characters(db: Session = Depends(get_db)):
         rarity_order,
         models.Character.name,
     ).all()
-    return [
-        schemas.Character.model_validate(character).model_copy(
-            update={
-                "is_template_available": (
-                    bool(getattr(character, "is_template_available", False) or getattr(character, "template_filename", None) or (find_character_template(UPLOAD_DIR, character.id) is not None))
-                ),
-                "template_filename": getattr(character, "template_filename", None),
-                "usage_count": usage_counts.get(character.id, 0)
-            }
+    res = []
+    for character in characters:
+        tpl_filename = getattr(character, "template_filename", None)
+        is_avail = bool(getattr(character, "is_template_available", False) or tpl_filename or (find_character_template(UPLOAD_DIR, character.id) is not None))
+        if tpl_filename:
+            icon_url = f"/api/uploads/templates/{tpl_filename}"
+        elif is_avail:
+            icon_url = f"/api/char-icon/{character.id}.png"
+        else:
+            icon_url = None
+        res.append(
+            schemas.Character.model_validate(character).model_copy(
+                update={
+                    "is_template_available": is_avail,
+                    "template_filename": tpl_filename,
+                    "icon_url": icon_url,
+                    "usage_count": usage_counts.get(character.id, 0)
+                }
+            )
         )
-        for character in characters
-    ]
+    return res
 
 @app.post("/api/characters")
 def create_character(
@@ -842,7 +863,7 @@ def get_all_characters_admin(
             "class_type": c.class_type,
             "has_template": has_tpl,
             "template_count": tpl_count,
-            "image_url": f"/api/char-icon/{c.id}.png" if has_tpl else None,
+            "image_url": f"/api/uploads/templates/{c.template_filename}" if getattr(c, "template_filename", None) else (f"/api/char-icon/{c.id}.png" if has_tpl else None),
         })
     return result
 

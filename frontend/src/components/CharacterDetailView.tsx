@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Users } from "lucide-react";
+import React from "react";
 import Link from "next/link";
+import { getCharIconUrl } from "@/utils/charIcon";
 
 export interface CharacterDetailViewProps {
   mode: "cross" | "single";
@@ -109,8 +111,8 @@ export default function CharacterDetailView({
               onClick={(e) => e.stopPropagation()}
             >
               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
-                {ch?.is_template_available ? (
-                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch?.name || "不明"} className="w-full h-full object-cover" />
+                {getCharIconUrl(ch) ? (
+                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch?.name || "不明"} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{ch?.name?.slice(0, 3) || "不明"}</span>
                 )}
@@ -167,8 +169,8 @@ export default function CharacterDetailView({
       <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-3xl shadow-2xl">
         <div className="flex items-center space-x-6 mb-8">
           <div className="w-28 h-28 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center shrink-0">
-            {c.is_template_available ? (
-              <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+            {getCharIconUrl(c) ? (
+              <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
             ) : (
               <span className="text-3xl text-slate-500 font-black">{c.name.slice(0, 3)}</span>
             )}
@@ -250,8 +252,8 @@ export default function CharacterDetailView({
                     className="flex flex-col items-center space-y-2 group p-2 rounded-xl hover:bg-slate-700/50 transition-colors cursor-pointer"
                   >
                     <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
-                      {synergyChar.is_template_available ? (
-                        <img src={`/api/char-icon/${synergyChar.id}.png`} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
+                      {getCharIconUrl(synergyChar) ? (
+                        <img src={getCharIconUrl(synergyChar)} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
                       ) : (
                         <span className="text-[10px] text-slate-500 font-bold">{synergyChar.name?.slice(0, 3)}</span>
                       )}
@@ -287,8 +289,8 @@ export default function CharacterDetailView({
                     className="flex flex-col items-center space-y-2 group p-2 rounded-xl hover:bg-slate-700/50 transition-colors cursor-pointer"
                   >
                     <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-emerald-500 overflow-hidden flex items-center justify-center transition-all">
-                      {synergyChar.is_template_available ? (
-                        <img src={`/api/char-icon/${synergyChar.id}.png`} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
+                      {getCharIconUrl(synergyChar) ? (
+                        <img src={getCharIconUrl(synergyChar)} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
                       ) : (
                         <span className="text-[10px] text-slate-500 font-bold">{synergyChar.name?.slice(0, 3)}</span>
                       )}
@@ -324,8 +326,8 @@ export default function CharacterDetailView({
                     className="flex flex-col items-center space-y-2 group p-2 rounded-xl hover:bg-slate-700/50 transition-colors cursor-pointer"
                   >
                     <div className="w-12 h-12 rounded-xl bg-slate-800 ring-1 ring-white/10 group-hover:ring-amber-500 overflow-hidden flex items-center justify-center transition-all">
-                      {synergyChar.is_template_available ? (
-                        <img src={`/api/char-icon/${synergyChar.id}.png`} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
+                      {getCharIconUrl(synergyChar) ? (
+                        <img src={getCharIconUrl(synergyChar)} loading="lazy" decoding="async" alt={synergyChar.name} className="w-full h-full object-cover" />
                       ) : (
                         <span className="text-[10px] text-slate-500 font-bold">{synergyChar.name?.slice(0, 3)}</span>
                       )}

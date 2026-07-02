@@ -12,6 +12,7 @@ class CharacterBase(BaseModel):
     class_type: Optional[str] = None
     is_template_available: bool = False
     template_filename: Optional[str] = None
+    icon_url: Optional[str] = None
 
 class Character(CharacterBase):
     id: int

@@ -6,6 +6,7 @@ import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords,
 import Link from "next/link";
 import PaginatedTeamList from "../components/PaginatedTeamList";
 import { useAuth } from "../context/AuthContext";
+import { getCharIconUrl } from "@/utils/charIcon";
 
 const SERVER_LABELS: Record<string, string> = {
   KR: "韓国（KR）",
@@ -68,9 +69,6 @@ function DashboardContent() {
   const [stats, setStats] = useState<any>(null);
   const [matchups, setMatchups] = useState<any[]>([]);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
-  const [bracketData, setBracketData] = useState<any>(null);
-  const [myPlayerDetails, setMyPlayerDetails] = useState<any>(null);
-  const [best8Data, setBest8Data] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // 大会データとそのフィルタリング
@@ -261,7 +259,11 @@ function DashboardContent() {
     localStorage.setItem('nikke_filter_specific_ids', JSON.stringify(selectedSpecificTournamentIds));
   }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments, isFirstLoad]);
 
-  const [allBracketData, setAllBracketData] = useState<any[]>([]);
+  const [visibleTeamCount, setVisibleTeamCount] = useState(10);
+
+  useEffect(() => {
+    setVisibleTeamCount(10);
+  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, searchChars]);
 
   useEffect(() => {
     if (!selectedCharId || selectedTournamentIds.length === 0) {
@@ -318,7 +320,6 @@ function DashboardContent() {
     if (allTournaments.length > 0 && selectedTournamentIds.length === 0) {
       setStats(null);
       setMatchups([]);
-      setAllBracketData([]);
       setLoading(false);
       return;
     }
@@ -335,20 +336,7 @@ function DashboardContent() {
           setAllCharacters(await charsRes.json());
         }
 
-        // 2. 選択された大会の BracketData などを並列取得
-        const brackets = await Promise.all(
-          selectedTournamentIds.map(async (id) => {
-            const res = await fetch(`/api/tournaments/${id}/bracket?t=${timestamp}`);
-            const data = res.ok ? await res.json() : null;
-            return { tournamentId: id, data };
-          })
-        );
-        setAllBracketData(brackets);
-
-        // ※ 複数大会選択時は best8Data 等はどう扱うか？ 今回は cross-tournament stats に集約
-        // myPlayerDetails も全大会分取る必要はない。ブラケットデータがあればシードからプレイヤーを探せる。
-
-        // 3. 横断分析APIの呼び出し
+        // 2. 横断分析APIの呼び出し
         if (
           selectedTournamentIds.length === 0 ||
           !filterServer ||
@@ -476,8 +464,9 @@ function DashboardContent() {
   }
 
   // Helper to render a team
-  const TeamDisplay = ({ charIds }: { charIds: number[] }) => {
-    const displayChars = charIds.map(cid => allCharacters.find(c => c.id === cid)).filter(Boolean);
+  const TeamDisplay = ({ charIds, allCharacters: charsParam }: { charIds: number[], allCharacters?: any[] }) => {
+    const chars = charsParam || allCharacters;
+    const displayChars = charIds.map(cid => chars.find((c: any) => c.id === cid) || { id: cid, name: String(cid), is_template_available: cid !== 9999 });
     return (
       <div className="flex space-x-2">
         {displayChars.map((c: any, i: number) => {
@@ -494,8 +483,8 @@ function DashboardContent() {
           return (
             <div key={i} className="flex flex-col items-center space-y-1 cursor-pointer group" onClick={(e) => { e.stopPropagation(); setSelectedCharId(c.id); }}>
               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
-                {c?.is_template_available ? (
-                  <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
+                {getCharIconUrl(c) ? (
+                  <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
                 )}
@@ -593,79 +582,6 @@ function DashboardContent() {
       defenderName: m.defender_name
     });
   });
-
-  // --- My Dashboard logic ---
-  const mySeed = selectedSeed;
-  let myPlayer: any = null;
-  let myTournamentResult = "グループ1回戦出場 (Best 64)";
-  
-  if (bracketData && bracketData.groups) {
-     // 1. Search in groups
-     bracketData.groups.forEach((g: any, idx: number) => {
-        const found = g.players.find((p:any) => (p.original_seed || p.seed) === mySeed && p.id !== null);
-        if (found) {
-           myPlayer = found;
-           
-           const reached_qf = g.qf_winners?.includes(myPlayer.id);
-           const reached_sf = g.sf_winners?.includes(myPlayer.id);
-           const reached_f = g.winner === myPlayer.id;
-           
-           const qf_played = g.qf_winners?.length > 0;
-           const sf_played = g.sf_winners?.length > 0;
-           const f_played = g.winner !== null;
-           
-           if (reached_f) {
-              myTournamentResult = "グループ優勝 (Best 8 進出)";
-           } else if (reached_sf) {
-              if (f_played) myTournamentResult = "グループ決勝敗退 (Best 16)";
-              else myTournamentResult = "グループ決勝進出 (Best 16)";
-           } else if (reached_qf) {
-              if (sf_played) myTournamentResult = "グループ準決勝敗退 (Best 32)";
-              else myTournamentResult = "グループ準決勝進出 (Best 32)";
-           } else {
-              if (qf_played && !reached_qf) {
-                 // To be absolutely precise we could check specific matchups, but generally if qf_winners has this group's winners,
-                 // and the player is not in it, they lost.
-                 myTournamentResult = "グループ1回戦敗退 (Best 64)";
-              } else {
-                 myTournamentResult = "グループ1回戦出場 (Best 64)";
-              }
-           }
-        }
-     });
-     
-     // 2. Search in champion finals if they advanced
-     if (myPlayer && bracketData.champion_finals) {
-        const cf = bracketData.champion_finals;
-        if (cf.players.find((p:any) => p.id === myPlayer.id)) {
-           const reached_cf_sf = cf.qf_winners?.includes(myPlayer.id); // Best 4
-           const reached_cf_f = cf.sf_winners?.includes(myPlayer.id); // Final
-           const is_champ = cf.winner === myPlayer.id;
-           
-           const cf_qf_played = cf.qf_winners?.length > 0;
-           const cf_sf_played = cf.sf_winners?.length > 0;
-           const cf_f_played = cf.winner !== null;
-
-           if (is_champ) {
-               myTournamentResult = "🏆 チャンピオン 🏆";
-           } else if (reached_cf_f) {
-               if (cf_f_played) myTournamentResult = "準優勝 (2位)";
-               else myTournamentResult = "決勝進出 (2位以上確定)";
-           } else if (reached_cf_sf) {
-               if (cf_sf_played) myTournamentResult = "ベスト4";
-               else myTournamentResult = "準決勝進出 (Best 4)";
-           } else {
-               if (cf_qf_played && !reached_cf_sf) {
-                   myTournamentResult = "ベスト8敗退";
-               } else {
-                   myTournamentResult = "チャンピオン対抗戦出場 (Best 8)";
-               }
-           }
-        }
-     }
-  }
-
-  const myDecks = myPlayerDetails?.decks || [];
 
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
@@ -934,8 +850,8 @@ function DashboardContent() {
                                         className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 px-2 py-1.5 rounded-lg ring-1 ring-white/10 hover:ring-blue-500/50 transition-all group/char"
                                       >
                                         <div className="w-8 h-8 rounded-md bg-slate-700 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0 group-hover/char:ring-blue-500 transition-all">
-                                          {c?.is_template_available ? (
-                                            <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+                                          {getCharIconUrl(c) ? (
+                                            <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                                           ) : (
                                             <span className="text-[8px] text-slate-500 font-bold">{c.name.slice(0,2)}</span>
                                           )}
@@ -967,96 +883,18 @@ function DashboardContent() {
                 <Users className="text-emerald-400" />
                 <span>編成（5名組み合わせ）使用率ランキング</span>
               </h2>
-              {/* PC表示: テーブル */}
-              <div className="hidden md:block overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-                <table className="w-full text-left border-collapse min-w-[900px]">
-                  <thead>
-                    <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                      <th className="p-4 font-medium text-center w-16">順位</th>
-                      <th className="p-4 font-medium">編成</th>
-                      <th className="p-4 font-medium text-center w-32">最終成績</th>
-                      <th className="p-4 font-medium text-right w-28">勝率</th>
-                      <th className="p-4 font-medium text-right w-40">採用数</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {(stats?.team_usage ?? []).slice(0, 15).map((team: any, idx: number) => {
-                      const resultColors: Record<string, string> = {
-                        "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                        "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                        "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                        "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                        "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                        "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                        "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-                      };
-                      const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                      // 64人参加を前提とした採用率の計算
-                      const totalPlayers = 64;
-                      const adoptionPct = Math.round((team.count / totalPlayers) * 100);
-                      return (
-                        <tr key={idx} className="hover:bg-white/5 transition-colors cursor-pointer group" onClick={() => handleTeamClick(team.canonical_id, team)}>
-                          <td className="p-4 text-center">
-                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                              idx + 1 === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                              idx + 1 === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                              idx + 1 === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                              "text-slate-500"
-                            }`}>
-                              {idx + 1}
-                            </span>
-                          </td>
-                          <td className="p-4">
-                            <TeamDisplay charIds={team.character_ids} />
-                          </td>
-                          <td className="p-4 text-center">
-                            {team.best_result ? (
-                              <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                                {team.best_result}
-                              </span>
-                            ) : (
-                              <span className="text-slate-600 text-xs">-</span>
-                            )}
-                          </td>
-                          <td className="p-4 text-right">
-                            {team.total_matches > 0 ? (
-                              <div className="flex flex-col items-end">
-                                <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                  {team.win_rate}%
-                                </span>
-                                <span className="text-[10px] text-slate-500 font-bold">
-                                  {team.win_count}W {team.total_matches - team.win_count}L
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-slate-600 text-xs">対戦なし</span>
-                            )}
-                          </td>
-                          <td className="p-4 text-right">
-                            <div className="flex flex-col items-end">
-                              <span className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                                {team.count}
-                              </span>
-                              <span className="text-[10px] text-slate-500 font-bold">
-                                {totalPlayers}人中 ({adoptionPct}%)
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {(stats?.team_usage?.length ?? 0) === 0 && (
-                      <tr>
-                        <td colSpan={5} className="p-8 text-center text-slate-500">データがありません</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              {/* レスポンシブ統合リスト: PCでは行、スマホではカード（画像DOMは1つのみ） */}
+              <div className="space-y-3">
+                {/* PC用ヘッダー行 */}
+                <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 text-xs font-bold text-slate-400 bg-slate-900/80 rounded-xl border border-white/5">
+                  <div className="col-span-1">順位</div>
+                  <div className="col-span-5">編成</div>
+                  <div className="col-span-2 text-center">最終成績</div>
+                  <div className="col-span-2 text-right">勝率</div>
+                  <div className="col-span-2 text-right">採用数</div>
+                </div>
 
-              {/* スマホ表示: カード型 */}
-              <div className="md:hidden space-y-3">
-                {(stats?.team_usage ?? []).slice(0, 15).map((team: any, idx: number) => {
+                {(stats?.team_usage ?? []).slice(0, visibleTeamCount).map((team: any, idx: number) => {
                   const resultColors: Record<string, string> = {
                     "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
                     "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
@@ -1073,33 +911,79 @@ function DashboardContent() {
                     <div
                       key={idx}
                       onClick={() => handleTeamClick(team.canonical_id, team)}
-                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 space-y-3"
+                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 flex flex-col md:grid md:grid-cols-12 md:items-center gap-3"
                     >
-                      <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-slate-400 font-bold text-base">#{idx + 1}</span>
+                      {/* 上部・左部: スマホでは順位・成績・勝率ヘッダー、PCでは順位のみ */}
+                      <div className="flex items-center justify-between md:justify-start md:col-span-1 border-b border-white/5 pb-2 md:border-b-0 md:pb-0">
+                        <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
+                          idx + 1 === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
+                          idx + 1 === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
+                          idx + 1 === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
+                          "text-slate-400"
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        {/* スマホのみ表示する成績ラベル＆勝率 */}
+                        <div className="flex items-center gap-2 md:hidden">
                           {team.best_result && (
                             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultClass}`}>
                               {team.best_result}
                             </span>
                           )}
+                          {team.total_matches > 0 && (
+                            <div className={`px-2.5 py-0.5 rounded-md font-bold text-xs ${
+                              team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
+                            }`}>
+                              勝率: {team.win_rate}%
+                            </div>
+                          )}
                         </div>
-                        {team.total_matches > 0 ? (
-                          <div className={`px-3 py-1 rounded-lg font-black text-base text-center shrink-0 ${
-                            team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
-                          }`}>
-                            勝率: {team.win_rate}%
-                          </div>
+                      </div>
+
+                      {/* 編成アイコン（DOMはここ1か所のみ！） */}
+                      <div className="flex justify-center md:justify-start md:col-span-5 py-1 overflow-x-auto">
+                        <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
+                      </div>
+
+                      {/* PC用: 最終成績 */}
+                      <div className="hidden md:flex md:col-span-2 justify-center">
+                        {team.best_result ? (
+                          <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
+                            {team.best_result}
+                          </span>
                         ) : (
-                          <span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">対戦なし</span>
+                          <span className="text-slate-600 text-xs">-</span>
                         )}
                       </div>
 
-                      <div className="flex justify-center py-1 overflow-x-auto">
-                        <TeamDisplay charIds={team.character_ids} />
+                      {/* PC用: 勝率＆勝敗 */}
+                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
+                        {team.total_matches > 0 ? (
+                          <>
+                            <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {team.win_rate}%
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-bold">
+                              {team.win_count}W {team.total_matches - team.win_count}L
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-slate-600 text-xs">対戦なし</span>
+                        )}
                       </div>
 
-                      <div className="flex items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
+                      {/* PC用: 採用数＆率 */}
+                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
+                        <span className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                          {team.count}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-bold">
+                          {totalPlayers}人中 ({adoptionPct}%)
+                        </span>
+                      </div>
+
+                      {/* スマホ用フッター: 採用数＆勝敗詳細 */}
+                      <div className="flex md:hidden items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
                         <div>
                           採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
                         </div>
@@ -1116,8 +1000,18 @@ function DashboardContent() {
                     </div>
                   );
                 })}
+
                 {(stats?.team_usage?.length ?? 0) === 0 && (
                   <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
+                )}
+
+                {(stats?.team_usage?.length ?? 0) > visibleTeamCount && (
+                  <button
+                    onClick={() => setVisibleTeamCount(prev => prev + 15)}
+                    className="w-full py-3 mt-4 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors ring-1 ring-white/10 shadow-lg text-sm"
+                  >
+                    もっと見る (残りを表示)
+                  </button>
                 )}
               </div>
             </section>
@@ -1227,7 +1121,7 @@ function DashboardContent() {
               {selectedTeam && (
                 <div className="pt-4 border-t border-purple-500/20 flex flex-col space-y-2">
                   <span className="text-xs font-bold text-purple-400">選択中の編成:</span>
-                  <TeamDisplay charIds={currentSelectedTeamData?.character_ids || currentSelectedTeamData?.characters?.map((c:any)=>c.id) || []} />
+                  <TeamDisplay charIds={currentSelectedTeamData?.character_ids || currentSelectedTeamData?.characters?.map((c:any)=>c.id) || []} allCharacters={allCharacters} />
                 </div>
               )}
             </div>
@@ -1483,7 +1377,7 @@ function DashboardContent() {
                               </div>
                             </div>
                             <div className="text-slate-400 text-sm mr-2">VS</div>
-                            <TeamDisplay charIds={m.opponent} />
+                            <TeamDisplay charIds={m.opponent} allCharacters={allCharacters} />
                           </div>
                           <div className={`font-black text-lg ${m.isWin ? 'text-emerald-400' : 'text-slate-600'}`}>
                             {m.isWin ? 'WIN' : 'LOSE'}
@@ -1580,8 +1474,8 @@ function DashboardContent() {
                       className={`relative w-12 h-12 rounded-lg overflow-hidden transition-all ${isSelected ? 'ring-2 ring-emerald-500 scale-110 shadow-lg' : 'ring-1 ring-white/10 opacity-70 hover:opacity-100'}`}
                       title={c.name}
                     >
-                      {c.is_template_available ? (
-                         <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+                      {getCharIconUrl(c) ? (
+                         <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                       ) : (
                          <div className="w-full h-full bg-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-bold text-center leading-tight">
                            {c.name.slice(0,4)}
@@ -1695,8 +1589,8 @@ function DashboardContent() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pr-12 sm:pr-14">
                     <div className="flex items-center space-x-4 sm:space-x-6">
                       <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-slate-800 ring-2 ring-blue-500 overflow-hidden shadow-xl flex items-center justify-center shrink-0">
-                        {c.is_template_available ? (
-                          <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+                        {getCharIconUrl(c) ? (
+                          <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
                         ) : (
                           <span className="text-2xl text-slate-500 font-black">{c.name.slice(0,3)}</span>
                         )}
@@ -1872,8 +1766,8 @@ function DashboardContent() {
                           {burst1Chars.map((ch: any) => (
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
-                                {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
+                                {getCharIconUrl(ch) ? (
+                                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}
@@ -1896,8 +1790,8 @@ function DashboardContent() {
                           {burst2Chars.map((ch: any) => (
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
-                                {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
+                                {getCharIconUrl(ch) ? (
+                                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}
@@ -1920,8 +1814,8 @@ function DashboardContent() {
                           {burst3Chars.map((ch: any) => (
                             <div key={ch.id} className="flex flex-col items-center space-y-1 p-1 rounded-lg hover:bg-slate-700/50 transition-colors">
                               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center">
-                                {ch.is_template_available ? (
-                                  <img src={`/api/char-icon/${ch.id}.png`} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
+                                {getCharIconUrl(ch) ? (
+                                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <span className="text-[9px] text-slate-500 font-bold">{ch.name?.slice(0, 3)}</span>
                                 )}
@@ -1968,7 +1862,7 @@ function DashboardContent() {
                           <div key={idx} onClick={() => handleTeamClick(team.canonical_id, team)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
                             {/* 編成アイコン行 */}
                             <div className="flex items-center justify-between">
-                              <TeamDisplay charIds={team.character_ids} />
+                              <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
                               <div className="flex items-center space-x-2 shrink-0 ml-4">
                                 {team.best_result && (
                                   <span className={`inline-block px-2 py-0.5 text-xs font-bold rounded-full ring-1 ${teamResultClass}`}>

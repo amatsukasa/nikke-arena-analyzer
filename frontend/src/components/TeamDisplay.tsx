@@ -1,9 +1,13 @@
 "use client";
 
+import { getCharIconUrl } from "@/utils/charIcon";
+
 interface Character {
   id: number;
   name: string;
   is_template_available: boolean;
+  template_filename?: string;
+  icon_url?: string;
 }
 
 export default function TeamDisplay({
@@ -36,8 +40,8 @@ export default function TeamDisplay({
         return (
           <div key={i} className="flex flex-col items-center space-y-1 group">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 overflow-hidden flex items-center justify-center transition-all">
-              {c?.is_template_available ? (
-                <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
+              {getCharIconUrl(c) ? (
+                <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
               ) : (
                 <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
               )}

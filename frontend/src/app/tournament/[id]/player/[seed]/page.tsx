@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trophy, ShieldAlert, User as UserIcon, ChevronLeft, Share2 } from "lucide-react";
+import { getCharIconUrl } from "@/utils/charIcon";
 
 export default function PlayerStatsPage() {
   const params = useParams();
@@ -143,16 +144,17 @@ export default function PlayerStatsPage() {
      }
   }
 
-  const TeamDisplay = ({ charIds }: { charIds: number[] }) => {
-    const displayChars = charIds.map(cid => allCharacters.find(c => c.id === cid)).filter(Boolean);
+  const TeamDisplay = ({ charIds, allCharacters: charsParam }: { charIds: number[], allCharacters?: any[] }) => {
+    const chars = charsParam || allCharacters;
+    const displayChars = charIds.map(cid => chars.find((c: any) => c.id === cid) || { id: cid, name: String(cid), is_template_available: cid !== 9999 });
     return (
       <div className="flex space-x-2">
         {displayChars.map((c: any, i: number) => {
           if (c.id === 9999) return <div key={i} className="w-12 h-12 rounded-lg bg-slate-800 ring-1 ring-white/10" />;
           return (
             <div key={i} className="w-12 h-12 rounded-lg bg-slate-800 ring-1 ring-white/20 overflow-hidden relative group">
-              {c.is_template_available ? (
-                <img src={`/api/char-icon/${c.id}.png`} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
+              {getCharIconUrl(c) ? (
+                <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-slate-700">
                   <span className="text-[10px] font-bold text-slate-300">{c.name?.slice(0,3)}</span>
@@ -249,7 +251,7 @@ export default function PlayerStatsPage() {
                             <span className="text-[10px] text-slate-400 font-bold tracking-wider">TEAM</span>
                             <span className="text-2xl font-black text-white">{deck.team_number}</span>
                          </div>
-                         <TeamDisplay charIds={deck.character_ids} />
+                         <TeamDisplay charIds={deck.character_ids} allCharacters={allCharacters} />
                       </div>
                       
                       <div className="flex items-center space-x-6 bg-slate-900/80 px-6 py-4 rounded-2xl ring-1 ring-white/5 backdrop-blur-md">
