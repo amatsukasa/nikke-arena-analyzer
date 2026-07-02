@@ -140,15 +140,53 @@ app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/api/char-icon/{char_id}.png")
-def get_char_icon(char_id: int):
+def get_char_icon(char_id: int, db: Session = Depends(get_db)):
     """キャラクターの代表テンプレート画像を返す（旧形式・新形式両対応）"""
+    char = db.query(models.Character).filter(models.Character.id == char_id).first()
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # DBに template_filename が保存されている場合は優先してチェック
+    template_filename = getattr(char, "template_filename", None)
+    if template_filename:
+        tpl_path = Path(UPLOAD_DIR) / "templates" / template_filename
+        if tpl_path.is_file():
+            return FileResponse(
+                tpl_path,
+                media_type="image/png",
+                headers={"Cache-Control": "public, max-age=86400, immutable"},
+            )
+        else:
+            # ファイルが存在しない場合は一旦クリア
+            char.template_filename = None
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+    # filesystem を探索 (char_{char_id}.png または char_{char_id}_*.png)
     template_path = find_character_template(UPLOAD_DIR, char_id)
     if template_path:
+        try:
+            char.template_filename = template_path.name
+            char.is_template_available = True
+            db.commit()
+        except Exception:
+            db.rollback()
         return FileResponse(
             template_path,
             media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400, immutable"},
         )
+    
+    if getattr(char, "is_template_available", False) or getattr(char, "template_filename", None):
+        try:
+            char.is_template_available = False
+            char.template_filename = None
+            db.commit()
+        except Exception:
+            db.rollback()
+
     raise HTTPException(status_code=404, detail="Template not found")
 
 @app.get("/")
@@ -197,6 +235,12 @@ async def periodic_upload_cleanup():
 async def startup_event():
     global _upload_cleanup_task
     Base.metadata.create_all(bind=engine)
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE characters ADD COLUMN IF NOT EXISTS template_filename VARCHAR;"))
+    except Exception as e:
+        print(f"[Startup] template_filename カラム追加スキップまたはエラー: {e}")
     try:
         init_db()
         print("[Startup] データベース初期キャラクターデータをインポートしました")
@@ -623,8 +667,9 @@ def get_characters(db: Session = Depends(get_db)):
         schemas.Character.model_validate(character).model_copy(
             update={
                 "is_template_available": (
-                    find_character_template(UPLOAD_DIR, character.id) is not None
+                    bool(getattr(character, "is_template_available", False) or getattr(character, "template_filename", None) or (find_character_template(UPLOAD_DIR, character.id) is not None))
                 ),
+                "template_filename": getattr(character, "template_filename", None),
                 "usage_count": usage_counts.get(character.id, 0)
             }
         )
@@ -745,6 +790,7 @@ def delete_template(
     char = db.query(models.Character).filter(models.Character.id == char_id).first()
     if char:
         char.is_template_available = False
+        char.template_filename = None
         db.commit()
     return {"ok": True, "deleted_count": deleted}
 
@@ -1603,8 +1649,10 @@ async def save_teams(
                             print(f"[Template] スキップ（重複）: char_{c_id}")
                         # DB上のフラグを更新
                         char_db = db.query(models.Character).filter(models.Character.id == c_id).first()
-                        if char_db and not char_db.is_template_available:
+                        if char_db:
                             char_db.is_template_available = True
+                            if not getattr(char_db, "template_filename", None):
+                                char_db.template_filename = f"char_{c_id}_{next_num:03d}.png"
 
         
         db.commit()

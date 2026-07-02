@@ -11,6 +11,7 @@ class CharacterBase(BaseModel):
     rarity: Optional[str] = None
     class_type: Optional[str] = None
     is_template_available: bool = False
+    template_filename: Optional[str] = None
 
 class Character(CharacterBase):
     id: int
