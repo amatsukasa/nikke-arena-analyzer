@@ -2634,6 +2634,58 @@ def resolve_cross_tournament_ids(db, tournament_ids, play_server, championship_i
     return [tid for tid in tournament_ids if tid in valid_ids]
 
 
+
+def _merge_team_position_and_adopted(merged_teams, team, cid):
+    if cid not in merged_teams:
+        merged_teams[cid] = {
+            **team,
+            "count": 0,
+            "win_count": 0,
+            "total_matches": 0,
+            "adopted_players": [],
+            "position_stats": [
+                {"position": p, "count": 0, "pct": 0.0, "wins": 0, "total": 0, "win_rate": None}
+                for p in range(1, 6)
+            ],
+            "_seen_adopted": set()
+        }
+    target = merged_teams[cid]
+    target["count"] += team.get("count", 0)
+    target["win_count"] += team.get("win_count", 0)
+    target["total_matches"] += team.get("total_matches", 0)
+    
+    cur_score = RESULT_SCORES.get(target.get("best_result", "不明"), 999)
+    new_score = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
+    if new_score < cur_score:
+        target["best_result"] = team.get("best_result")
+        
+    for p in (team.get("adopted_players") or []):
+        if not isinstance(p, dict): continue
+        pkey = (p.get("player_name"), p.get("tournament_id"), p.get("result"), p.get("seed"))
+        if pkey not in target["_seen_adopted"]:
+            target["_seen_adopted"].add(pkey)
+            target["adopted_players"].append(p)
+            
+    pos_list = target["position_stats"]
+    for ps in (team.get("position_stats") or []):
+        if not isinstance(ps, dict): continue
+        pos = ps.get("position")
+        if isinstance(pos, int) and 1 <= pos <= 5:
+            cur_ps = pos_list[pos - 1]
+            cur_ps["count"] += ps.get("count", 0)
+            cur_ps["wins"] += ps.get("wins", 0)
+            cur_ps["total"] += ps.get("total", 0)
+
+def _finalize_team_position_and_adopted(team):
+    t_count = team.get("count", 0)
+    for ps in team.get("position_stats", []):
+        ps["pct"] = round(ps["count"] / t_count * 100, 1) if t_count > 0 else 0.0
+        ps["win_rate"] = round(ps["wins"] / ps["total"] * 100, 1) if ps.get("total", 0) > 0 else None
+    if "_seen_adopted" in team:
+        del team["_seen_adopted"]
+    if "adopted_players" in team and isinstance(team["adopted_players"], list):
+        team["adopted_players"].sort(key=lambda x: RESULT_SCORES.get(x.get("result"), 64))
+
 class CrossTournamentRequest(PydanticBaseModel):
     """大会横断検索リクエスト"""
     tournament_ids: List[int] = []
@@ -2717,16 +2769,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             for team in (snap.team_usage or []):
                 cid = team.get("canonical_id")
                 if not cid: continue
-                if cid not in merged_teams:
-                    merged_teams[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
-                merged_teams[cid]["count"] += team.get("count", 0)
-                merged_teams[cid]["win_count"] += team.get("win_count", 0)
-                merged_teams[cid]["total_matches"] += team.get("total_matches", 0)
-                
-                cur_score = RESULT_SCORES.get(merged_teams[cid].get("best_result", "不明"), 999)
-                new_score = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
-                if new_score < cur_score:
-                    merged_teams[cid]["best_result"] = team.get("best_result")
+                _merge_team_position_and_adopted(merged_teams, team, cid)
 
         # Recalculate rates for chars
         char_list = []
@@ -2744,6 +2787,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             t = team["total_matches"]
             w = team["win_count"]
             team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            _finalize_team_position_and_adopted(team)
             team_list.append(team)
         team_list.sort(key=lambda x: x["count"], reverse=True)
 
@@ -3360,21 +3404,13 @@ def get_cross_dashboard_teams(
                 cid = team.get("canonical_id")
                 if not cid:
                     continue
-                if cid not in merged:
-                    merged[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
-                merged[cid]["count"]         += team.get("count", 0)
-                merged[cid]["win_count"]     += team.get("win_count", 0)
-                merged[cid]["total_matches"] += team.get("total_matches", 0)
-                # 最高成績を統合（スコアが小さいほど良い成績）
-                cur_score   = RESULT_SCORES.get(merged[cid].get("best_result", "不明"), 999)
-                new_score   = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
-                if new_score < cur_score:
-                    merged[cid]["best_result"] = team.get("best_result")
+                _merge_team_position_and_adopted(merged, team, cid)
         teams = []
         for team in merged.values():
             t = team["total_matches"]
             w = team["win_count"]
             team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            _finalize_team_position_and_adopted(team)
             teams.append(team)
     else:
         # スナップショットがない場合は既存集計にフォールバック
@@ -3481,16 +3517,7 @@ def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailReq
                 if int(req.character_id) not in t_cids_int: continue
                 cid = team.get("canonical_id")
                 if not cid: continue
-                if cid not in merged_teams:
-                    merged_teams[cid] = {**team, "count": 0, "win_count": 0, "total_matches": 0}
-                merged_teams[cid]["count"] += team.get("count", 0)
-                merged_teams[cid]["win_count"] += team.get("win_count", 0)
-                merged_teams[cid]["total_matches"] += team.get("total_matches", 0)
-                
-                cur_score = RESULT_SCORES.get(merged_teams[cid].get("best_result", "不明"), 999)
-                new_score = RESULT_SCORES.get(team.get("best_result", "不明"), 999)
-                if new_score < cur_score:
-                    merged_teams[cid]["best_result"] = team.get("best_result")
+                _merge_team_position_and_adopted(merged_teams, team, cid)
 
         char_list = []
         for char in merged_chars.values():
@@ -3525,6 +3552,7 @@ def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailReq
             t = team["total_matches"]
             w = team["win_count"]
             team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            _finalize_team_position_and_adopted(team)
             team_list.append(team)
         team_list.sort(key=lambda x: x["count"], reverse=True)
         

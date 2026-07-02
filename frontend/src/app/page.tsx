@@ -498,36 +498,61 @@ function DashboardContent() {
   };
 
   // Merge stats.team_usage and knownTeamsMap into a unified list of unique teams
+  // Prioritize stats.team_usage without double-counting position_stats
   const allAvailableTeams = (() => {
-    const list: any[] = [];
-    const seen = new Set<string>();
+    const map = new Map<string, any>();
     const sourceTeams = [
-      ...Object.values(knownTeamsMap),
-      ...(stats?.team_usage ?? [])
+      ...(stats?.team_usage ?? []),
+      ...Object.values(knownTeamsMap)
     ];
     sourceTeams.forEach((t: any) => {
       if (!t) return;
       const key = makeTeamKey(t.character_ids || t.characters?.map((c: any) => c.id) || t.canonical_id);
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        list.push({ ...t, teamKey: key });
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, { ...t, teamKey: key });
+      } else {
+        const existing = map.get(key);
+        // Merge adopted_players (union with deduplication)
+        const adoptedMap = new Map<string, any>();
+        (existing.adopted_players || []).forEach((p: any) => {
+          const pKey = `${p.player_name || ''}-${p.tournament_id || ''}-${p.result || ''}-${p.seed || ''}`;
+          adoptedMap.set(pKey, p);
+        });
+        (t.adopted_players || []).forEach((p: any) => {
+          const pKey = `${p.player_name || ''}-${p.tournament_id || ''}-${p.result || ''}-${p.seed || ''}`;
+          if (!adoptedMap.has(pKey)) {
+            adoptedMap.set(pKey, p);
+          }
+        });
+        const mergedAdopted = Array.from(adoptedMap.values());
+
+        // Do NOT add position_stats across duplicates. Keep existing position_stats from stats.team_usage or first seen.
+        // Also keep existing count, win_count, and total_matches from stats.team_usage.
+        const scores: Record<string, number> = { "優勝": 1, "準優勝": 2, "ベスト4": 3, "ベスト8": 4, "ベスト16": 5, "ベスト32": 6, "ベスト64": 7 };
+        const res1 = existing.best_result || "不明";
+        const res2 = t.best_result || "不明";
+        const bestRes = (scores[res1] || 99) <= (scores[res2] || 99) ? res1 : res2;
+
+        map.set(key, {
+          ...existing,
+          character_ids: existing.character_ids || t.character_ids,
+          characters: existing.characters || t.characters,
+          adopted_players: mergedAdopted,
+          best_result: bestRes !== "不明" ? bestRes : existing.best_result
+        });
       }
     });
-    return list;
+    return Array.from(map.values());
   })();
 
   const currentSelectedTeamData = (() => {
     const targetKey = makeTeamKey(selectedTeam || searchParams.get("teamKey") || searchParams.get("team"));
     if (!targetKey) return undefined;
-    const found = allAvailableTeams.find((team: any) => {
+    return allAvailableTeams.find((team: any) => {
       const ids = team.character_ids || team.characters?.map((c: any) => c.id) || [];
       return makeTeamKey(ids) === targetKey || makeTeamKey(team.canonical_id) === targetKey;
     });
-    if (found) {
-      console.log("[Cross-Tournament Matchup Tab] Selected canonical_id:", found.canonical_id);
-      console.log("[Cross-Tournament Matchup Tab] Displayed character_ids:", found.character_ids || found.characters?.map((c: any) => c.id));
-    }
-    return found;
   })();
 
   // --- Matchups logic ---
