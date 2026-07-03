@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import PaginatedTeamList from "../../../../components/PaginatedTeamList";
+import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
 import { getCharIconUrl } from "@/utils/charIcon";
 
 type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
@@ -604,95 +605,11 @@ export default function Dashboard() {
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
-            <section>
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                <Users className="text-blue-400" />
-                <span>キャラクター採用率ランキング</span>
-              </h2>
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-                {(() => {
-                  // 採用数でグループ化
-                  const grouped: { count: number; entries: any[] }[] = [];
-                  const sorted = [...stats.character_usage].sort((a: any, b: any) => b.count - a.count);
-                  sorted.forEach((entry: any) => {
-                    const last = grouped[grouped.length - 1];
-                    if (last && last.count === entry.count) {
-                      last.entries.push(entry);
-                    } else {
-                      grouped.push({ count: entry.count, entries: [entry] });
-                    }
-                  });
-
-                  return (
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                          <th className="p-4 font-medium text-center w-16">順位</th>
-                          <th className="p-4 font-medium text-center w-24">採用数</th>
-                          <th className="p-4 font-medium">キャラクター</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {grouped.map((group, gIdx) => {
-                          // 順位計算（同着を考慮）
-                          const rank = sorted.findIndex(e => e.count === group.count) + 1;
-                          return (
-                            <tr key={gIdx} className="hover:bg-white/5 transition-colors">
-                              <td className="p-4 text-center align-top">
-                                <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                                  rank === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                                  rank === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                                  rank === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                                  "text-slate-500"
-                                }`}>
-                                  {rank}
-                                </span>
-                              </td>
-                              <td className="p-4 text-center align-top">
-                                <span className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                                  {group.count}
-                                </span>
-                              </td>
-                              <td className="p-4">
-                                <div className="flex flex-wrap gap-2">
-                                  {group.entries.map((entry: any) => {
-                                    const c = allCharacters.find(char => char.id === entry.id) || entry;
-                                    return (
-                                      <button
-                                        key={c.id}
-                                        onClick={() => setSelectedCharId(c.id)}
-                                        title={c.name}
-                                        className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 px-2 py-1.5 rounded-lg ring-1 ring-white/10 hover:ring-blue-500/50 transition-all group/char"
-                                      >
-                                        <div className="w-8 h-8 rounded-md bg-slate-700 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0 group-hover/char:ring-blue-500 transition-all">
-                                          {getCharIconUrl(c) ? (
-                                            <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                                          ) : (
-                                            <span className="text-[8px] text-slate-500 font-bold">{c.name.slice(0,2)}</span>
-                                          )}
-                                        </div>
-                                        <span className="text-xs font-bold text-slate-300 group-hover/char:text-blue-400 transition-colors whitespace-nowrap">
-                                          {c.name}
-                                        </span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {stats.character_usage.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="p-8 text-center text-slate-500">データがありません</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  );
-                })()}
-              </div>
-            </section>
+            <CharacterUsageByResultRanking
+              stats={stats}
+              allCharacters={allCharacters}
+              onSelectCharacter={setSelectedCharId}
+            />
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-emerald-400" />

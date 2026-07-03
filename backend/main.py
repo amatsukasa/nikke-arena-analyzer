@@ -2593,6 +2593,7 @@ def _compute_dashboard_stats(
     return {
         "character_usage": char_list,
         "character_stats": char_list,
+        "character_usage_by_result": _compute_character_usage_by_result([tournament_id], db),
         "team_usage": team_list,
         "total_players": len(player_ids),
         "total_matches": len(matches)
@@ -2793,6 +2794,184 @@ def _finalize_team_position_and_adopted(team):
     if "adopted_players" in team and isinstance(team["adopted_players"], list):
         team["adopted_players"].sort(key=lambda x: RESULT_SCORES.get(x.get("result"), 64))
 
+
+CHARACTER_USAGE_RESULT_FILTERS = (
+    ("all", "全体", None),
+    ("best16", "ベスト16以上", 16),
+    ("best8", "ベスト8以上", 8),
+    ("best4", "ベスト4以上", 4),
+    ("runner_up", "準優勝以上", 2),
+    ("champion", "優勝", 1),
+)
+
+
+def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
+    """Aggregate unique character adoption per player, grouped by final result."""
+    empty_result = {
+        key: {"label": label, "denominator": 0, "characters": []}
+        for key, label, _ in CHARACTER_USAGE_RESULT_FILTERS
+    }
+    if not tournament_ids:
+        return empty_result
+
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id.in_(tournament_ids)
+    ).all()
+    if not players:
+        return empty_result
+
+    player_ids = [player.id for player in players]
+    matches = db.query(models.Match).filter(
+        models.Match.tournament_id.in_(tournament_ids)
+    ).all()
+    deck_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id.in_(player_ids)
+    ).all()
+    deck_set_ids = [deck_set.id for deck_set in deck_sets]
+    deck_teams = db.query(models.DeckTeam).filter(
+        models.DeckTeam.deck_set_id.in_(deck_set_ids)
+    ).all() if deck_set_ids else []
+
+    players_by_tournament = {}
+    for player in players:
+        players_by_tournament.setdefault(player.tournament_id, []).append(player)
+
+    matches_by_tournament = {}
+    for match in matches:
+        matches_by_tournament.setdefault(match.tournament_id, []).append(match)
+
+    result_score_by_player = {}
+    for tournament_id, tournament_players in players_by_tournament.items():
+        seed_to_player = {
+            player.seed_number: player
+            for player in tournament_players
+            if player.seed_number is not None
+        }
+        winner_by_pair = {}
+        for match in matches_by_tournament.get(tournament_id, []):
+            if match.winner_id and match.attacker_id and match.defender_id:
+                winner_by_pair[frozenset((match.attacker_id, match.defender_id))] = match.winner_id
+
+        def winner_between(player_id_1, player_id_2):
+            if not player_id_1 or not player_id_2:
+                return None
+            return winner_by_pair.get(frozenset((player_id_1, player_id_2)))
+
+        group_rounds = []
+        for group_index in range(8):
+            base_seed = group_index * 8
+            quarterfinal_winners = []
+            for pair_index in range(4):
+                player_1 = seed_to_player.get(base_seed + pair_index * 2 + 1)
+                player_2 = seed_to_player.get(base_seed + pair_index * 2 + 2)
+                quarterfinal_winners.append(winner_between(
+                    player_1.id if player_1 else None,
+                    player_2.id if player_2 else None,
+                ))
+
+            semifinal_winners = [
+                winner_between(quarterfinal_winners[0], quarterfinal_winners[1]),
+                winner_between(quarterfinal_winners[2], quarterfinal_winners[3]),
+            ]
+            group_winner = winner_between(semifinal_winners[0], semifinal_winners[1])
+            group_rounds.append((quarterfinal_winners, semifinal_winners, group_winner))
+
+        group_winners = [round_data[2] for round_data in group_rounds]
+        best4_players = [
+            winner_between(group_winners[0], group_winners[1]),
+            winner_between(group_winners[2], group_winners[3]),
+            winner_between(group_winners[4], group_winners[5]),
+            winner_between(group_winners[6], group_winners[7]),
+        ]
+        finalists = [
+            winner_between(best4_players[0], best4_players[1]),
+            winner_between(best4_players[2], best4_players[3]),
+        ]
+        champion = winner_between(finalists[0], finalists[1])
+
+        for player in tournament_players:
+            score = 64
+            if player.seed_number is not None:
+                group_index = (player.seed_number - 1) // 8
+                if 0 <= group_index < len(group_rounds):
+                    quarterfinal_winners, semifinal_winners, group_winner = group_rounds[group_index]
+                    if player.id in quarterfinal_winners:
+                        score = 32
+                    if player.id in semifinal_winners:
+                        score = 16
+                    if player.id == group_winner:
+                        score = 8
+                    if player.id in best4_players:
+                        score = 4
+                    if player.id in finalists:
+                        score = 2
+                    if player.id == champion:
+                        score = 1
+            result_score_by_player[player.id] = score
+
+    deck_set_to_player = {deck_set.id: deck_set.player_id for deck_set in deck_sets}
+    characters_by_player = {player_id: set() for player_id in player_ids}
+    used_character_ids = set()
+    for team in deck_teams:
+        player_id = deck_set_to_player.get(team.deck_set_id)
+        if not player_id:
+            continue
+        for character_id in (
+            team.char1_id,
+            team.char2_id,
+            team.char3_id,
+            team.char4_id,
+            team.char5_id,
+        ):
+            if character_id is not None and character_id != EMPTY_SLOT_CHARACTER_ID:
+                characters_by_player[player_id].add(character_id)
+                used_character_ids.add(character_id)
+
+    characters = db.query(models.Character).filter(
+        models.Character.id.in_(used_character_ids)
+    ).all() if used_character_ids else []
+    character_by_id = {character.id: character for character in characters}
+
+    result = {}
+    all_player_ids = set(player_ids)
+    for key, label, maximum_score in CHARACTER_USAGE_RESULT_FILTERS:
+        eligible_player_ids = (
+            all_player_ids
+            if maximum_score is None
+            else {
+                player_id
+                for player_id, score in result_score_by_player.items()
+                if score <= maximum_score
+            }
+        )
+        denominator = len(eligible_player_ids)
+        adoption_counts = {}
+        for player_id in eligible_player_ids:
+            for character_id in characters_by_player.get(player_id, set()):
+                adoption_counts[character_id] = adoption_counts.get(character_id, 0) + 1
+
+        character_rows = []
+        for character_id, count in adoption_counts.items():
+            character = character_by_id.get(character_id)
+            if not character:
+                continue
+            character_rows.append({
+                "character_id": character_id,
+                "id": character_id,
+                "name": character.name,
+                "count": count,
+                "usage_rate": round(count / denominator * 100, 1) if denominator else 0.0,
+            })
+        character_rows.sort(key=lambda row: (-row["count"], row["character_id"]))
+        result[key] = {
+            "label": label,
+            "denominator": denominator,
+            "characters": character_rows,
+        }
+
+    return result
+
+
 class CrossTournamentRequest(PydanticBaseModel):
     """大会横断検索リクエスト"""
     tournament_ids: List[int] = []
@@ -2903,6 +3082,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             "total_matches": total_matches,
             "character_usage": char_list,
             "character_stats": char_list,
+            "character_usage_by_result": _compute_character_usage_by_result(target_ids, db),
             "team_usage": team_list[:50],
             "matchups": [] # Usually cross matchups are fetched via their own endpoint
         }
@@ -3346,6 +3526,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     return {
         "character_usage": char_list,
         "character_stats": char_list,
+        "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db),
         "team_usage": team_list,
         "total_players": len(player_ids),
         "total_matches": len(matches)
