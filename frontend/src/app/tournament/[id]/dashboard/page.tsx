@@ -2,9 +2,12 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
+import { ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import PaginatedTeamList from "../../../../components/PaginatedTeamList";
+import SharedTeamDisplay from "../../../../components/TeamDisplay";
+import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
+import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import { getCharIconUrl } from "@/utils/charIcon";
 
 type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
@@ -45,6 +48,8 @@ export default function Dashboard() {
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
+  const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
+  const [isAdoptedPlayersOpen, setIsAdoptedPlayersOpen] = useState(true);
 
   // For search
   const [searchChars, setSearchChars] = useState<number[]>([]);
@@ -289,8 +294,44 @@ export default function Dashboard() {
     </div>
   );
 
+  const collectionLabel = (value: string | null | undefined) => {
+    const labels: Record<string, string> = {
+      none: "なし",
+      r_0_14: "R 0-14",
+      r_15: "R 15",
+      sr_0_14: "SR 0-14",
+      sr_15: "SR 15",
+      treasure_0_14: "宝物 0-14",
+      treasure_15: "宝物 15",
+      unknown: "判定不能",
+    };
+    return value ? labels[value] || "判定不能" : "未登録";
+  };
+
+  const collectionBadgeUrl = (value: string | null | undefined) => {
+    const badgeFiles: Record<string, string> = {
+      none: "none.png",
+      r_0_14: "r-0-14.png",
+      r_15: "r-15.png",
+      sr_0_14: "sr-0-14.png",
+      sr_15: "sr-15.png",
+      treasure_0_14: "treasure-0-14.png",
+      treasure_15: "treasure-15.png",
+      unknown: "unknown.png",
+    };
+    return `/collection-badges/${value ? badgeFiles[value] || "unknown.png" : "unregistered.png"}`;
+  };
+
   // Helper to render a team
-  const TeamDisplay = ({ charIds, allCharacters: charsParam }: { charIds: number[], allCharacters?: any[] }) => {
+  const TeamDisplay = ({
+    charIds,
+    allCharacters: charsParam,
+    collectionLevels,
+  }: {
+    charIds: number[],
+    allCharacters?: any[],
+    collectionLevels?: Array<string | null>,
+  }) => {
     const chars = charsParam || allCharacters;
     const displayChars = charIds.map(cid => chars.find((c: any) => c.id === cid) || { id: cid, name: String(cid), is_template_available: cid !== 9999 });
     return (
@@ -308,11 +349,19 @@ export default function Dashboard() {
           }
           return (
             <div key={i} className="flex flex-col items-center space-y-1 cursor-pointer group" onClick={(e) => { e.stopPropagation(); setSelectedCharId(c.id); }}>
-              <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
+              <div className="relative w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                 {getCharIconUrl(c) ? (
                   <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
+                )}
+                {collectionLevels && (
+                  <img
+                    src={collectionBadgeUrl(collectionLevels[i])}
+                    alt={`コレクション: ${collectionLabel(collectionLevels[i])}`}
+                    title={`コレクション: ${collectionLabel(collectionLevels[i])}`}
+                    className="absolute left-0 top-1/2 z-10 h-4 w-4 -translate-y-1/2 drop-shadow-md"
+                  />
                 )}
               </div>
               <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={c?.name || "不明"}>{c?.name || "不明"}</span>
@@ -339,6 +388,12 @@ export default function Dashboard() {
     matchupDetails.push({ 
       opponent: isAttacker ? m.defender_team : m.attacker_team, 
       opponentCanonical: isAttacker ? m.canonical_defender : m.canonical_attacker,
+      attackerTeam: m.attacker_team,
+      defenderTeam: m.defender_team,
+      attackerCollections: m.attacker_collections,
+      defenderCollections: m.defender_collections,
+      canonicalAttacker: m.canonical_attacker,
+      canonicalDefender: m.canonical_defender,
       isAttacker, 
       isWin, 
       stage: m.stage,
@@ -568,7 +623,12 @@ export default function Dashboard() {
                                      <span className="text-[10px] text-slate-500 font-bold tracking-wider">TEAM</span>
                                      <span className="text-xl font-black text-slate-200">{deck.team_number}</span>
                                   </div>
-                                  <TeamDisplay charIds={deck.character_ids} allCharacters={allCharacters} />
+                                  <SharedTeamDisplay
+                                    charIds={deck.character_ids}
+                                    allCharacters={allCharacters}
+                                    collectionLevels={deck.collection_levels}
+                                    onCharacterClick={setSelectedCharId}
+                                  />
                                </div>
                                
                                <div className="flex flex-col items-end">
@@ -604,6 +664,12 @@ export default function Dashboard() {
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
+            <CharacterUsageByResultRanking
+              stats={stats}
+              allCharacters={allCharacters}
+              onSelectCharacter={setSelectedCharId}
+            />
+            {false && (
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-blue-400" />
@@ -693,6 +759,7 @@ export default function Dashboard() {
                 })()}
               </div>
             </section>
+            )}
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-emerald-400" />
@@ -1217,11 +1284,20 @@ export default function Dashboard() {
               if (positionStats.length === 0) return null;
               return (
                 <div className="space-y-3">
-                  <h3 className="font-bold text-white flex items-center space-x-2">
-                    <span className="text-lg">📊</span>
-                    <span>編成の配置ポジション分析</span>
-                  </h3>
-                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
+                  <button
+                    type="button"
+                    onClick={() => setIsPositionStatsOpen(!isPositionStatsOpen)}
+                    className="flex w-full items-center justify-between rounded-lg p-2 font-bold text-white transition-colors hover:bg-white/5"
+                    aria-expanded={isPositionStatsOpen}
+                  >
+                    <span className="flex items-center space-x-2">
+                      <span className="text-lg">📊</span>
+                      <span>編成の配置ポジション分析</span>
+                    </span>
+                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isPositionStatsOpen ? "" : "-rotate-90"}`} />
+                  </button>
+                  {isPositionStatsOpen && (
+                    <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                     <table className="w-full text-center">
                       <thead>
                         <tr className="border-b border-white/10 bg-slate-900/50">
@@ -1279,6 +1355,7 @@ export default function Dashboard() {
                       </tbody>
                     </table>
                   </div>
+                  )}
                 </div>
               );
             })()}
@@ -1299,11 +1376,20 @@ export default function Dashboard() {
               };
               return (
                 <div className="mt-6 bg-slate-800/30 rounded-2xl ring-1 ring-white/5 p-5">
-                  <h3 className="font-bold text-white mb-4 flex items-center space-x-2">
-                    <UserIcon size={18} className="text-purple-400" />
-                    <span>この編成を採用した指揮官</span>
-                  </h3>
-                  <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAdoptedPlayersOpen(!isAdoptedPlayersOpen)}
+                    className="mb-2 flex w-full items-center justify-between rounded-lg p-2 font-bold text-white transition-colors hover:bg-white/5"
+                    aria-expanded={isAdoptedPlayersOpen}
+                  >
+                    <span className="flex items-center space-x-2">
+                      <UserIcon size={18} className="text-purple-400" />
+                      <span>この編成を採用した指揮官</span>
+                    </span>
+                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isAdoptedPlayersOpen ? "" : "-rotate-90"}`} />
+                  </button>
+                  {isAdoptedPlayersOpen && (
+                    <div className="space-y-2">
                     {adoptedPlayers.map((ap: any, idx: number) => (
                       <div key={idx} className="flex items-center justify-between bg-slate-900/50 px-4 py-3 rounded-xl ring-1 ring-white/5">
                         <div className="flex items-center space-x-3">
@@ -1318,11 +1404,21 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               );
             })()}
 
             {selectedTeam && matchupDetails.length > 0 && (
+              <TeamMatchupHistory
+                matchupDetails={matchupDetails}
+                allCharacters={allCharacters}
+                onSelectCharacter={setSelectedCharId}
+                onSelectOpponent={handleTeamClick}
+              />
+            )}
+
+            {false && selectedTeam && matchupDetails.length > 0 && (
               <div className="space-y-4 mt-8">
                 <h3 className="font-bold text-white mb-4">この編成の対戦履歴</h3>
                 <div className="space-y-2">
@@ -1340,26 +1436,53 @@ export default function Dashboard() {
                           {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
                         </span>
                       </div>
-                      {/* メイン行: ステージ・攻防・相手編成・勝敗 */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex flex-col items-start space-y-1">
-                            <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
-                              m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" : 
-                              m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
-                              "bg-slate-700/50 text-slate-400 ring-slate-600/50"
-                            }`}>
-                              {m.stage || "不明"}
-                            </div>
-                            <div className={`px-2 py-1 rounded text-xs font-bold w-fit ${m.isAttacker ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
-                              {m.isAttacker ? '攻撃' : '防衛'}
-                            </div>
+                      {/* メイン行: 攻撃側を左、防衛側を右に固定 */}
+                      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="flex shrink-0 flex-col items-start space-y-1">
+                          <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
+                            m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" :
+                            m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                            "bg-slate-700/50 text-slate-400 ring-slate-600/50"
+                          }`}>
+                            {m.stage || "不明"}
                           </div>
-                          <div className="text-slate-400 text-sm mr-2">VS</div>
-                          <TeamDisplay charIds={m.opponent} allCharacters={allCharacters} />
                         </div>
-                        <div className={`font-black text-lg ${m.isWin ? 'text-emerald-400' : 'text-slate-600'}`}>
-                          {m.isWin ? 'WIN' : 'LOSE'}
+                        <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:justify-center">
+                            <div className={`rounded-xl p-2 ring-1 ${m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
+                            <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+                              <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
+                              {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                              {m.isAttacker && (
+                                <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
+                                  {m.isWin ? "WIN" : "LOSE"}
+                                </span>
+                              )}
+                            </div>
+                            <SharedTeamDisplay
+                              charIds={m.attackerTeam}
+                              allCharacters={allCharacters}
+                              collectionLevels={m.attackerCollections}
+                              onCharacterClick={setSelectedCharId}
+                            />
+                          </div>
+                          <div className="shrink-0 text-sm font-black text-slate-500">VS</div>
+                          <div className={`rounded-xl p-2 ring-1 ${!m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
+                            <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+                              <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
+                              {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                              {!m.isAttacker && (
+                                <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
+                                  {m.isWin ? "WIN" : "LOSE"}
+                                </span>
+                              )}
+                            </div>
+                            <SharedTeamDisplay
+                              charIds={m.defenderTeam}
+                              allCharacters={allCharacters}
+                              collectionLevels={m.defenderCollections}
+                              onCharacterClick={setSelectedCharId}
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1381,8 +1504,82 @@ export default function Dashboard() {
                <p className="text-slate-500 mt-2 text-sm italic">※ 編成をタップすると詳細分析へ遷移します</p>
             </div>
 
-              {/* PC表示: テーブル */}
-              <div className="hidden md:block overflow-x-auto rounded-2xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
+              {/* 画面幅に合わせてPCは2列、スマホは1列で表示 */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {best8Data.map((data, idx) => (
+                  <section key={data.player.id || idx} className="rounded-2xl bg-slate-800/50 p-3 ring-1 ring-white/10 sm:p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-white/5 pb-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="shrink-0 text-xs font-bold text-slate-500">#{idx + 1}</span>
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-900 ring-1 ring-white/20">
+                          {data.player.icon_url ? (
+                            <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <UserIcon size={20} className="text-slate-600" />
+                          )}
+                        </div>
+                        <span className="truncate text-sm font-black text-white sm:text-base">{data.player.name}</span>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black ring-1 ${
+                        data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
+                        data.result === "準優勝" ? "bg-slate-400/20 text-slate-300 ring-slate-400/30" :
+                        data.result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                        "bg-slate-800 text-slate-500 ring-white/5"
+                      }`}>
+                        {data.result}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {[1, 2, 3, 4, 5].map(teamNum => {
+                        const deck = data.decks.find((d: any) => d.team_number === teamNum);
+                        return (
+                          <div
+                            key={teamNum}
+                            onClick={deck ? () => handleTeamClick(deck.canonical_id) : undefined}
+                            className={`flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 ring-1 ${
+                              deck
+                                ? "cursor-pointer bg-slate-900/50 ring-white/5 transition-colors hover:bg-slate-800/80 hover:ring-indigo-500/30"
+                                : "bg-slate-900/20 text-slate-700 ring-white/[0.03]"
+                            }`}
+                          >
+                            <span className="w-12 shrink-0 text-[10px] font-black text-slate-400">TEAM {teamNum}</span>
+                            <div className="min-w-0 flex-1 overflow-x-auto py-1">
+                              {deck ? (
+                                <SharedTeamDisplay
+                                  charIds={deck.character_ids}
+                                  allCharacters={allCharacters}
+                                  collectionLevels={deck.collection_levels}
+                                  onCharacterClick={setSelectedCharId}
+                                />
+                              ) : (
+                                <span className="text-xs italic">未登録</span>
+                              )}
+                            </div>
+                            {deck && (
+                              <div className="ml-auto flex w-20 shrink-0 flex-col items-end border-l border-white/10 pl-2 text-right">
+                                <div className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-bold">
+                                  <span className="text-emerald-400">{deck.wins}勝</span>
+                                  <span className="text-slate-500">{deck.losses}敗</span>
+                                </div>
+                                <span className={`mt-0.5 text-sm font-black ${
+                                  deck.win_rate >= 50 ? "text-emerald-400" : "text-orange-400"
+                                }`}>
+                                  {deck.win_rate}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+
+              {false && (<>
+              {/* 旧レイアウト（移行確認後に削除予定） */}
+              <div className="hidden overflow-x-auto rounded-2xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 <table className="w-full text-left border-collapse min-w-[1200px]">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-[10px] uppercase tracking-wider border-b border-white/10">
@@ -1449,7 +1646,12 @@ export default function Dashboard() {
                                   onClick={() => handleTeamClick(deck.canonical_id)}
                                   className="hover:bg-slate-800/50 p-2 rounded-xl transition-all cursor-pointer ring-1 ring-transparent hover:ring-indigo-500/30 hover:shadow-lg group flex justify-center"
                                 >
-                                  <TeamDisplay charIds={deck.character_ids} allCharacters={allCharacters} />
+                                  <SharedTeamDisplay
+                                    charIds={deck.character_ids}
+                                    allCharacters={allCharacters}
+                                    collectionLevels={deck.collection_levels}
+                                    onCharacterClick={setSelectedCharId}
+                                  />
                                 </div>
                               ) : (
                                 <div className="flex items-center justify-center h-16 text-slate-700 italic text-xs">
@@ -1466,7 +1668,7 @@ export default function Dashboard() {
               </div>
 
               {/* スマホ表示: カード型 */}
-              <div className="md:hidden space-y-4">
+              <div className="hidden space-y-4">
                 {best8Data.map((data, idx) => (
                   <div key={idx} className="bg-slate-800/50 rounded-2xl ring-1 ring-white/10 p-4 space-y-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
@@ -1503,7 +1705,12 @@ export default function Dashboard() {
                           >
                             <span className="text-xs font-black text-slate-400 shrink-0 w-16">Team {teamNum}</span>
                             <div className="flex justify-center overflow-x-auto py-1">
-                              <TeamDisplay charIds={deck.character_ids} allCharacters={allCharacters} />
+                              <SharedTeamDisplay
+                                charIds={deck.character_ids}
+                                allCharacters={allCharacters}
+                                collectionLevels={deck.collection_levels}
+                                onCharacterClick={setSelectedCharId}
+                              />
                             </div>
                           </div>
                         );
@@ -1512,6 +1719,7 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+              </>)}
             </div>
         )}
 

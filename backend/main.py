@@ -121,6 +121,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 from fastapi.staticfiles import StaticFiles
 from services.image_processor import process_images
 from services.character_templates import find_character_template
+from services.collection_classifier import COLLECTION_VALUES
+from services.template_matcher import prepare_character_image
 from services.registration_email import (
     send_registration_approved,
     send_registration_request,
@@ -136,6 +138,14 @@ from services.upload_cleanup import (
     _is_within,
 )
 from fastapi.responses import FileResponse
+
+
+def get_team_collection_levels(team: models.DeckTeam) -> list[str | None]:
+    return [getattr(team, f"collection{slot}") for slot in range(1, 6)]
+
+
+def automatic_player_name(seed_number: int) -> str:
+    return f"Player {seed_number}"
 
 
 IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -170,7 +180,10 @@ class CachedStaticFiles(StaticFiles):
             response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
         else:
             path_str = str(full_path)
-            if "cropped" in path_str and "crop_" in path_str:
+            if (
+                ("cropped" in path_str and "crop_" in path_str)
+                or "player_icons" in path_str
+            ):
                 response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
             else:
                 response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
@@ -1432,7 +1445,25 @@ def get_player_details(
                 
     decks = []
     for team in deck_set.teams:
-        char_ids = [c for c in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id] if c]
+        raw_char_ids = [
+            team.char1_id,
+            team.char2_id,
+            team.char3_id,
+            team.char4_id,
+            team.char5_id,
+        ]
+        populated_slots = [
+            (character_id, collection_level)
+            for character_id, collection_level in zip(
+                raw_char_ids,
+                get_team_collection_levels(team),
+            )
+            if character_id
+        ]
+        char_ids = [character_id for character_id, _ in populated_slots]
+        collection_levels = [
+            collection_level for _, collection_level in populated_slots
+        ]
         stats = team_stats.get(team.team_number, {"wins": 0, "losses": 0})
         total = stats["wins"] + stats["losses"]
         win_rate = round((stats["wins"] / total * 100)) if total > 0 else 0
@@ -1442,6 +1473,7 @@ def get_player_details(
         decks.append({
             "team_number": team.team_number,
             "character_ids": char_ids,
+            "collection_levels": collection_levels,
             "canonical_id": canon_id,
             "wins": stats["wins"],
             "losses": stats["losses"],
@@ -1508,20 +1540,20 @@ async def update_player_info(
         models.Player.seed_number == seed_number
     ).first()
     
-    name = data.get("name")
     icon_url = data.get("icon_url")
     previous_icon_url = player.icon_url if player else None
+    player_name = automatic_player_name(seed_number)
     
     if not player:
         player = models.Player(
             tournament_id=tournament_id,
             seed_number=seed_number,
-            name=name or f"Player {seed_number}",
+            name=player_name,
             icon_url=icon_url
         )
         db.add(player)
     else:
-        if name: player.name = name
+        player.name = player_name
         if icon_url: player.icon_url = icon_url
     
     db.commit()
@@ -1545,7 +1577,6 @@ async def save_teams(
     try:
         seed_number = data.get("seed_number")
         teams = data.get("teams", [])
-        player_name = data.get("player_name")
         player_icon_url = data.get("player_icon_url")
         
         is_update = False  # 上書きフラグ
@@ -1563,7 +1594,7 @@ async def save_teams(
             player = models.Player(
                 tournament_id=tournament_id,
                 seed_number=seed_number,
-                name=player_name or f"Player {seed_number}",
+                name=automatic_player_name(seed_number),
                 icon_url=player_icon_url or None,
             )
             db.add(player)
@@ -1572,8 +1603,7 @@ async def save_teams(
             print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
         else:
             # 既存 Player 更新
-            if player_name:
-                player.name = player_name
+            player.name = automatic_player_name(seed_number)
             # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
             # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
             if player_icon_url:
@@ -1651,6 +1681,16 @@ async def save_teams(
                         char_ids.append(None)
             # Pad to 5
             char_ids = (char_ids + [None]*5)[:5]
+            collection_levels = []
+            for character_id, character in zip(char_ids, chars):
+                raw_collection = character.get("collection_level")
+                if character_id == 9999:
+                    collection_levels.append(None)
+                elif raw_collection in COLLECTION_VALUES:
+                    collection_levels.append(raw_collection)
+                else:
+                    collection_levels.append(None)
+            collection_levels = (collection_levels + [None] * 5)[:5]
             
             deck_team = models.DeckTeam(
                 deck_set_id=deck_set.id,
@@ -1659,7 +1699,12 @@ async def save_teams(
                 char2_id=char_ids[1],
                 char3_id=char_ids[2],
                 char4_id=char_ids[3],
-                char5_id=char_ids[4]
+                char5_id=char_ids[4],
+                collection1=collection_levels[0],
+                collection2=collection_levels[1],
+                collection3=collection_levels[2],
+                collection4=collection_levels[3],
+                collection5=collection_levels[4],
             )
             db.add(deck_team)
             
@@ -1679,16 +1724,20 @@ async def save_teams(
                             f for f in os.listdir(template_dir)
                             if f.startswith(f"char_{c_id}_") or f == f"char_{c_id}.png"
                         ])
-                        # 重複チェック: 平均絶対差分で類似度を計算
-                        new_img = _cv2.imread(local_path, _cv2.IMREAD_GRAYSCALE)
+                        # コレクション領域を除外して、キャラクター部分だけで重複判定する。
+                        new_img = _cv2.imread(local_path)
+                        if new_img is not None:
+                            new_img = prepare_character_image(new_img)
                         is_duplicate = False
+                        saved_template_filename = existing[0] if existing else None
                         if new_img is not None:
                             for ef in existing:
                                 ex_path = os.path.join(template_dir, ef)
-                                ex_img = _cv2.imread(ex_path, _cv2.IMREAD_GRAYSCALE)
+                                ex_img = _cv2.imread(ex_path)
                                 if ex_img is None:
                                     continue
                                 try:
+                                    ex_img = prepare_character_image(ex_img)
                                     h, w = new_img.shape[:2]
                                     ex_resized = _cv2.resize(ex_img, (w, h))
                                     diff = _cv2.absdiff(new_img, ex_resized)
@@ -1702,6 +1751,7 @@ async def save_teams(
                             next_num = len(existing) + 1
                             template_path = os.path.join(template_dir, f"char_{c_id}_{next_num:03d}.png")
                             shutil.copy(local_path, template_path)
+                            saved_template_filename = os.path.basename(template_path)
                             templates_added += 1
                             print(f"[Template] 追加: {template_path}（累計 {next_num} 枚）")
                         else:
@@ -1710,8 +1760,11 @@ async def save_teams(
                         char_db = db.query(models.Character).filter(models.Character.id == c_id).first()
                         if char_db:
                             char_db.is_template_available = True
-                            if not getattr(char_db, "template_filename", None):
-                                char_db.template_filename = f"char_{c_id}_{next_num:03d}.png"
+                            if (
+                                not getattr(char_db, "template_filename", None)
+                                and saved_template_filename
+                            ):
+                                char_db.template_filename = saved_template_filename
 
         
         db.commit()
@@ -1765,11 +1818,13 @@ async def upload_player_icon(
         player = models.Player(
             tournament_id=tournament_id,
             seed_number=seed_number,
-            name=f"Player {seed_number}",
+            name=automatic_player_name(seed_number),
         )
         db.add(player)
         db.flush()  # player.id を確定させるため flush（commit 前）
         print(f"[PlayerIcon] Player 自動作成: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+    else:
+        player.name = automatic_player_name(seed_number)
 
     # 永続保存先ディレクトリを作成
     icon_dir = PLAYER_ICONS_DIR / f"tournament_{tournament_id}"
@@ -2593,6 +2648,7 @@ def _compute_dashboard_stats(
     return {
         "character_usage": char_list,
         "character_stats": char_list,
+        "character_usage_by_result": _compute_character_usage_by_result([tournament_id], db),
         "team_usage": team_list,
         "total_players": len(player_ids),
         "total_matches": len(matches)
@@ -2633,8 +2689,26 @@ def get_dashboard_matchups(
             d_team = defender_teams.get(rn)
             
             if a_team and d_team:
-                a_chars = [c for c in [a_team.char1_id, a_team.char2_id, a_team.char3_id, a_team.char4_id, a_team.char5_id] if c is not None]
-                d_chars = [c for c in [d_team.char1_id, d_team.char2_id, d_team.char3_id, d_team.char4_id, d_team.char5_id] if c is not None]
+                a_slots = [
+                    (character_id, collection_level)
+                    for character_id, collection_level in zip(
+                        [a_team.char1_id, a_team.char2_id, a_team.char3_id, a_team.char4_id, a_team.char5_id],
+                        get_team_collection_levels(a_team),
+                    )
+                    if character_id is not None
+                ]
+                d_slots = [
+                    (character_id, collection_level)
+                    for character_id, collection_level in zip(
+                        [d_team.char1_id, d_team.char2_id, d_team.char3_id, d_team.char4_id, d_team.char5_id],
+                        get_team_collection_levels(d_team),
+                    )
+                    if character_id is not None
+                ]
+                a_chars = [character_id for character_id, _ in a_slots]
+                d_chars = [character_id for character_id, _ in d_slots]
+                a_collections = [collection_level for _, collection_level in a_slots]
+                d_collections = [collection_level for _, collection_level in d_slots]
                 
                 a_sorted = tuple(sorted(a_chars))
                 d_sorted = tuple(sorted(d_chars))
@@ -2648,6 +2722,8 @@ def get_dashboard_matchups(
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),
+                        "attacker_collections": a_collections,
+                        "defender_collections": d_collections,
                         "canonical_attacker": ",".join(map(str, a_sorted)),
                         "canonical_defender": ",".join(map(str, d_sorted)),
                         "winner_team": list(a_chars) if winner_is_attacker else list(d_chars),
@@ -2793,6 +2869,206 @@ def _finalize_team_position_and_adopted(team):
     if "adopted_players" in team and isinstance(team["adopted_players"], list):
         team["adopted_players"].sort(key=lambda x: RESULT_SCORES.get(x.get("result"), 64))
 
+
+CHARACTER_USAGE_RESULT_FILTERS = (
+    ("all", "全体", None),
+    ("best16", "ベスト16以上", 16),
+    ("best8", "ベスト8以上", 8),
+    ("best4", "ベスト4以上", 4),
+    ("runner_up", "準優勝以上", 2),
+    ("champion", "優勝", 1),
+)
+
+
+def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
+    """最終成績の条件ごとに、各選手が採用したキャラクターを集計する。"""
+    empty_result = {
+        key: {"label": label, "denominator": 0, "characters": []}
+        for key, label, _ in CHARACTER_USAGE_RESULT_FILTERS
+    }
+    if not tournament_ids:
+        return empty_result
+
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id.in_(tournament_ids)
+    ).all()
+    if not players:
+        return empty_result
+
+    player_ids = [player.id for player in players]
+    matches = db.query(models.Match).filter(
+        models.Match.tournament_id.in_(tournament_ids)
+    ).all()
+    deck_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id.in_(player_ids)
+    ).all()
+    deck_set_ids = [deck_set.id for deck_set in deck_sets]
+    deck_teams = (
+        db.query(models.DeckTeam).filter(
+            models.DeckTeam.deck_set_id.in_(deck_set_ids)
+        ).all()
+        if deck_set_ids
+        else []
+    )
+
+    players_by_tournament = {}
+    for player in players:
+        players_by_tournament.setdefault(player.tournament_id, []).append(player)
+    matches_by_tournament = {}
+    for match in matches:
+        matches_by_tournament.setdefault(match.tournament_id, []).append(match)
+
+    result_score_by_player = {}
+    for tournament_id, tournament_players in players_by_tournament.items():
+        seed_to_player = {
+            player.seed_number: player
+            for player in tournament_players
+            if player.seed_number is not None
+        }
+        winner_by_pair = {}
+        for match in matches_by_tournament.get(tournament_id, []):
+            if match.winner_id and match.attacker_id and match.defender_id:
+                winner_by_pair[
+                    frozenset((match.attacker_id, match.defender_id))
+                ] = match.winner_id
+
+        def winner_between(player_id_1, player_id_2):
+            if not player_id_1 or not player_id_2:
+                return None
+            return winner_by_pair.get(frozenset((player_id_1, player_id_2)))
+
+        group_rounds = []
+        for group_index in range(8):
+            base_seed = group_index * 8
+            quarterfinal_winners = []
+            for pair_index in range(4):
+                player_1 = seed_to_player.get(base_seed + pair_index * 2 + 1)
+                player_2 = seed_to_player.get(base_seed + pair_index * 2 + 2)
+                quarterfinal_winners.append(winner_between(
+                    player_1.id if player_1 else None,
+                    player_2.id if player_2 else None,
+                ))
+            semifinal_winners = [
+                winner_between(quarterfinal_winners[0], quarterfinal_winners[1]),
+                winner_between(quarterfinal_winners[2], quarterfinal_winners[3]),
+            ]
+            group_winner = winner_between(semifinal_winners[0], semifinal_winners[1])
+            group_rounds.append((quarterfinal_winners, semifinal_winners, group_winner))
+
+        group_winners = [round_data[2] for round_data in group_rounds]
+        best4_players = [
+            winner_between(group_winners[0], group_winners[1]),
+            winner_between(group_winners[2], group_winners[3]),
+            winner_between(group_winners[4], group_winners[5]),
+            winner_between(group_winners[6], group_winners[7]),
+        ]
+        finalists = [
+            winner_between(best4_players[0], best4_players[1]),
+            winner_between(best4_players[2], best4_players[3]),
+        ]
+        champion = winner_between(finalists[0], finalists[1])
+
+        for player in tournament_players:
+            score = 64
+            if player.seed_number is not None:
+                group_index = (player.seed_number - 1) // 8
+                if 0 <= group_index < len(group_rounds):
+                    quarterfinal_winners, semifinal_winners, group_winner = group_rounds[group_index]
+                    if player.id in quarterfinal_winners:
+                        score = 32
+                    if player.id in semifinal_winners:
+                        score = 16
+                    if player.id == group_winner:
+                        score = 8
+                    if player.id in best4_players:
+                        score = 4
+                    if player.id in finalists:
+                        score = 2
+                    if player.id == champion:
+                        score = 1
+            result_score_by_player[player.id] = score
+
+    deck_set_to_player = {
+        deck_set.id: deck_set.player_id for deck_set in deck_sets
+    }
+    characters_by_player = {player_id: set() for player_id in player_ids}
+    used_character_ids = set()
+    for team in deck_teams:
+        player_id = deck_set_to_player.get(team.deck_set_id)
+        if not player_id:
+            continue
+        for character_id in (
+            team.char1_id,
+            team.char2_id,
+            team.char3_id,
+            team.char4_id,
+            team.char5_id,
+        ):
+            if (
+                character_id is not None
+                and character_id != EMPTY_SLOT_CHARACTER_ID
+            ):
+                characters_by_player[player_id].add(character_id)
+                used_character_ids.add(character_id)
+
+    characters = (
+        db.query(models.Character).filter(
+            models.Character.id.in_(used_character_ids)
+        ).all()
+        if used_character_ids
+        else []
+    )
+    character_by_id = {
+        character.id: character for character in characters
+    }
+
+    result = {}
+    all_player_ids = set(player_ids)
+    for key, label, maximum_score in CHARACTER_USAGE_RESULT_FILTERS:
+        eligible_player_ids = (
+            all_player_ids
+            if maximum_score is None
+            else {
+                player_id
+                for player_id, score in result_score_by_player.items()
+                if score <= maximum_score
+            }
+        )
+        denominator = len(eligible_player_ids)
+        adoption_counts = {}
+        for player_id in eligible_player_ids:
+            for character_id in characters_by_player.get(player_id, set()):
+                adoption_counts[character_id] = (
+                    adoption_counts.get(character_id, 0) + 1
+                )
+
+        character_rows = []
+        for character_id, count in adoption_counts.items():
+            character = character_by_id.get(character_id)
+            if not character:
+                continue
+            character_rows.append({
+                "character_id": character_id,
+                "id": character_id,
+                "name": character.name,
+                "count": count,
+                "usage_rate": (
+                    round(count / denominator * 100, 1)
+                    if denominator
+                    else 0.0
+                ),
+            })
+        character_rows.sort(
+            key=lambda row: (-row["count"], row["character_id"])
+        )
+        result[key] = {
+            "label": label,
+            "denominator": denominator,
+            "characters": character_rows,
+        }
+    return result
+
+
 class CrossTournamentRequest(PydanticBaseModel):
     """大会横断検索リクエスト"""
     tournament_ids: List[int] = []
@@ -2903,6 +3179,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             "total_matches": total_matches,
             "character_usage": char_list,
             "character_stats": char_list,
+            "character_usage_by_result": _compute_character_usage_by_result(target_ids, db),
             "team_usage": team_list[:50],
             "matchups": [] # Usually cross matchups are fetched via their own endpoint
         }
@@ -3346,6 +3623,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     return {
         "character_usage": char_list,
         "character_stats": char_list,
+        "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db),
         "team_usage": team_list,
         "total_players": len(player_ids),
         "total_matches": len(matches)
@@ -3384,8 +3662,26 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
             d_team = defender_teams.get(rn)
 
             if a_team and d_team:
-                a_chars = [c for c in [a_team.char1_id, a_team.char2_id, a_team.char3_id, a_team.char4_id, a_team.char5_id] if c is not None]
-                d_chars = [c for c in [d_team.char1_id, d_team.char2_id, d_team.char3_id, d_team.char4_id, d_team.char5_id] if c is not None]
+                a_slots = [
+                    (character_id, collection_level)
+                    for character_id, collection_level in zip(
+                        [a_team.char1_id, a_team.char2_id, a_team.char3_id, a_team.char4_id, a_team.char5_id],
+                        get_team_collection_levels(a_team),
+                    )
+                    if character_id is not None
+                ]
+                d_slots = [
+                    (character_id, collection_level)
+                    for character_id, collection_level in zip(
+                        [d_team.char1_id, d_team.char2_id, d_team.char3_id, d_team.char4_id, d_team.char5_id],
+                        get_team_collection_levels(d_team),
+                    )
+                    if character_id is not None
+                ]
+                a_chars = [character_id for character_id, _ in a_slots]
+                d_chars = [character_id for character_id, _ in d_slots]
+                a_collections = [collection_level for _, collection_level in a_slots]
+                d_collections = [collection_level for _, collection_level in d_slots]
 
                 a_sorted = tuple(sorted(a_chars))
                 d_sorted = tuple(sorted(d_chars))
@@ -3398,6 +3694,8 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),
+                        "attacker_collections": a_collections,
+                        "defender_collections": d_collections,
                         "canonical_attacker": ",".join(map(str, a_sorted)),
                         "canonical_defender": ",".join(map(str, d_sorted)),
                         "winner_team": list(a_chars) if winner_is_attacker else list(d_chars),

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 
 sys.modules.setdefault("cv2", MagicMock())
-from services.template_matcher import predict_character
+from services.template_matcher import predict_character, prepare_character_image
 import services.template_matcher as template_matcher
 
 
@@ -48,6 +48,16 @@ class TemplateMatcherTests(unittest.TestCase):
 
         self.assertIsNone(character_id)
         self.assertGreaterEqual(confidence, 0.99)
+
+    def test_prepare_character_image_ignores_collection_region(self):
+        without_collection = np.zeros((160, 160, 3), dtype=np.uint8)
+        with_collection = without_collection.copy()
+        with_collection[50:110, 0:36] = 255
+
+        prepared_without = prepare_character_image(without_collection)
+        prepared_with = prepare_character_image(with_collection)
+
+        self.assertTrue(np.array_equal(prepared_without, prepared_with))
 
 
 if __name__ == "__main__":

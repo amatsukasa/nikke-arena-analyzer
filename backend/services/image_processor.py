@@ -3,6 +3,7 @@ import numpy as np
 import os
 import pytesseract
 import secrets
+from services.collection_classifier import classify_collection
 
 def process_images(image_paths, tournament_id, seed_number):
     analysis_id = secrets.token_hex(6)
@@ -139,7 +140,9 @@ def process_images(image_paths, tournament_id, seed_number):
                 team.append({
                     "image_url": None,
                     "predicted_character_id": 9999,
-                    "confidence": 1.0
+                    "confidence": 1.0,
+                    "collection_level": None,
+                    "collection_confidence": 1.0,
                 })
                 continue
             
@@ -152,11 +155,14 @@ def process_images(image_paths, tournament_id, seed_number):
             
             # AI推論
             pred_id, conf = predict_character(face, templates, threshold=0.65)
+            collection_level, collection_confidence = classify_collection(face)
             
             team.append({
                 "image_url": f"/api/uploads/cropped/{crop_filename}",
                 "predicted_character_id": pred_id,
-                "confidence": conf
+                "confidence": conf,
+                "collection_level": collection_level,
+                "collection_confidence": collection_confidence,
             })
             
         teams.append(team)

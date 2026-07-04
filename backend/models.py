@@ -132,6 +132,11 @@ class DeckTeam(Base):
     char3_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
     char4_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
     char5_id = Column(Integer, ForeignKey("characters.id"), nullable=True)
+    collection1 = Column(String, nullable=True)
+    collection2 = Column(String, nullable=True)
+    collection3 = Column(String, nullable=True)
+    collection4 = Column(String, nullable=True)
+    collection5 = Column(String, nullable=True)
 
     deck_set = relationship("DeckSet", back_populates="teams")
 

@@ -6,6 +6,42 @@ import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDo
 import Link from "next/link";
 import Cropper from "react-easy-crop";
 import CharacterSearchSelect from "../../../components/CharacterSearchSelect";
+import SharedTeamDisplay from "../../../components/TeamDisplay";
+
+const COLLECTION_OPTIONS = [
+  { value: "none", label: "コレクションなし" },
+  { value: "r_0_14", label: "R 0～14" },
+  { value: "r_15", label: "R 15" },
+  { value: "sr_0_14", label: "SR 0～14" },
+  { value: "sr_15", label: "SR 15" },
+  { value: "treasure_0_14", label: "宝物 0～14" },
+  { value: "treasure_15", label: "宝物 15" },
+  { value: "unknown", label: "判定不能" },
+] as const;
+
+const collectionSelectClass = (value?: string | null) => {
+  switch (value) {
+    case "r_0_14":
+      return "border-blue-500 bg-white text-blue-700";
+    case "r_15":
+      return "border-blue-500 bg-black text-white";
+    case "sr_0_14":
+      return "border-purple-500 bg-white text-purple-700";
+    case "sr_15":
+      return "border-purple-500 bg-black text-white";
+    case "treasure_0_14":
+      return "border-orange-500 bg-white text-orange-700";
+    case "treasure_15":
+      return "border-orange-500 bg-black text-white";
+    case "unknown":
+      return "border-red-500 bg-red-50 text-red-700";
+    case "none":
+      return "border-slate-400 bg-white text-slate-700";
+    default:
+      return "border-slate-600 bg-slate-800 text-slate-300";
+  }
+};
+
 export default function TournamentDetail() {
   const params = useParams();
   const id = params.id;
@@ -32,8 +68,9 @@ export default function TournamentDetail() {
   const [matchStage, setMatchStage] = useState("Groups");
 
   // フォーム用プレイヤー情報
-  const [formPlayerName, setFormPlayerName] = useState("");
   const [formPlayerIcon, setFormPlayerIcon] = useState("");
+  const [registeredDecks, setRegisteredDecks] = useState<any[]>([]);
+  const [isLoadingRegisteredDecks, setIsLoadingRegisteredDecks] = useState(false);
 
   // クロップ用ステート
   const [showCropModal, setShowCropModal] = useState(false);
@@ -73,20 +110,27 @@ export default function TournamentDetail() {
     }
   }, [tournamentId]);
 
-  // シード番号変更時に既存のプレイヤー情報を取得
+  const loadPlayerDetails = async (targetSeed = seed) => {
+    if (!tournamentId) return;
+    setIsLoadingRegisteredDecks(true);
+    try {
+      const response = await fetch(`/api/tournaments/${tournamentId}/players/${targetSeed}/details`);
+      const data = await response.json();
+      const iconUrl = data.player?.icon_url;
+      setFormPlayerIcon(iconUrl ? `${iconUrl}?t=${Date.now()}` : "");
+      setRegisteredDecks(data.decks || []);
+    } catch {
+      setFormPlayerIcon("");
+      setRegisteredDecks([]);
+    } finally {
+      setIsLoadingRegisteredDecks(false);
+    }
+  };
+
+  // シード番号変更時に既存のプレイヤー情報と編成を取得
   useEffect(() => {
     if (mode === "deck" && tournamentId) {
-      fetch(`/api/tournaments/${tournamentId}/players/${seed}/details`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.player) {
-            setFormPlayerName(data.player.name);
-            setFormPlayerIcon(data.player.icon_url || "");
-          } else {
-            setFormPlayerName(`Player ${seed}`);
-            setFormPlayerIcon("");
-          }
-        });
+      loadPlayerDetails(seed);
     }
   }, [seed, mode, tournamentId]);
 
@@ -282,7 +326,7 @@ export default function TournamentDetail() {
       // フォームの入力を解析結果に統合
       const augmentedData = {
         ...data,
-        suggested_player_name: formPlayerName || data.suggested_player_name,
+        suggested_player_name: `Player ${seed}`,
         player_icon_url: formPlayerIcon || data.player_icon_url
       };
 
@@ -295,7 +339,11 @@ export default function TournamentDetail() {
           image_url: c.image_url,
           original_predicted_id: c.predicted_character_id ?? null,
           was_unrecognized: c.predicted_character_id == null,
-          add_to_templates: false
+          add_to_templates: false,
+          collection_level: c.predicted_character_id === 9999
+            ? null
+            : c.collection_level || "unknown",
+          collection_confidence: c.collection_confidence ?? 0,
         }))
       })));
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
@@ -339,10 +387,32 @@ export default function TournamentDetail() {
                       || character.original_predicted_id !== characterId
                     )
                       && characterId !== null
-                      && characterId !== 9999
+                      && characterId !== 9999,
+                    collection_level: characterId === 9999
+                      ? null
+                      : character.collection_level || "unknown",
                   }
                 : character
             ))
+          }
+    )));
+  };
+
+  const updateCollectionLevel = (
+    roundIndex: number,
+    characterIndex: number,
+    collectionLevel: string,
+  ) => {
+    setSelectedTeams(previous => previous.map((team, teamIndex) => (
+      teamIndex !== roundIndex
+        ? team
+        : {
+            ...team,
+            characters: team.characters.map((character: any, index: number) => (
+              index === characterIndex
+                ? { ...character, collection_level: collectionLevel }
+                : character
+            )),
           }
     )));
   };
@@ -433,7 +503,7 @@ export default function TournamentDetail() {
     const templateNotice = hasTemplateAdditions
       ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
       : "";
-    const playerLabel = result?.suggested_player_name || `Player ${seed}`;
+    const playerLabel = `Player ${seed}`;
 
     if (!window.confirm(
       `${playerLabel}（シード${seed}）をこの内容で登録しますか？\n\n`
@@ -453,7 +523,6 @@ export default function TournamentDetail() {
         body: JSON.stringify({
           seed_number: seed,
           teams: selectedTeams,
-          player_name: result?.suggested_player_name,
           player_icon_url: result?.player_icon_url
         })
       });
@@ -484,7 +553,6 @@ export default function TournamentDetail() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: formPlayerName,
           icon_url: formPlayerIcon ? formPlayerIcon.split('?')[0] : ""
         })
       });
@@ -494,10 +562,11 @@ export default function TournamentDetail() {
         if (result) {
           setResult((prev: any) => ({
             ...prev,
-            suggested_player_name: formPlayerName,
+            suggested_player_name: `Player ${seed}`,
             player_icon_url: formPlayerIcon
           }));
         }
+        await loadPlayerDetails();
         fetchBracket();
       } else {
         alert("保存に失敗しました。");
@@ -829,19 +898,12 @@ export default function TournamentDetail() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">プレイヤー名</label>
-                  <input
-                    type="text"
-                    value={formPlayerName}
-                    onChange={(e) => setFormPlayerName(e.target.value)}
-                    className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                    placeholder="プレイヤー名を入力"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-2">顔画像 (オプション)</label>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <label className="block text-sm font-medium text-slate-400">顔画像 (オプション)</label>
+                    <span className="text-xs font-bold text-slate-500">登録名: Player {seed}</span>
+                  </div>
                   <div className="flex items-center space-x-4">
                     <div className="w-20 h-20 rounded-full border-2 border-emerald-500 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
                       {formPlayerIcon ? (
@@ -872,9 +934,40 @@ export default function TournamentDetail() {
                     className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold border border-emerald-500/30 transition-all flex items-center justify-center space-x-2"
                   >
                     <Save size={14} />
-                    <span>プレイヤー情報（名前・画像）のみを保存</span>
+                    <span>プレイヤー情報を保存</span>
                   </button>
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-slate-900/40 p-4">
+                <h3 className="mb-3 text-sm font-bold text-slate-300">登録済み編成</h3>
+                {isLoadingRegisteredDecks ? (
+                  <p className="py-4 text-center text-sm text-slate-500">編成を読み込んでいます...</p>
+                ) : registeredDecks.length > 0 ? (
+                  <div className="space-y-2">
+                    {[1, 2, 3, 4, 5].map(teamNumber => {
+                      const deck = registeredDecks.find((item: any) => item.team_number === teamNumber);
+                      return (
+                        <div key={teamNumber} className="flex min-w-0 items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2 ring-1 ring-white/5">
+                          <span className="w-14 shrink-0 text-xs font-black text-slate-500">TEAM {teamNumber}</span>
+                          {deck ? (
+                            <div className="min-w-0 overflow-x-auto py-1">
+                              <SharedTeamDisplay
+                                charIds={deck.character_ids}
+                                allCharacters={characters}
+                                collectionLevels={deck.collection_levels}
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-600">未登録</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="py-4 text-center text-sm text-slate-500">編成が登録されていません</p>
+                )}
               </div>
 
               <div>
@@ -1027,18 +1120,10 @@ export default function TournamentDetail() {
                   </button>
                 </div>
                 <div className="flex-1 space-y-2">
-                  <label className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">プレイヤー名</label>
-                  <input
-                    type="text"
-                    value={result.suggested_player_name || ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setResult((prev: any) => ({ ...prev, suggested_player_name: val }));
-                      setFormPlayerName(val); // フォーム側も同期
-                    }}
-                    className="w-full bg-slate-950/50 border border-emerald-500/30 rounded-lg px-3 py-2 text-slate-100 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                    placeholder="プレイヤー名を入力"
-                  />
+                  <label className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">自動登録名</label>
+                  <p className="rounded-lg border border-emerald-500/20 bg-slate-950/50 px-3 py-2 font-bold text-slate-100">
+                    Player {result.suggested_seed}
+                  </p>
                   <p className="text-[10px] text-slate-500">シード: {result.suggested_seed}</p>
                 </div>
               </div>
@@ -1102,6 +1187,21 @@ export default function TournamentDetail() {
                             className="h-10"
                             id={`desktop-round-${idx}-character-${c_idx}`}
                           />
+                          <select
+                            className={`h-9 w-full min-w-0 rounded border-2 px-2 text-xs font-bold disabled:opacity-60 ${
+                              collectionSelectClass(selectedTeams[idx]?.characters[c_idx]?.collection_level)
+                            }`}
+                            value={selectedTeams[idx]?.characters[c_idx]?.collection_level || ""}
+                            disabled={selectedTeams[idx]?.characters[c_idx]?.id === 9999}
+                            onChange={(event) => updateCollectionLevel(idx, c_idx, event.target.value)}
+                            aria-label={`ラウンド${idx + 1} キャラクター${c_idx + 1} コレクション`}
+                          >
+                            {selectedTeams[idx]?.characters[c_idx]?.id === 9999
+                              ? <option value="">判定不要</option>
+                              : COLLECTION_OPTIONS.map(option => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                          </select>
                         </div>
                       ))}
                     </div>
@@ -1124,6 +1224,22 @@ export default function TournamentDetail() {
                               error={!selectedTeams[idx]?.characters[c_idx]?.id}
                               className="min-h-11"
                             />
+                            <label className="mb-1 mt-2 block text-xs text-slate-500" htmlFor={`round-${idx}-collection-${c_idx}`}>コレクション</label>
+                            <select
+                              id={`round-${idx}-collection-${c_idx}`}
+                              className={`min-h-11 w-full min-w-0 rounded border-2 px-3 text-base font-bold disabled:opacity-60 ${
+                                collectionSelectClass(selectedTeams[idx]?.characters[c_idx]?.collection_level)
+                              }`}
+                              value={selectedTeams[idx]?.characters[c_idx]?.collection_level || ""}
+                              disabled={selectedTeams[idx]?.characters[c_idx]?.id === 9999}
+                              onChange={(event) => updateCollectionLevel(idx, c_idx, event.target.value)}
+                            >
+                              {selectedTeams[idx]?.characters[c_idx]?.id === 9999
+                                ? <option value="">判定不要</option>
+                                : COLLECTION_OPTIONS.map(option => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                            </select>
                           </div>
                         </div>
                       ))}

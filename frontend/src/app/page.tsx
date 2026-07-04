@@ -5,6 +5,9 @@ import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
 import PaginatedTeamList from "../components/PaginatedTeamList";
+import SharedTeamDisplay from "../components/TeamDisplay";
+import CharacterUsageByResultRanking from "../components/CharacterUsageByResultRanking";
+import TeamMatchupHistory from "../components/TeamMatchupHistory";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 
@@ -574,6 +577,10 @@ function DashboardContent() {
     matchupDetails.push({ 
       opponent: isAttacker ? m.defender_team : m.attacker_team, 
       opponentCanonical: isAttacker ? m.canonical_defender : m.canonical_attacker,
+      attackerTeam: m.attacker_team,
+      defenderTeam: m.defender_team,
+      attackerCollections: m.attacker_collections,
+      defenderCollections: m.defender_collections,
       isAttacker, 
       isWin, 
       stage: m.stage,
@@ -787,6 +794,12 @@ function DashboardContent() {
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
+            <CharacterUsageByResultRanking
+              stats={stats}
+              allCharacters={allCharacters}
+              onSelectCharacter={setSelectedCharId}
+            />
+            {false && (
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-blue-400" />
@@ -878,6 +891,7 @@ function DashboardContent() {
                 })()}
               </div>
             </section>
+            )}
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-emerald-400" />
@@ -1282,7 +1296,16 @@ function DashboardContent() {
               );
             })()}
 
-            {selectedTeam && matchupDetails.length > 0 && (() => {
+            {selectedTeam && matchupDetails.length > 0 && (
+              <TeamMatchupHistory
+                matchupDetails={matchupDetails}
+                allCharacters={allCharacters}
+                onSelectCharacter={setSelectedCharId}
+                onSelectOpponent={handleTeamClick}
+              />
+            )}
+
+            {false && selectedTeam && matchupDetails.length > 0 && (() => {
               const stageOrder = [
                 "決勝", "FINAL",
                 "準決勝", "Best 4", "ベスト4",
@@ -1361,26 +1384,53 @@ function DashboardContent() {
                             {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
                           </span>
                         </div>
-                        {/* メイン行: ステージ・攻防・相手編成・勝敗 */}
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-4">
-                            <div className="flex flex-col items-start space-y-1">
-                              <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
-                                m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" : 
-                                m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
-                                "bg-slate-700/50 text-slate-400 ring-slate-600/50"
-                              }`}>
-                                {m.stage || "不明"}
-                              </div>
-                              <div className={`px-2 py-1 rounded text-xs font-bold w-fit ${m.isAttacker ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>
-                                {m.isAttacker ? '攻撃' : '防衛'}
-                              </div>
+                        {/* メイン行: 攻撃側を左、防衛側を右に固定 */}
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                          <div className="flex shrink-0 flex-col items-start space-y-1">
+                            <div className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ring-1 ${
+                              m.stage === "決勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/30" :
+                              m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                              "bg-slate-700/50 text-slate-400 ring-slate-600/50"
+                            }`}>
+                              {m.stage || "不明"}
                             </div>
-                            <div className="text-slate-400 text-sm mr-2">VS</div>
-                            <TeamDisplay charIds={m.opponent} allCharacters={allCharacters} />
                           </div>
-                          <div className={`font-black text-lg ${m.isWin ? 'text-emerald-400' : 'text-slate-600'}`}>
-                            {m.isWin ? 'WIN' : 'LOSE'}
+                          <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:justify-center">
+                            <div className={`rounded-xl p-2 ring-1 ${m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
+                              <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+                                <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
+                                {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                                {m.isAttacker && (
+                                  <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
+                                    {m.isWin ? "WIN" : "LOSE"}
+                                  </span>
+                                )}
+                              </div>
+                              <SharedTeamDisplay
+                                charIds={m.attackerTeam}
+                                allCharacters={allCharacters}
+                                collectionLevels={m.attackerCollections}
+                                onCharacterClick={setSelectedCharId}
+                              />
+                            </div>
+                            <div className="shrink-0 text-sm font-black text-slate-500">VS</div>
+                            <div className={`rounded-xl p-2 ring-1 ${!m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
+                              <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+                                <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
+                                {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                                {!m.isAttacker && (
+                                  <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
+                                    {m.isWin ? "WIN" : "LOSE"}
+                                  </span>
+                                )}
+                              </div>
+                              <SharedTeamDisplay
+                                charIds={m.defenderTeam}
+                                allCharacters={allCharacters}
+                                collectionLevels={m.defenderCollections}
+                                onCharacterClick={setSelectedCharId}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>

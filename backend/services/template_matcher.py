@@ -1,8 +1,14 @@
 import cv2
 import os
 import numpy as np
+from services.collection_classifier import mask_collection_icon
 
 TEMPLATE_DIR = "uploads/templates"
+
+def prepare_character_image(image):
+    """Remove collection decoration before character image comparisons."""
+    return cv2.cvtColor(mask_collection_icon(image), cv2.COLOR_BGR2GRAY)
+
 
 def get_templates():
     """
@@ -46,13 +52,13 @@ def predict_character(face_img, templates: dict, threshold=0.65, min_margin=0.03
     scores_by_character = []
 
     # グレースケールに変換
-    face_gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+    face_gray = prepare_character_image(face_img)
 
     for char_id, template_list in templates.items():
         char_best_score = -1.0
 
         for template_img in template_list:
-            template_gray = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
+            template_gray = prepare_character_image(template_img)
 
             # テンプレートが入力画像より大きい場合はリサイズ
             if template_gray.shape[0] > face_gray.shape[0] or template_gray.shape[1] > face_gray.shape[1]:

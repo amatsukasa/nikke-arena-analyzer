@@ -73,6 +73,11 @@ class DeckTeamBase(BaseModel):
     char3_id: Optional[int] = None
     char4_id: Optional[int] = None
     char5_id: Optional[int] = None
+    collection1: Optional[str] = None
+    collection2: Optional[str] = None
+    collection3: Optional[str] = None
+    collection4: Optional[str] = None
+    collection5: Optional[str] = None
 
 class DeckTeam(DeckTeamBase):
     id: int

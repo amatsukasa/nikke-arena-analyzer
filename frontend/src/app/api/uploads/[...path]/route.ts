@@ -18,12 +18,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const contentType = res.headers.get('content-type') || 'application/octet-stream';
     const fileBuffer = await res.arrayBuffer();
     const isTemporaryCrop = filePath.startsWith('cropped/crop_');
+    const isPlayerIcon = filePath.startsWith('player_icons/');
 
     return new NextResponse(fileBuffer, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': isTemporaryCrop
+        'Cache-Control': isTemporaryCrop || isPlayerIcon
           ? 'no-store, no-cache, must-revalidate, max-age=0'
           : 'public, max-age=31536000, immutable',
       },
