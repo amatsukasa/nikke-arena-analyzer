@@ -48,6 +48,8 @@ export default function TournamentDetail() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
+  const seedFieldRef = useRef<HTMLDivElement>(null);
+  const roundToggleRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const [seed, setSeed] = useState(1);
   const [files, setFiles] = useState<File[]>([]);
@@ -556,6 +558,37 @@ export default function TournamentDetail() {
     )));
   };
 
+  const scrollAfterRender = (
+    element: HTMLElement | null,
+    block: ScrollLogicalPosition,
+  ) => {
+    if (!element) return;
+    // Two frames allow React to commit the conditional content and the
+    // browser to finish layout before calculating the cross-platform target.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        element.scrollIntoView({ behavior: "smooth", block });
+      });
+    });
+  };
+
+  const handlePreviewRoundToggle = (roundIndex: number) => {
+    const willExpand = expandedPreviewRound !== roundIndex;
+    setExpandedPreviewRound(willExpand ? roundIndex : -1);
+    if (!willExpand || !window.matchMedia("(max-width: 639px)").matches) return;
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const roundToggle = roundToggleRefs.current[roundIndex];
+        if (!roundToggle) return;
+        roundToggle.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    });
+  };
+
   const handleSave = async () => {
     const unresolvedSlots = selectedTeams.flatMap((team, roundIndex) =>
       team.characters.flatMap((character: any, characterIndex: number) =>
@@ -676,6 +709,7 @@ export default function TournamentDetail() {
         setFiles([]);
         setPreviews([]);
         setResult(null);
+        scrollAfterRender(seedFieldRef.current, "start");
         fetchBracket();
       } else {
         alert("保存に失敗しました。");
@@ -1024,7 +1058,7 @@ export default function TournamentDetail() {
         <div className="max-w-2xl mx-auto w-full">
           {mode === "deck" ? (
             <div className="space-y-6">
-              <div>
+              <div ref={seedFieldRef} className="scroll-mt-24">
                 <label className="block text-sm font-medium text-slate-400 mb-2">シード番号 (1-64)</label>
                 <select
                   value={seed}
@@ -1295,9 +1329,12 @@ export default function TournamentDetail() {
                     </div>
 
                     <button
+                      ref={(element) => {
+                        roundToggleRefs.current[idx] = element;
+                      }}
                       type="button"
-                      onClick={() => setExpandedPreviewRound(current => current === idx ? -1 : idx)}
-                      className="flex min-h-12 flex-1 items-center justify-between rounded-md bg-slate-800/70 px-3 text-left sm:hidden"
+                      onClick={() => handlePreviewRoundToggle(idx)}
+                      className="flex min-h-12 flex-1 scroll-mt-4 items-center justify-between rounded-md bg-slate-800/70 px-3 text-left sm:hidden"
                       aria-expanded={expandedPreviewRound === idx}
                     >
                       <span className="font-bold text-slate-200">ラウンド {idx + 1}</span>
