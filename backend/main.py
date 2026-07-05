@@ -119,7 +119,7 @@ def _finalize_char_position_stats(char):
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from fastapi.staticfiles import StaticFiles
-from services.image_processor import process_images
+from services.image_processor import process_images, write_lossless_png
 from services.character_templates import find_character_template
 from services.collection_classifier import COLLECTION_VALUES
 from services.template_matcher import prepare_character_image
@@ -1570,9 +1570,10 @@ async def save_teams(
 ):
     require_tournament_manager(tournament_id, db, current_user)
     temporary_crop_urls = [
-        character.get("image_url")
+        character.get(url_field)
         for team in data.get("teams", [])
         for character in team.get("characters", [])
+        for url_field in ("image_url", "template_source_url")
     ]
     try:
         seed_number = data.get("seed_number")
@@ -1713,21 +1714,26 @@ async def save_teams(
                 if char_info.get("add_to_templates") is not True:
                     continue
                 c_id = char_info.get("id")
-                image_url = char_info.get("image_url")
+                image_url = (
+                    char_info.get("template_source_url")
+                    or char_info.get("image_url")
+                )
                 if c_id and image_url and image_url.startswith("/api/"):
-                    # URLからローカルパスへ変換
-                    local_path = image_url.replace("/api/", "")
-                    if os.path.exists(local_path):
-                        import shutil, cv2 as _cv2
+                    local_path = path_from_upload_url(image_url)
+                    if local_path and local_path.exists():
+                        import cv2 as _cv2
                         # このキャラの既存テンプレートを収集（旧形式 char_{id}.png も含む）
                         existing = sorted([
                             f for f in os.listdir(template_dir)
                             if f.startswith(f"char_{c_id}_") or f == f"char_{c_id}.png"
                         ])
                         # コレクション領域を除外して、キャラクター部分だけで重複判定する。
-                        new_img = _cv2.imread(local_path)
-                        if new_img is not None:
-                            new_img = prepare_character_image(new_img)
+                        template_source = _cv2.imread(str(local_path))
+                        new_img = (
+                            prepare_character_image(template_source)
+                            if template_source is not None
+                            else None
+                        )
                         is_duplicate = False
                         saved_template_filename = existing[0] if existing else None
                         if new_img is not None:
@@ -1750,7 +1756,8 @@ async def save_teams(
                         if not is_duplicate:
                             next_num = len(existing) + 1
                             template_path = os.path.join(template_dir, f"char_{c_id}_{next_num:03d}.png")
-                            shutil.copy(local_path, template_path)
+                            if not write_lossless_png(template_path, template_source):
+                                raise OSError(f"Failed to save template: {template_path}")
                             saved_template_filename = os.path.basename(template_path)
                             templates_added += 1
                             print(f"[Template] 追加: {template_path}（累計 {next_num} 枚）")
@@ -1874,6 +1881,10 @@ async def analyze_deck(request: Request):
         raise HTTPException(status_code=422, detail="seed_number が不正です")
 
     images = form.getlist("images")
+    pre_cropped_flags = [
+        str(value).strip().lower() in {"1", "true", "yes", "on"}
+        for value in form.getlist("image_pre_cropped")
+    ]
     if not images:
         raise HTTPException(status_code=422, detail="images が指定されていません")
 
@@ -1890,7 +1901,12 @@ async def analyze_deck(request: Request):
                 shutil.copyfileobj(image.file, buffer)
 
         try:
-            return process_images(saved_paths, tournament_id, seed_number)
+            return process_images(
+                saved_paths,
+                tournament_id,
+                seed_number,
+                pre_cropped_flags=pre_cropped_flags,
+            )
         except Exception as e:
             import traceback
             print(f"[analyze_deck] process_images でエラーが発生しました: {e}")

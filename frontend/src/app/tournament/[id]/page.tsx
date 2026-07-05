@@ -274,35 +274,167 @@ export default function TournamentDetail() {
     setPreviews([]);
   };
 
-  const compressImage = (file: File): Promise<File> => {
-    return new Promise((resolve, reject) => {
+  const prepareAnalysisImage = (
+    file: File,
+  ): Promise<{ file: File; preCropped: boolean }> => {
+    return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement("canvas");
-        // Maintain original dimensions but convert to JPEG with 0.85 quality
-        // This dramatically reduces file size without losing the HSV hue needed for OpenCV
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(file);
-        
-        ctx.drawImage(img, 0, 0);
-        canvas.toBlob(
+        const detectionScale = Math.min(1, 960 / img.width);
+        const detectionWidth = Math.max(1, Math.round(img.width * detectionScale));
+        const detectionHeight = Math.max(1, Math.round(img.height * detectionScale));
+        const detectionCanvas = document.createElement("canvas");
+        detectionCanvas.width = detectionWidth;
+        detectionCanvas.height = detectionHeight;
+        const detectionContext = detectionCanvas.getContext("2d", {
+          willReadFrequently: true,
+        });
+        if (!detectionContext) {
+          URL.revokeObjectURL(img.src);
+          resolve({ file, preCropped: false });
+          return;
+        }
+
+        detectionContext.drawImage(img, 0, 0, detectionWidth, detectionHeight);
+        const pixels = detectionContext.getImageData(
+          0,
+          0,
+          detectionWidth,
+          detectionHeight,
+        ).data;
+        const whiteMask = new Uint8Array(detectionWidth * detectionHeight);
+
+        // Match the backend white-modal condition: HSV S < 50, V > 200.
+        for (let index = 0; index < whiteMask.length; index += 1) {
+          const offset = index * 4;
+          const red = pixels[offset];
+          const green = pixels[offset + 1];
+          const blue = pixels[offset + 2];
+          const maximum = Math.max(red, green, blue);
+          const minimum = Math.min(red, green, blue);
+          const saturation = maximum === 0
+            ? 0
+            : ((maximum - minimum) * 255) / maximum;
+          if (maximum > 200 && saturation < 50) {
+            whiteMask[index] = 1;
+          }
+        }
+
+        let bestBounds: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          area: number;
+        } | null = null;
+        const stack: number[] = [];
+
+        for (let start = 0; start < whiteMask.length; start += 1) {
+          if (whiteMask[start] !== 1) continue;
+          whiteMask[start] = 2;
+          stack.length = 0;
+          stack.push(start);
+          let cursor = 0;
+          let area = 0;
+          let minX = detectionWidth;
+          let maxX = 0;
+          let minY = detectionHeight;
+          let maxY = 0;
+
+          while (cursor < stack.length) {
+            const current = stack[cursor++];
+            const x = current % detectionWidth;
+            const y = Math.floor(current / detectionWidth);
+            area += 1;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+
+            const neighbours = [
+              x > 0 ? current - 1 : -1,
+              x + 1 < detectionWidth ? current + 1 : -1,
+              y > 0 ? current - detectionWidth : -1,
+              y + 1 < detectionHeight ? current + detectionWidth : -1,
+            ];
+            for (const neighbour of neighbours) {
+              if (neighbour >= 0 && whiteMask[neighbour] === 1) {
+                whiteMask[neighbour] = 2;
+                stack.push(neighbour);
+              }
+            }
+          }
+
+          const width = maxX - minX + 1;
+          const height = maxY - minY + 1;
+          if (
+            width > detectionWidth * 0.25
+            && height > detectionHeight * 0.15
+            && (!bestBounds || area > bestBounds.area)
+          ) {
+            bestBounds = { x: minX, y: minY, width, height, area };
+          }
+        }
+
+        if (!bestBounds) {
+          URL.revokeObjectURL(img.src);
+          resolve({ file, preCropped: false });
+          return;
+        }
+
+        const sourceX = Math.max(0, Math.floor(bestBounds.x / detectionScale));
+        const sourceY = Math.max(0, Math.floor(bestBounds.y / detectionScale));
+        const sourceWidth = Math.min(
+          img.width - sourceX,
+          Math.ceil(bestBounds.width / detectionScale),
+        );
+        const sourceHeight = Math.min(
+          img.height - sourceY,
+          Math.ceil(bestBounds.height / detectionScale),
+        );
+        const outputCanvas = document.createElement("canvas");
+        outputCanvas.width = sourceWidth;
+        outputCanvas.height = sourceHeight;
+        const outputContext = outputCanvas.getContext("2d");
+        if (!outputContext) {
+          URL.revokeObjectURL(img.src);
+          resolve({ file, preCropped: false });
+          return;
+        }
+        outputContext.drawImage(
+          img,
+          sourceX,
+          sourceY,
+          sourceWidth,
+          sourceHeight,
+          0,
+          0,
+          sourceWidth,
+          sourceHeight,
+        );
+        outputCanvas.toBlob(
           (blob) => {
+            URL.revokeObjectURL(img.src);
             if (blob) {
-              resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), {
-                type: "image/jpeg",
-                lastModified: Date.now(),
-              }));
+              resolve({
+                file: new File(
+                  [blob],
+                  file.name.replace(/\.[^.]+$/, ".modal.png"),
+                  { type: "image/png", lastModified: Date.now() },
+                ),
+                preCropped: true,
+              });
             } else {
-              resolve(file);
+              resolve({ file, preCropped: false });
             }
           },
-          "image/jpeg",
-          0.85
+          "image/png",
         );
       };
-      img.onerror = () => resolve(file);
+      img.onerror = () => {
+        URL.revokeObjectURL(img.src);
+        resolve({ file, preCropped: false });
+      };
       img.src = URL.createObjectURL(file);
     });
   };
@@ -311,13 +443,19 @@ export default function TournamentDetail() {
     if (files.length === 0 || !tournamentId) return;
     setIsUploading(true);
     
-    // Compress images before upload to avoid Next.js 10MB body size limit
-    const compressedFiles = await Promise.all(files.map(f => compressImage(f)));
+    // Crop only the modal and keep its pixels lossless. If client-side modal
+    // detection fails, the original image is sent to the backend fallback.
+    const preparedImages = await Promise.all(
+      files.map(file => prepareAnalysisImage(file)),
+    );
     
     const formData = new FormData();
     formData.append("tournament_id", tournamentId.toString());
     formData.append("seed_number", seed.toString());
-    compressedFiles.forEach(f => formData.append("images", f));
+    preparedImages.forEach(({ file, preCropped }) => {
+      formData.append("images", file);
+      formData.append("image_pre_cropped", preCropped ? "true" : "false");
+    });
 
     try {
       const res = await fetch("/api/analyze/deck", { method: "POST", body: formData });
@@ -337,6 +475,7 @@ export default function TournamentDetail() {
         characters: team.map((c: any) => ({
           id: c.predicted_character_id || "",
           image_url: c.image_url,
+          template_source_url: c.template_source_url,
           original_predicted_id: c.predicted_character_id ?? null,
           was_unrecognized: c.predicted_character_id == null,
           add_to_templates: false,

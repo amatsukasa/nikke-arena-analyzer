@@ -1,0 +1,14 @@
+{
+  "anis_no_collection.png": {
+    "has_collection": false,
+    "rarity": null,
+    "level": null,
+    "min_confidence": 0.9
+  },
+  "emilia_sr15.png": {
+    "has_collection": true,
+    "rarity": "sr",
+    "level": 15,
+    "min_confidence": 0.7
+  }
+}

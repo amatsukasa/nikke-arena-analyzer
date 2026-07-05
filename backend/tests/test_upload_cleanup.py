@@ -66,17 +66,21 @@ class UploadCleanupTests(unittest.TestCase):
 
     def test_registered_crop_cleanup_only_deletes_temporary_crops(self):
         crop = self.cropped / "crop_t1_s1_r1_c1.png"
+        preview = self.cropped / "crop_t1_s1_r1_c1_preview.webp"
         icon = self.cropped / "player_icon_used.png"
         crop.write_bytes(b"crop")
+        preview.write_bytes(b"preview")
         icon.write_bytes(b"icon")
 
         deleted = upload_cleanup.delete_temporary_crop_urls([
             "/api/uploads/cropped/crop_t1_s1_r1_c1.png",
+            "/api/uploads/cropped/crop_t1_s1_r1_c1_preview.webp",
             "/api/uploads/cropped/player_icon_used.png",
         ])
 
-        self.assertEqual(deleted, 1)
+        self.assertEqual(deleted, 2)
         self.assertFalse(crop.exists())
+        self.assertFalse(preview.exists())
         self.assertTrue(icon.exists())
 
 

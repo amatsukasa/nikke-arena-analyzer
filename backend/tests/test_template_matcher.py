@@ -1,10 +1,8 @@
 import unittest
-import sys
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import numpy as np
 
-sys.modules.setdefault("cv2", MagicMock())
 from services.template_matcher import predict_character, prepare_character_image
 import services.template_matcher as template_matcher
 
@@ -13,21 +11,39 @@ class TemplateMatcherTests(unittest.TestCase):
     def setUp(self):
         rng = np.random.default_rng(42)
         self.face = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
-        template_matcher.cv2.cvtColor.side_effect = lambda image, _mode: image
-        template_matcher.cv2.matchTemplate.side_effect = (
+        self.cvt_color = patch.object(
+            template_matcher.cv2,
+            "cvtColor",
+            side_effect=lambda image, _mode: image,
+        )
+        self.match_template = patch.object(
+            template_matcher.cv2,
+            "matchTemplate",
+            side_effect=(
             lambda face, template, _method: np.array(
                 [[1.0 if np.array_equal(face, template) else 0.2]],
                 dtype=np.float32,
             )
+            ),
         )
-        template_matcher.cv2.minMaxLoc.side_effect = (
+        self.min_max_loc = patch.object(
+            template_matcher.cv2,
+            "minMaxLoc",
+            side_effect=(
             lambda result: (
                 float(result.min()),
                 float(result.max()),
                 (0, 0),
                 (0, 0),
             )
+            ),
         )
+        self.cvt_color.start()
+        self.match_template.start()
+        self.min_max_loc.start()
+        self.addCleanup(self.cvt_color.stop)
+        self.addCleanup(self.match_template.stop)
+        self.addCleanup(self.min_max_loc.stop)
 
     def test_returns_clear_best_match(self):
         other = np.flip(self.face, axis=1).copy()
