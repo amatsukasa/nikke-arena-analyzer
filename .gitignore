@@ -39,3 +39,44 @@ backend/test_images_2/
 # SQLite DB（開発用ローカルDB）
 backend/database.db
 backend/nikke_arena.db
+
+# ローカル調査・復旧作業（正式なコードやテストは既存ディレクトリへ置く）
+.local/
+tmp/
+scratch/
+backend/scratch/
+backend_old/
+
+# 単発のコード修正・文字化け復旧スクリプト
+backend/add_*.py
+backend/apply_clean*.py
+backend/check_strings.py
+backend/dump_head.py
+backend/extract_func*.js
+backend/find_garbled.py
+backend/fix_*.py
+backend/fix_*.js
+backend/main_head*.py
+backend/measure.py
+backend/read_utf16.js
+backend/replace_names.py
+backend/restore_clean.py
+backend/restored_*.py
+
+# backend 直下のアドホック検証（正式テストは backend/tests/）
+backend/test_*.py
+backend/test_*_tmp.png
+
+# 画像比較・検証出力
+backend/img[0-9]*.png
+backend/out_*.png
+backend_logs.txt
+test_out.json
+tmp.txt
+
+# ルート直下の単発作業スクリプト・アーカイブ
+extract_clean.py
+extract_node.js
+replace_hallucinated.py
+update_team_list.py
+*.zip
