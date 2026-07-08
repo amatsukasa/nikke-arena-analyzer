@@ -1406,6 +1406,10 @@ def get_player_details(
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
     require_tournament_viewer(tournament_id, db, current_user)
+    return _get_player_details_data(tournament_id, seed_number, db)
+
+
+def _get_player_details_data(tournament_id: int, seed_number: int, db: Session):
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
@@ -2786,8 +2790,8 @@ def get_best8_decks(
                 result_label = "ベスト4"
                 sort_score = 3
                 
-            # 既に定義済みの get_player_details を利用して編成を取得
-            details = get_player_details(tournament_id, p_info["original_seed"], db)
+            # 認証済みの内部処理としてプレイヤー詳細データを取得
+            details = _get_player_details_data(tournament_id, p_info["original_seed"], db)
             results.append({
                 "player": p_info,
                 "result": result_label,
