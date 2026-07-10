@@ -10,8 +10,9 @@ import CharacterUsageByResultRanking from "../../../../components/CharacterUsage
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import { getCharIconUrl } from "@/utils/charIcon";
 
-type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
+type DashboardTab = "review" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
 const TOURNAMENT_TABS = new Set<DashboardTab>([
+  "review",
   "team_winrate",
   "matchups",
   "search",
@@ -30,7 +31,7 @@ export default function Dashboard() {
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
   const initialTab = requestedTab && TOURNAMENT_TABS.has(requestedTab)
     ? requestedTab
-    : "team_winrate";
+    : "review";
   const initialTeam = searchParams.get("team");
 
   const [tournament, setTournament] = useState<any>(null);
@@ -40,6 +41,9 @@ export default function Dashboard() {
   const [bracketData, setBracketData] = useState<any>(null);
   const [myPlayerDetails, setMyPlayerDetails] = useState<any>(null);
   const [best8Data, setBest8Data] = useState<any[]>([]);
+  const [dashboardSummary, setDashboardSummary] = useState<any>(null);
+  const [isPrivateTournament, setIsPrivateTournament] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [authError, setAuthError] = useState(false);
@@ -108,6 +112,12 @@ export default function Dashboard() {
     }
   }, [selectedSeed, id, isFirstLoad]);
 
+  useEffect(() => {
+    if (activeTab === "my_dashboard") {
+      setMyPlayerDetails(null);
+    }
+  }, [selectedSeed, activeTab]);
+
   const [tournamentId, setTournamentId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -140,9 +150,47 @@ export default function Dashboard() {
         }
         const tournData = await tournRes.json();
         setTournament(tournData);
+        const isPrivate = tournData.publication_status !== "published";
+        setIsPrivateTournament(isPrivate);
+
+        if (isPrivate) {
+          console.info(`[private-dashboard] skipped eager fetch tournament=${tournamentId}`);
+          const urls = [
+            `/api/characters?t=${timestamp}`,
+            `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`
+          ];
+          const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders })));
+
+          for (let i = 0; i < responses.length; i++) {
+            const res = responses[i];
+            if (!res.ok) {
+              if (res.status === 401) {
+                setAuthError(true);
+                setLoading(false);
+                return;
+              }
+              const text = await res.text();
+              console.error("API error", res.status, urls[i], text.slice(0, 300));
+            }
+          }
+
+          if (responses.some(res => !res.ok)) {
+            setLoading(false);
+            return;
+          }
+
+          const [charsData, summaryData] = await Promise.all(responses.map(res => res.json()));
+          setAllCharacters(charsData);
+          setDashboardSummary(summaryData);
+          if (!requestedTab) {
+            setActiveTab("review");
+          }
+          return;
+        }
 
         const urls = [
           `/api/characters?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
@@ -168,15 +216,19 @@ export default function Dashboard() {
           return;
         }
 
-        const [charsData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
+        const [charsData, summaryData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
           responses.map(res => res.json())
         );
 
         setAllCharacters(charsData);
+        setDashboardSummary(summaryData);
         setBracketData(bracketDataRaw);
         setMyPlayerDetails(detailsData);
         setBest8Data(best8DataRaw);
         setStats(statsData);
+        if (!requestedTab) {
+          setActiveTab(summaryData?.readiness?.can_publish === false ? "review" : "team_winrate");
+        }
         
         if (statsData.team_usage && statsData.team_usage.length > 0) {
           setSelectedTeam(statsData.team_usage[0].canonical_id);
@@ -188,7 +240,107 @@ export default function Dashboard() {
       }
     };
     fetchData();
-  }, [id, selectedSeed, isFirstLoad, tournamentId]);
+  }, [id, isFirstLoad, tournamentId, requestedTab]);
+
+  useEffect(() => {
+    const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
+    if (!isPrivateTournament || !tournamentId || hasFullStats) return;
+    if (activeTab !== "overview" && activeTab !== "matchups") return;
+
+    const fetchStats = async () => {
+      setAnalysisLoading(true);
+      try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
+        const url = `/api/tournaments/${tournamentId}/dashboard/stats?t=${Date.now()}`;
+        const res = await fetch(url, { cache: "no-store", headers: authHeaders });
+        if (!res.ok) {
+          if (res.status === 401) setAuthError(true);
+          else console.error("API error", res.status, url, (await res.text()).slice(0, 300));
+          return;
+        }
+        const data = await res.json();
+        setStats(data);
+        if (data.team_usage && data.team_usage.length > 0 && !selectedTeam) {
+          setSelectedTeam(data.team_usage[0].canonical_id);
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setAnalysisLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, [activeTab, isPrivateTournament, tournamentId, stats, selectedTeam]);
+
+  useEffect(() => {
+    if (!isPrivateTournament || !tournamentId || stats) return;
+    if (activeTab !== "winrate") return;
+
+    const fetchCharacterWinrates = async () => {
+      setAnalysisLoading(true);
+      try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
+        const url = `/api/tournaments/${tournamentId}/dashboard/character-winrates?t=${Date.now()}`;
+        const res = await fetch(url, { cache: "no-store", headers: authHeaders });
+        if (!res.ok) {
+          if (res.status === 401) setAuthError(true);
+          else console.error("API error", res.status, url, (await res.text()).slice(0, 300));
+          return;
+        }
+        const data = await res.json();
+        const characterUsage = data.character_winrates || data.character_stats || [];
+        setStats({
+          character_usage: characterUsage,
+          character_stats: characterUsage,
+          team_usage: [],
+        });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setAnalysisLoading(false);
+      }
+    };
+
+    fetchCharacterWinrates();
+  }, [activeTab, isPrivateTournament, tournamentId, stats]);
+
+  useEffect(() => {
+    if (!tournamentId || activeTab !== "my_dashboard") return;
+    if (bracketData && myPlayerDetails) return;
+
+    const fetchMyDashboard = async () => {
+      setAnalysisLoading(true);
+      try {
+        const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
+        const timestamp = Date.now();
+        const urls = [
+          `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
+        ];
+        const responses = await Promise.all(urls.map(url => fetch(url, { cache: "no-store", headers: authHeaders })));
+        for (let i = 0; i < responses.length; i++) {
+          if (!responses[i].ok) {
+            if (responses[i].status === 401) setAuthError(true);
+            else console.error("API error", responses[i].status, urls[i], (await responses[i].text()).slice(0, 300));
+            return;
+          }
+        }
+        const [bracketDataRaw, detailsData] = await Promise.all(responses.map(res => res.json()));
+        setBracketData(bracketDataRaw);
+        setMyPlayerDetails(detailsData);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setAnalysisLoading(false);
+      }
+    };
+
+    fetchMyDashboard();
+  }, [activeTab, tournamentId, selectedSeed, bracketData, myPlayerDetails]);
 
   useEffect(() => {
     if (activeTab !== "best8" || !tournamentId) return;
@@ -230,7 +382,7 @@ export default function Dashboard() {
   }, [selectedCharId]);
 
   useEffect(() => {
-    if (activeTab !== "matchups" && activeTab !== "team_winrate") return;
+    if (activeTab !== "matchups") return;
     if (matchups.length > 0 || !tournamentId) return;
 
     const fetchMatchups = async () => {
@@ -478,6 +630,7 @@ export default function Dashboard() {
 
   // 横断モード非対応タブでは選択UIを表示しない
   const showTournamentSelector = activeTab !== "my_dashboard" && activeTab !== "best8";
+  const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
 
   return (
     <main className="p-6 md:p-12 max-w-6xl mx-auto space-y-8 pb-24">
@@ -516,6 +669,13 @@ export default function Dashboard() {
 
       {/* Tabs */}
       <div className="flex bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto">
+        <button
+          onClick={() => setActiveTab("review")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "review" ? "bg-slate-600 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <ShieldAlert size={18} />
+          <span>入力確認</span>
+        </button>
         <button
           onClick={() => setActiveTab("team_winrate")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
@@ -569,6 +729,110 @@ export default function Dashboard() {
 
       {/* Content */}
       <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 md:p-8 rounded-3xl shadow-2xl min-h-[500px]">
+        {activeTab === "review" && (
+          <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
+            <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h2 className="text-2xl font-black text-slate-100">入力確認</h2>
+                <p className="mt-1 text-sm text-slate-400">{tournament?.name}</p>
+              </div>
+              <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold ring-1 ${
+                tournament?.publication_status === "published"
+                  ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
+                  : "bg-amber-500/10 text-amber-300 ring-amber-500/30"
+              }`}>
+                {tournament?.publication_status === "published" ? "公開中" : "非公開"}
+              </span>
+            </div>
+
+            {dashboardSummary ? (
+              <>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
+                    <p className="text-xs font-bold text-slate-500">登録済みプレイヤー</p>
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {dashboardSummary.registered_player_count}
+                      <span className="text-lg text-slate-500">/{dashboardSummary.expected_player_count ?? 64}</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
+                    <p className="text-xs font-bold text-slate-500">登録済み試合</p>
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {dashboardSummary.registered_match_count}
+                      <span className="text-lg text-slate-500">/{dashboardSummary.expected_match_count ?? 63}</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
+                    <p className="text-xs font-bold text-slate-500">登録済みの編成</p>
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {dashboardSummary.registered_team_count ?? dashboardSummary.registered_representative_team_count}
+                      <span className="text-lg text-slate-500">/{dashboardSummary.expected_team_count ?? 320}</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <section className="rounded-2xl bg-slate-800/40 p-5 ring-1 ring-white/10">
+                    <h3 className="mb-3 text-sm font-black text-slate-200">未登録シード</h3>
+                    <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
+                      {(dashboardSummary.missing_seed_numbers || []).slice(0, 64).map((seed: number) => (
+                        <span key={seed} className="rounded-md bg-slate-900 px-2 py-1 text-xs font-bold text-slate-400 ring-1 ring-white/5">
+                          {seed}
+                        </span>
+                      ))}
+                      {(dashboardSummary.missing_seed_numbers || []).length === 0 && (
+                        <p className="text-sm text-slate-500">なし</p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl bg-slate-800/40 p-5 ring-1 ring-white/10">
+                    <h3 className="text-sm font-black text-slate-200">編成データ未作成のプレイヤー</h3>
+                    <p className="mb-3 mt-1 text-xs text-slate-500">PlayerレコードはあるがDeckSetなし</p>
+                    <div className="max-h-44 space-y-2 overflow-y-auto">
+                      {(dashboardSummary.players_without_decks || []).map((player: any) => (
+                        <div key={player.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-xs ring-1 ring-white/5">
+                          <span className="font-bold text-slate-200">Seed {player.seed_number}</span>
+                          <span className="text-slate-500">{player.name}</span>
+                        </div>
+                      ))}
+                      {(dashboardSummary.players_without_decks || []).length === 0 && (
+                        <p className="text-sm text-slate-500">なし</p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl bg-slate-800/40 p-5 ring-1 ring-white/10">
+                    <h3 className="mb-3 text-sm font-black text-slate-200">欠損っぽい編成</h3>
+                    <div className="max-h-44 space-y-2 overflow-y-auto">
+                      {(dashboardSummary.players_with_incomplete_decks || []).map((player: any) => (
+                        <div key={player.id} className="rounded-lg bg-slate-900 px-3 py-2 text-xs ring-1 ring-white/5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-200">Seed {player.seed_number}</span>
+                            <span className="text-slate-500">{player.name}</span>
+                          </div>
+                          <p className="mt-1 text-slate-500">Team {player.incomplete_team_numbers.join(", ")}</p>
+                        </div>
+                      ))}
+                      {(dashboardSummary.players_with_incomplete_decks || []).length === 0 && (
+                        <p className="text-sm text-slate-500">なし</p>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-64 items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-500 border-t-transparent" />
+              </div>
+            )}
+          </div>
+        )}
+        {(((activeTab === "overview" || activeTab === "matchups") && !hasFullStats) || (activeTab === "winrate" && !stats)) && (
+          <div className="flex h-64 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+          </div>
+        )}
         
         {/* MY DASHBOARD TAB */}
         {activeTab === "my_dashboard" && (
@@ -662,7 +926,7 @@ export default function Dashboard() {
         )}
 
         {/* OVERVIEW TAB */}
-        {activeTab === "overview" && (
+        {activeTab === "overview" && hasFullStats && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
             <CharacterUsageByResultRanking
               stats={stats}
@@ -901,7 +1165,7 @@ export default function Dashboard() {
         )}
 
         {/* WINRATE TAB */}
-        {activeTab === "winrate" && (
+        {activeTab === "winrate" && stats && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
             <section>
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
@@ -1225,7 +1489,7 @@ export default function Dashboard() {
         )}
 
         {/* MATCHUPS TAB */}
-        {activeTab === "matchups" && (
+        {activeTab === "matchups" && hasFullStats && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="bg-purple-500/10 p-6 rounded-2xl ring-1 ring-purple-500/20">
               <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>

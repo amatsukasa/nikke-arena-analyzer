@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import shutil
 import os
+import time
 from pathlib import Path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -43,6 +44,65 @@ RESULT_SCORES = {
     "ベスト64": 64,
     "不明": 999,
 }
+
+DASHBOARD_CACHE_TTL_SECONDS = int(os.environ.get("DASHBOARD_CACHE_TTL_SECONDS", "60"))
+_dashboard_cache: dict[tuple[int, str, tuple[tuple[str, str], ...]], dict] = {}
+
+
+def _dashboard_cache_key(tournament_id: int, endpoint: str, params: dict | None = None):
+    params = params or {}
+    clean_params = tuple(
+        sorted(
+            (key, str(value))
+            for key, value in params.items()
+            if value is not None and key != "t"
+        )
+    )
+    return (int(tournament_id), endpoint, clean_params)
+
+
+def get_private_dashboard_cache(
+    tournament: models.Tournament,
+    endpoint: str,
+    params: dict | None = None,
+):
+    if tournament.publication_status == "published":
+        return None
+    key = _dashboard_cache_key(tournament.id, endpoint, params)
+    cached = _dashboard_cache.get(key)
+    now = time.monotonic()
+    if cached and cached["expires_at"] > now:
+        print(f"[dashboard-cache] hit tournament={tournament.id} endpoint={endpoint}")
+        return cached["value"]
+    if cached:
+        _dashboard_cache.pop(key, None)
+    print(f"[dashboard-cache] miss tournament={tournament.id} endpoint={endpoint}")
+    return None
+
+
+def set_private_dashboard_cache(
+    tournament: models.Tournament,
+    endpoint: str,
+    value,
+    params: dict | None = None,
+):
+    if tournament.publication_status != "published" and DASHBOARD_CACHE_TTL_SECONDS > 0:
+        key = _dashboard_cache_key(tournament.id, endpoint, params)
+        _dashboard_cache[key] = {
+            "value": value,
+            "expires_at": time.monotonic() + DASHBOARD_CACHE_TTL_SECONDS,
+        }
+    return value
+
+
+def invalidate_dashboard_cache(tournament_id: int):
+    before = len(_dashboard_cache)
+    for key in list(_dashboard_cache.keys()):
+        if key[0] == int(tournament_id):
+            _dashboard_cache.pop(key, None)
+    removed = before - len(_dashboard_cache)
+    if removed:
+        print(f"[dashboard-cache] invalidate tournament={tournament_id} entries={removed}")
 
 
 def _merge_char_position_stats(merged_chars, char_stat, cid):
@@ -1165,6 +1225,107 @@ def get_publication_readiness(tournament: models.Tournament, db: Session):
         "warnings": warnings,
     }
 
+
+def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament.id
+    ).order_by(models.Player.seed_number).all()
+    player_ids = [player.id for player in players]
+    matches_count = db.query(models.Match).filter(
+        models.Match.tournament_id == tournament.id
+    ).count()
+    deck_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id.in_(player_ids)
+    ).all() if player_ids else []
+    deck_sets_by_player: dict[int, list[models.DeckSet]] = {}
+    for deck_set in deck_sets:
+        deck_sets_by_player.setdefault(deck_set.player_id, []).append(deck_set)
+
+    deck_set_ids = [deck_set.id for deck_set in deck_sets]
+    deck_teams = db.query(models.DeckTeam).filter(
+        models.DeckTeam.deck_set_id.in_(deck_set_ids)
+    ).all() if deck_set_ids else []
+    deck_teams_by_set: dict[int, list[models.DeckTeam]] = {}
+    for team in deck_teams:
+        deck_teams_by_set.setdefault(team.deck_set_id, []).append(team)
+
+    missing_seed_numbers = [
+        seed
+        for seed in range(1, 65)
+        if not any(player.seed_number == seed for player in players)
+    ]
+    players_without_decks = []
+    players_with_incomplete_decks = []
+    representative_team_count = 0
+
+    for player in players:
+        player_deck_sets = deck_sets_by_player.get(player.id, [])
+        if not player_deck_sets:
+            players_without_decks.append({
+                "id": player.id,
+                "seed_number": player.seed_number,
+                "name": player.name,
+            })
+            continue
+        latest_deck_set = sorted(
+            player_deck_sets,
+            key=lambda deck_set: (deck_set.created_at, deck_set.id),
+            reverse=True,
+        )[0]
+        teams = deck_teams_by_set.get(latest_deck_set.id, [])
+        representative_team_count += len(teams)
+        incomplete_team_numbers = []
+        teams_by_number = {team.team_number: team for team in teams}
+        for team_number in range(1, 6):
+            team = teams_by_number.get(team_number)
+            if not team:
+                incomplete_team_numbers.append(team_number)
+                continue
+            char_ids = [
+                team.char1_id,
+                team.char2_id,
+                team.char3_id,
+                team.char4_id,
+                team.char5_id,
+            ]
+            if any(character_id is None for character_id in char_ids):
+                incomplete_team_numbers.append(team_number)
+        if incomplete_team_numbers:
+            players_with_incomplete_decks.append({
+                "id": player.id,
+                "seed_number": player.seed_number,
+                "name": player.name,
+                "incomplete_team_numbers": incomplete_team_numbers,
+            })
+
+    return {
+        "tournament_id": tournament.id,
+        "publication_status": tournament.publication_status,
+        "is_published": tournament.publication_status == "published",
+        "is_in_public_analysis": tournament.publication_status == "published",
+        "registered_player_count": len(players),
+        "expected_player_count": 64,
+        "registered_match_count": matches_count,
+        "expected_match_count": 63,
+        "registered_team_count": representative_team_count,
+        "registered_representative_team_count": representative_team_count,
+        "expected_team_count": 320,
+        "missing_seed_numbers": missing_seed_numbers,
+        "players_without_decks": players_without_decks,
+        "players_with_incomplete_decks": players_with_incomplete_decks,
+        "readiness": get_publication_readiness(tournament, db),
+    }
+
+
+@app.get("/api/tournaments/{tournament_id}/dashboard/summary")
+def get_dashboard_summary(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    return get_dashboard_summary_data(tournament, db)
+
 @app.get("/api/tournaments", response_model=List[schemas.Tournament])
 def get_tournaments(
     mine: bool = False,
@@ -1231,6 +1392,7 @@ def update_tournament(
     db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
     db.commit()
     db.refresh(db_tournament)
+    invalidate_dashboard_cache(tournament_id)
     return db_tournament
 
 
@@ -1276,6 +1438,7 @@ def update_tournament_publication(
     db.refresh(tournament)
     
     if status_changed:
+        invalidate_dashboard_cache(tournament_id)
         if publish:
             background_tasks.add_task(recompute_snapshot, tournament_id, current_user.id)
         else:
@@ -1296,6 +1459,7 @@ def delete_tournament(
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
+    invalidate_dashboard_cache(tournament_id)
     db.delete(db_tournament)
     db.commit()
     # 大会削除時に永続保存アイコンをクリーンアップ
@@ -1563,6 +1727,7 @@ async def update_player_info(
     db.commit()
     db.refresh(player)
     cleanup_replaced_player_icon(db, player.id, previous_icon_url, player.icon_url)
+    invalidate_dashboard_cache(tournament_id)
     return player
 
 @app.post("/api/tournaments/{tournament_id}/teams")
@@ -1782,6 +1947,7 @@ async def save_teams(
         deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
         if deleted_crops:
             print(f"[Cleanup] Removed {deleted_crops} registered crop images")
+        invalidate_dashboard_cache(tournament_id)
         return {
             "ok": True,
             "is_update": is_update,
@@ -1853,6 +2019,7 @@ async def upload_player_icon(
         player.icon_url = icon_url
         db.commit()
         db.refresh(player)
+        invalidate_dashboard_cache(tournament_id)
     except Exception as e:
         db.rollback()
         # 保存途中のファイルがあれば削除
@@ -1960,7 +2127,10 @@ def get_tournament_bracket(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_viewer(tournament_id, db, current_user)
+    cached = get_private_dashboard_cache(tournament, "bracket")
+    if cached is not None:
+        return cached
     # 全プレイヤーと試合結果を取得
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
     player_by_seed = {p.seed_number: p for p in players}
@@ -2058,7 +2228,7 @@ def get_tournament_bracket(
         
     champ_players = [get_p_info(champion_seeds[i], i+1) for i in range(8)]
     
-    return {
+    return set_private_dashboard_cache(tournament, "bracket", {
         "groups": groups,
         "champion_finals": {
             "players": champ_players,
@@ -2066,7 +2236,7 @@ def get_tournament_bracket(
             "sf_winners": champ_sf_winners,
             "winner": champ_winner
         }
-    }
+    })
 
 @app.post("/api/tournaments/{tournament_id}/matches")
 async def save_match(
@@ -2129,6 +2299,7 @@ async def save_match(
         db.add(rr)
         
     db.commit()
+    invalidate_dashboard_cache(tournament_id)
     return {"ok": True}
 
 
@@ -2148,6 +2319,7 @@ def rebuild_tournament_snapshot(
     ).first()
     if not tournament:
         raise HTTPException(status_code=404, detail="大会が見つかりません")
+    invalidate_dashboard_cache(tournament_id)
     background_tasks.add_task(recompute_snapshot, tournament_id, current_user.id)
     return {"ok": True, "message": f"tournament_id={tournament_id} のスナップショット再生成を開始しました"}
 
@@ -2158,11 +2330,15 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    params = {"seed": seed}
+    cached = get_private_dashboard_cache(tournament, "stats", params)
+    if cached is not None:
+        return cached
     stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
     if "team_usage" in stats:
         stats["team_usage"] = stats["team_usage"][:50]
-    return stats
+    return set_private_dashboard_cache(tournament, "stats", stats, params)
 
 
 
@@ -2681,7 +2857,11 @@ def get_dashboard_matchups(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    params = {"seed": seed}
+    cached = get_private_dashboard_cache(tournament, "matchups", params)
+    if cached is not None:
+        return cached
     query = db.query(models.Match).filter(models.Match.tournament_id == tournament_id)
     if seed:
         player = db.query(models.Player).filter(models.Player.tournament_id == tournament_id, models.Player.seed_number == seed).first()
@@ -2755,7 +2935,7 @@ def get_dashboard_matchups(
                         "defender_name": match.defender.name if match.defender else "不明"
                     })
                     
-    return {"matchups": matchup_results}
+    return set_private_dashboard_cache(tournament, "matchups", {"matchups": matchup_results}, params)
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/best8-decks")
 def get_best8_decks(
@@ -2764,7 +2944,10 @@ def get_best8_decks(
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
     """ベスト8進出者のプレイヤー名、成績、登録編成をまとめて取得する"""
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    cached = get_private_dashboard_cache(tournament, "best8-decks")
+    if cached is not None:
+        return cached
     bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
     champ_finals = bracket["champion_finals"]
@@ -2809,7 +2992,7 @@ def get_best8_decks(
     # 成績が良い順（sort_scoreの昇順）にソート
     results.sort(key=lambda x: x["sort_score"])
     
-    return results
+    return set_private_dashboard_cache(tournament, "best8-decks", results)
 
 
 # ============================================================
@@ -3761,7 +3944,21 @@ def get_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    params = {
+        "seed": seed,
+        "limit": limit,
+        "offset": offset,
+        "character_ids": character_ids,
+        "sort_by": sort_by,
+        "min_matches": min_matches,
+        "min_usage": min_usage,
+        "min_win_rate": min_win_rate,
+        "best_result": best_result,
+    }
+    cached = get_private_dashboard_cache(tournament, "teams", params)
+    if cached is not None:
+        return cached
     # スナップショット優先（なければ既存集計にフォールバック）
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
@@ -3797,10 +3994,10 @@ def get_dashboard_teams(
     elif sort_by in ("usage", "count"):
         teams.sort(key=lambda x: x.get("count", 0), reverse=True)
         
-    return {
+    return set_private_dashboard_cache(tournament, "teams", {
         "teams": teams[offset: offset + limit],
         "total": len(teams)
-    }
+    }, params)
 
 
 @app.post("/api/dashboard/cross-tournament/teams")
@@ -4032,7 +4229,11 @@ def get_dashboard_character_winrates(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    params = {"seed": seed}
+    cached = get_private_dashboard_cache(tournament, "character-winrates", params)
+    if cached is not None:
+        return cached
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
     ).first()
@@ -4041,7 +4242,12 @@ def get_dashboard_character_winrates(
     else:
         stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
         char_stats = stats.get("character_stats", [])
-    return {"character_winrates": char_stats, "character_stats": char_stats}
+    return set_private_dashboard_cache(
+        tournament,
+        "character-winrates",
+        {"character_winrates": char_stats, "character_stats": char_stats},
+        params,
+    )
 
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/character/{character_id}")
@@ -4114,8 +4320,14 @@ def get_dashboard_player_stats(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    params = {"seed": seed}
+    cached = get_private_dashboard_cache(tournament, "player-stats", params)
+    if cached is not None:
+        return cached
     if seed is not None:
-        return get_player_details(tournament_id, seed, db, current_user)
+        value = get_player_details(tournament_id, seed, db, current_user)
+        return set_private_dashboard_cache(tournament, "player-stats", value, params)
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).order_by(models.Player.seed_number).all()
-    return {"players": [schemas.Player.from_orm(p) for p in players]}
+    value = {"players": [schemas.Player.from_orm(p) for p in players]}
+    return set_private_dashboard_cache(tournament, "player-stats", value, params)
