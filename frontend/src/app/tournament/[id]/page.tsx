@@ -278,6 +278,7 @@ export default function TournamentDetail() {
 
   const prepareAnalysisImage = (
     file: File,
+    options: { maxOutputWidth?: number; filenameSuffix?: string } = {},
   ): Promise<{ file: File; preCropped: boolean }> => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -394,15 +395,25 @@ export default function TournamentDetail() {
           img.height - sourceY,
           Math.ceil(bestBounds.height / detectionScale),
         );
+        const maxOutputWidth = options.maxOutputWidth && options.maxOutputWidth > 0
+          ? options.maxOutputWidth
+          : undefined;
+        const outputScale = maxOutputWidth && sourceWidth > maxOutputWidth
+          ? maxOutputWidth / sourceWidth
+          : 1;
+        const outputWidth = Math.max(1, Math.round(sourceWidth * outputScale));
+        const outputHeight = Math.max(1, Math.round(sourceHeight * outputScale));
         const outputCanvas = document.createElement("canvas");
-        outputCanvas.width = sourceWidth;
-        outputCanvas.height = sourceHeight;
+        outputCanvas.width = outputWidth;
+        outputCanvas.height = outputHeight;
         const outputContext = outputCanvas.getContext("2d");
         if (!outputContext) {
           URL.revokeObjectURL(img.src);
           resolve({ file, preCropped: false });
           return;
         }
+        outputContext.imageSmoothingEnabled = true;
+        outputContext.imageSmoothingQuality = "high";
         outputContext.drawImage(
           img,
           sourceX,
@@ -411,17 +422,21 @@ export default function TournamentDetail() {
           sourceHeight,
           0,
           0,
-          sourceWidth,
-          sourceHeight,
+          outputWidth,
+          outputHeight,
         );
         outputCanvas.toBlob(
           (blob) => {
             URL.revokeObjectURL(img.src);
             if (blob) {
+              const suffix = options.filenameSuffix ?? ".modal.png";
+              const outputFilename = /\.[^.]+$/.test(file.name)
+                ? file.name.replace(/\.[^.]+$/, suffix)
+                : `${file.name}${suffix}`;
               resolve({
                 file: new File(
                   [blob],
-                  file.name.replace(/\.[^.]+$/, ".modal.png"),
+                  outputFilename,
                   { type: "image/png", lastModified: Date.now() },
                 ),
                 preCropped: true,
@@ -760,19 +775,46 @@ export default function TournamentDetail() {
   const handleMatchUpload = async () => {
     if (!matchFile || !tournamentId) return;
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("tournament_id", tournamentId.toString());
-    formData.append("attacker_seed", attackerSeed.toString());
-    formData.append("defender_seed", defenderSeed.toString());
-    formData.append("stage", matchStage);
-    formData.append("image", matchFile);
 
     try {
+      const preparedMatchImage = await prepareAnalysisImage(matchFile, {
+        maxOutputWidth: 1080,
+        filenameSuffix: ".match-modal.png",
+      });
+      const preparedSizeRatio = matchFile.size > 0
+        ? preparedMatchImage.file.size / matchFile.size
+        : 1;
+      const uploadFile = preparedMatchImage.preCropped && preparedSizeRatio <= 1.2
+        ? preparedMatchImage.file
+        : matchFile;
+      console.info("[match-image-preparation]", {
+        originalName: matchFile.name,
+        originalBytes: matchFile.size,
+        preparedName: preparedMatchImage.file.name,
+        preparedBytes: preparedMatchImage.file.size,
+        uploadName: uploadFile.name,
+        uploadBytes: uploadFile.size,
+        reductionPercent: matchFile.size > 0
+          ? Math.round((1 - preparedSizeRatio) * 100)
+          : 0,
+        preparedSizeRatio,
+        preCropped: preparedMatchImage.preCropped,
+        usedPreparedImage: uploadFile === preparedMatchImage.file,
+      });
+
+      const formData = new FormData();
+      formData.append("tournament_id", tournamentId.toString());
+      formData.append("attacker_seed", attackerSeed.toString());
+      formData.append("defender_seed", defenderSeed.toString());
+      formData.append("stage", matchStage);
+      formData.append("image", uploadFile);
+
       const res = await fetch("/api/analyze/match_result", { method: "POST", body: formData });
       const data = await res.json();
       setMatchResult(data);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     } catch (err) {
+      console.error("Failed to prepare or upload match image:", err);
       alert("解析エラーが発生しました。");
     } finally {
       setIsUploading(false);
