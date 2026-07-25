@@ -46,9 +46,27 @@ EXPECTED_COMPONENT_X = (0, 10)
 EXPECTED_COMPONENT_Y = (18, 34)
 EXPECTED_COMPONENT_WIDTH = (12, 31)
 EXPECTED_COMPONENT_HEIGHT = (10, 35)
+# The unlevelled badge can render as only the filled centre jewel after the
+# screenshot has passed through the browser crop/resize path.  Keep this as a
+# separate, tightly bounded profile instead of relaxing the general shape
+# limits, which would make character artwork eligible as a badge.
+COMPACT_COMPONENT_X = (4, 13)
+COMPACT_COMPONENT_Y = (25, 32)
+COMPACT_COMPONENT_WIDTH = (13, 16)
+COMPACT_COMPONENT_HEIGHT = (8, 9)
+COMPACT_COMPONENT_AREA = (65.0, 100.0)
 MIN_SHAPE_SCORE = 0.48
 LEVEL_15_DARK_VALUE = 85
-LEVEL_15_DARK_RATIO = 0.16
+LEVEL_15_DARK_RATIO = 0.11
+# The in-game badge is a pointy-top regular hexagon. At the normalized card
+# scale its visible outer frame is about 28 px wide and 32 px high.
+BADGE_HEXAGON_SIZE = (28, 32)
+BADGE_INNER_HEXAGON_SIZE = (20, 24)
+HEXAGON_PROBE_CENTER_X = (10, 19)
+HEXAGON_PROBE_CENTER_Y = (33, 37)
+HEXAGON_PROBE_MIN_COLOR_DENSITY = 0.60
+HEXAGON_PROBE_MIN_CONTRAST_SCORE = 0.48
+HEXAGON_PROBE_MIN_DENSITY_DELTA = 0.25
 
 
 def _normalized_face(face: np.ndarray) -> np.ndarray:
@@ -62,6 +80,76 @@ def _bounded_score(value: float, low: float, high: float) -> float:
         return 1.0
     distance = low - value if value < low else value - high
     return max(0.0, 1.0 - distance / max(high - low, 1.0))
+
+
+def _hexagon_points(
+    center_x: float,
+    center_y: float,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Return the expected pointy-top badge hexagon in ROI coordinates."""
+    half_width = width / 2.0
+    half_height = height / 2.0
+    quarter_height = height / 4.0
+    return np.rint(
+        np.array(
+            [
+                [center_x, center_y - half_height],
+                [center_x + half_width, center_y - quarter_height],
+                [center_x + half_width, center_y + quarter_height],
+                [center_x, center_y + half_height],
+                [center_x - half_width, center_y + quarter_height],
+                [center_x - half_width, center_y - quarter_height],
+            ],
+            dtype=np.float32,
+        )
+    ).astype(np.int32)
+
+
+def _badge_geometry(
+    candidate: dict[str, Any],
+    roi_shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Infer the full badge hexagon from its colored frame or centre jewel."""
+    x, y, width, height = candidate["bbox"]
+    center_x = x + (width - 1) / 2.0
+    center_y = y + (height - 1) / 2.0
+    outer = _hexagon_points(center_x, center_y, *BADGE_HEXAGON_SIZE)
+    inner = _hexagon_points(center_x, center_y, *BADGE_INNER_HEXAGON_SIZE)
+
+    roi_height, roi_width = roi_shape
+    outer[:, 0] = np.clip(outer[:, 0], 0, roi_width - 1)
+    outer[:, 1] = np.clip(outer[:, 1], 0, roi_height - 1)
+    inner[:, 0] = np.clip(inner[:, 0], 0, roi_width - 1)
+    inner[:, 1] = np.clip(inner[:, 1], 0, roi_height - 1)
+
+    contour = candidate["_contour"]
+    contour_hexagon = _hexagon_points(
+        center_x,
+        center_y,
+        max(width, 1),
+        max(height, 1),
+    ).reshape((-1, 1, 2))
+    shape_distance = float(
+        cv2.matchShapes(contour, contour_hexagon, cv2.CONTOURS_MATCH_I1, 0.0)
+    )
+    template_score = 1.0 / (1.0 + shape_distance * 4.0)
+    # A compact component is the centre jewel, not the outer border. Its
+    # position/size profile is therefore the reliable evidence for inferring
+    # the surrounding hexagon.
+    inferred = candidate["shape_profile"] == "compact"
+    hexagon_score = (
+        float(candidate["shape_score"]) * 0.70
+        + (0.90 if inferred else template_score) * 0.30
+    )
+    return {
+        "polygon": outer.tolist(),
+        "inner_polygon": inner.tolist(),
+        "center": [round(center_x, 2), round(center_y, 2)],
+        "hexagon_score": round(min(1.0, hexagon_score), 4),
+        "inferred_from_compact_jewel": inferred,
+    }
 
 
 def _candidate_for_rarity(
@@ -95,12 +183,20 @@ def _candidate_for_rarity(
         x, y, width, height = cv2.boundingRect(contour)
         if area < MIN_COMPONENT_AREA:
             continue
-        if not (
+        is_standard_component = (
             EXPECTED_COMPONENT_X[0] <= x <= EXPECTED_COMPONENT_X[1]
             and EXPECTED_COMPONENT_Y[0] <= y <= EXPECTED_COMPONENT_Y[1]
             and EXPECTED_COMPONENT_WIDTH[0] <= width <= EXPECTED_COMPONENT_WIDTH[1]
             and EXPECTED_COMPONENT_HEIGHT[0] <= height <= EXPECTED_COMPONENT_HEIGHT[1]
-        ):
+        )
+        is_compact_component = (
+            COMPACT_COMPONENT_X[0] <= x <= COMPACT_COMPONENT_X[1]
+            and COMPACT_COMPONENT_Y[0] <= y <= COMPACT_COMPONENT_Y[1]
+            and COMPACT_COMPONENT_WIDTH[0] <= width <= COMPACT_COMPONENT_WIDTH[1]
+            and COMPACT_COMPONENT_HEIGHT[0] <= height <= COMPACT_COMPONENT_HEIGHT[1]
+            and COMPACT_COMPONENT_AREA[0] <= area <= COMPACT_COMPONENT_AREA[1]
+        )
+        if not (is_standard_component or is_compact_component):
             continue
 
         hull_area = float(cv2.contourArea(cv2.convexHull(contour)))
@@ -127,6 +223,9 @@ def _candidate_for_rarity(
                 "solidity": round(solidity, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "shape_score": round(shape_score, 4),
+                "shape_profile": (
+                    "compact" if is_compact_component else "standard"
+                ),
                 "_contour": contour,
             }
         )
@@ -134,6 +233,60 @@ def _candidate_for_rarity(
     if not candidates:
         return None, mask
     return max(candidates, key=lambda item: (item["shape_score"], item["area"])), mask
+
+
+def _hexagon_probe_candidate(
+    mask: np.ndarray,
+    rarity: str,
+) -> dict[str, Any] | None:
+    """Recover a badge whose color contour merged into character artwork."""
+    colored = mask > 0
+    best_probe: dict[str, Any] | None = None
+    for center_y in range(HEXAGON_PROBE_CENTER_Y[0], HEXAGON_PROBE_CENTER_Y[1] + 1):
+        for center_x in range(HEXAGON_PROBE_CENTER_X[0], HEXAGON_PROBE_CENTER_X[1] + 1):
+            inner_mask = np.zeros(mask.shape, dtype=np.uint8)
+            outer_mask = np.zeros(mask.shape, dtype=np.uint8)
+            inner_polygon = _hexagon_points(center_x, center_y, 20, 24)
+            outer_polygon = _hexagon_points(center_x, center_y, 30, 36)
+            cv2.fillConvexPoly(inner_mask, inner_polygon, 255)
+            cv2.fillConvexPoly(outer_mask, outer_polygon, 255)
+            inner_pixels = inner_mask > 0
+            ring_pixels = (outer_mask > 0) & ~inner_pixels
+            color_density = float(np.mean(colored[inner_pixels]))
+            ring_density = float(np.mean(colored[ring_pixels]))
+            density_delta = color_density - ring_density
+            contrast_score = color_density - ring_density * 0.40
+            if (
+                color_density < HEXAGON_PROBE_MIN_COLOR_DENSITY
+                or contrast_score < HEXAGON_PROBE_MIN_CONTRAST_SCORE
+                or density_delta < HEXAGON_PROBE_MIN_DENSITY_DELTA
+            ):
+                continue
+            if best_probe is None or contrast_score > best_probe["contrast_score"]:
+                contour = _hexagon_points(
+                    center_x,
+                    center_y,
+                    *BADGE_HEXAGON_SIZE,
+                ).reshape((-1, 1, 2))
+                x, y, width, height = cv2.boundingRect(contour)
+                best_probe = {
+                    "rarity": rarity,
+                    "area": round(float(cv2.contourArea(contour)), 3),
+                    "bbox": [int(x), int(y), int(width), int(height)],
+                    "solidity": 1.0,
+                    "fill_ratio": round(
+                        float(cv2.contourArea(contour)) / float(width * height),
+                        4,
+                    ),
+                    "shape_score": round(min(1.0, 0.50 + contrast_score), 4),
+                    "shape_profile": "hexagon_probe",
+                    "color_density": round(color_density, 4),
+                    "ring_density": round(ring_density, 4),
+                    "density_delta": round(density_delta, 4),
+                    "contrast_score": round(contrast_score, 4),
+                    "_contour": contour,
+                }
+    return best_probe
 
 
 def _write_debug_images(
@@ -192,6 +345,11 @@ def analyze_collection(
     for rarity in RARITY_HSV_RANGES:
         candidate, mask = _candidate_for_rarity(hue, saturation, rarity)
         masks[rarity] = mask
+        # Treasure-colored frames can touch orange character artwork and turn
+        # into one oversized contour. Probe the expected hexagon directly in
+        # that case, while retaining an inside-vs-ring contrast requirement.
+        if candidate is None and rarity == "treasure":
+            candidate = _hexagon_probe_candidate(mask, rarity)
         if candidate is not None:
             candidates.append(candidate)
 
@@ -233,13 +391,14 @@ def analyze_collection(
 
     rarity = str(best["rarity"])
     x, y, width, height = best["bbox"]
-    # Ignore the anti-aliased outer rim and measure darkness only inside the
-    # detected badge. The level-15 artwork has a stable dark interior.
-    inset = 2 if width > 6 and height > 6 else 0
-    level_patch = value[
-        y + inset : y + height - inset,
-        x + inset : x + width - inset,
-    ]
+    geometry = _badge_geometry(best, roi.shape[:2])
+    inner_mask = np.zeros(value.shape, dtype=np.uint8)
+    cv2.fillConvexPoly(
+        inner_mask,
+        np.asarray(geometry["inner_polygon"], dtype=np.int32),
+        255,
+    )
+    level_patch = value[inner_mask > 0]
     dark_ratio = (
         float(np.mean(level_patch < LEVEL_15_DARK_VALUE))
         if level_patch.size
@@ -271,6 +430,7 @@ def analyze_collection(
         "rarity_margin": round(rarity_margin, 4),
         "dark_ratio": round(dark_ratio, 4),
         "level_band": level_band,
+        "badge_geometry": geometry,
         "candidates": public_candidates,
     }
     logger.debug(
