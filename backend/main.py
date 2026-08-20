@@ -1069,6 +1069,10 @@ def create_tournament(
 ):
     # 登録データのベースを作成
     data = tournament.model_dump()
+
+    # 省略時だけプロフィール値を初期値にする。明示的な null は維持する。
+    if "provider_game_start_date" not in tournament.model_fields_set:
+        data["provider_game_start_date"] = current_user.game_start_date
     
     # ログインユーザーから提供者名を取得
     data["owner_name"] = current_user.provider_name or "不明な提供者"
@@ -1087,16 +1091,22 @@ def create_tournament(
             data["date"] = championship.date or tournament.date
 
     db_tournament = models.Tournament(**data)
-    db.add(db_tournament)
-    db.commit()
-    db.refresh(db_tournament)
+    try:
+        db.add(db_tournament)
+        db.commit()
+        db.refresh(db_tournament)
+    except Exception:
+        db.rollback()
+        raise
     return db_tournament
 
 def require_tournament_manager(
     tournament_id: int,
     db: Session,
-    current_user: models.AppUser,
+    current_user: models.AppUser | None,
 ) -> models.Tournament:
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     tournament = db.query(models.Tournament).filter(
         models.Tournament.id == tournament_id
     ).first()
@@ -1378,20 +1388,44 @@ def update_tournament(
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
-    
-    # championship_id が更新されたら名前などを再同期
-    if tournament.championship_id:
-        championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
-        if championship:
-            db_tournament.name = championship.name
-            db_tournament.championship_id = tournament.championship_id
-            db_tournament.date = championship.date or tournament.date
-            
-    db_tournament.season = tournament.season
-    # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
-    db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
-    db.commit()
-    db.refresh(db_tournament)
+
+    # registration_scope は作成時に固定する。Pydantic の既定値を
+    # 「クライアントが明示した値」と誤認しないよう fields_set を使う。
+    if (
+        "registration_scope" in tournament.model_fields_set
+        and tournament.registration_scope != db_tournament.registration_scope
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="registration_scope cannot be changed after tournament creation",
+        )
+
+    try:
+        db_tournament.name = tournament.name
+        db_tournament.date = tournament.date
+
+        # championship_id が更新されたら名前などを再同期
+        if tournament.championship_id:
+            championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
+            if championship:
+                db_tournament.name = championship.name
+                db_tournament.championship_id = tournament.championship_id
+                db_tournament.date = championship.date or tournament.date
+
+        db_tournament.season = tournament.season
+        # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
+        db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
+
+        # 省略時は保存値を維持し、明示 null もそのまま保存する。
+        if "provider_game_start_date" in tournament.model_fields_set:
+            db_tournament.provider_game_start_date = tournament.provider_game_start_date
+
+        db.commit()
+        db.refresh(db_tournament)
+    except Exception:
+        db.rollback()
+        raise
     invalidate_dashboard_cache(tournament_id)
     return db_tournament
 
