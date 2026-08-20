@@ -134,6 +134,50 @@ class ChampionTeamsResponse(BaseModel):
     teams: List[ChampionTeamResponse]
 
 
+class ChampionRoundResultInput(BaseModel):
+    round_number: int
+    winner_id: int
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionMatchUpsert(BaseModel):
+    winner_id: int
+    round_results: List[ChampionRoundResultInput]
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionBracketPlayer(BaseModel):
+    id: int
+    champion_slot: int
+    seed_number: Optional[int] = None
+    name: str
+    icon_url: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChampionRoundResultResponse(BaseModel):
+    round_number: int
+    winner_id: int
+
+
+class ChampionBracketMatchResponse(BaseModel):
+    bracket_stage: Literal["quarterfinal", "semifinal", "final"]
+    bracket_slot: int
+    name: str
+    status: Literal["locked", "ready", "complete"]
+    attacker: Optional[ChampionBracketPlayer] = None
+    defender: Optional[ChampionBracketPlayer] = None
+    match_id: Optional[int] = None
+    winner: Optional[ChampionBracketPlayer] = None
+    round_results: List[ChampionRoundResultResponse] = Field(default_factory=list)
+    upstream: List[str] = Field(default_factory=list)
+
+
+class ChampionBracketResponse(BaseModel):
+    tournament_id: int
+    matches: List[ChampionBracketMatchResponse]
+
+
 class DeckTeamBase(BaseModel):
     team_number: int
     char1_id: Optional[int] = None

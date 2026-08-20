@@ -188,6 +188,13 @@ from services.registration_email import (
     send_registration_approved,
     send_registration_request,
 )
+from services.champion_bracket import (
+    CHAMPION_BRACKET,
+    CHAMPION_BRACKET_BY_KEY,
+    dependent_keys,
+    get_bracket_definition,
+    participant_ids,
+)
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
@@ -1872,7 +1879,7 @@ def champion_icon_temporary_paths(final_path: Path, token: str) -> tuple[Path, P
     )
 
 
-def invalidate_dashboard_cache_after_file_change(tournament_id: int) -> None:
+def invalidate_dashboard_cache_safely(tournament_id: int) -> None:
     try:
         invalidate_dashboard_cache(tournament_id)
     except Exception as exc:
@@ -1963,7 +1970,7 @@ async def upload_champion_player_icon(
                     temporary_path.unlink()
                 except OSError as exc:
                     print(f"[player-icon] temporary cleanup failed path={temporary_path}: {exc}")
-    invalidate_dashboard_cache_after_file_change(tournament_id)
+    invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
         "tournament_id": tournament_id,
@@ -2011,7 +2018,7 @@ def delete_champion_player_icon(
                 backup_path.unlink()
             except OSError as exc:
                 print(f"[player-icon] cleanup failed tournament={tournament_id} player={player.id}: {exc}")
-    invalidate_dashboard_cache_after_file_change(tournament_id)
+    invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
         "tournament_id": tournament_id,
@@ -2203,6 +2210,253 @@ def get_champion_teams(
         models.DeckSet.player_id == player.id
     ).order_by(models.DeckSet.id).first()
     return champion_teams_response(player, deck_set)
+
+
+def champion_player_has_complete_deck(player_id: int, db: Session) -> bool:
+    deck_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player_id
+    ).all()
+    if len(deck_sets) != 1:
+        return False
+    teams = list(deck_sets[0].teams)
+    if sorted(team.team_number for team in teams) != [1, 2, 3, 4, 5]:
+        return False
+    character_ids = []
+    for team in teams:
+        ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
+        if any(character_id in (None, EMPTY_SLOT_CHARACTER_ID) for character_id in ids):
+            return False
+        character_ids.extend(ids)
+    return len(set(character_ids)) == 25
+
+
+def champion_match_is_complete(
+    match: models.Match | None,
+    expected_participants: tuple[int | None, int | None] | None = None,
+) -> bool:
+    if match is None or match.winner_id is None:
+        return False
+    participants = (match.attacker_id, match.defender_id)
+    if expected_participants is not None and participants != expected_participants:
+        return False
+    if participants[0] is None or participants[1] is None or participants[0] == participants[1]:
+        return False
+    rounds = list(match.round_results)
+    if len(rounds) != 5 or sorted(result.round_number for result in rounds) != [1, 2, 3, 4, 5]:
+        return False
+    if any(result.winner_id not in participants for result in rounds):
+        return False
+    attacker_wins = sum(result.winner_id == participants[0] for result in rounds)
+    calculated_winner = participants[0] if attacker_wins >= 3 else participants[1]
+    return match.winner_id == calculated_winner
+
+
+def champion_bracket_context(tournament_id: int, db: Session):
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).all()
+    players_by_id = {player.id: player for player in players}
+    player_ids_by_slot = {player.champion_slot: player.id for player in players}
+    stored_matches = db.query(models.Match).filter(
+        models.Match.tournament_id == tournament_id,
+        models.Match.bracket_stage.isnot(None),
+    ).all()
+    matches_by_key = {
+        (match.bracket_stage, match.bracket_slot): match for match in stored_matches
+    }
+    winners: dict[tuple[str, int], int] = {}
+    expected_by_key = {}
+    for definition in CHAMPION_BRACKET:
+        expected = participant_ids(definition, player_ids_by_slot, winners)
+        expected_by_key[definition.key] = expected
+        match = matches_by_key.get(definition.key)
+        if champion_match_is_complete(match, expected):
+            winners[definition.key] = match.winner_id
+    return players_by_id, player_ids_by_slot, matches_by_key, winners, expected_by_key
+
+
+def champion_bracket_match_data(
+    definition,
+    players_by_id,
+    matches_by_key,
+    expected_by_key,
+    db: Session,
+):
+    expected = expected_by_key[definition.key]
+    attacker = players_by_id.get(expected[0])
+    defender = players_by_id.get(expected[1])
+    match = matches_by_key.get(definition.key)
+    complete = champion_match_is_complete(match, expected)
+    participants_ready = (
+        attacker is not None
+        and defender is not None
+        and attacker.id != defender.id
+        and champion_player_has_complete_deck(attacker.id, db)
+        and champion_player_has_complete_deck(defender.id, db)
+    )
+    status = "complete" if complete else ("ready" if participants_ready else "locked")
+    winner = players_by_id.get(match.winner_id) if complete else None
+    return {
+        "bracket_stage": definition.key[0],
+        "bracket_slot": definition.key[1],
+        "name": definition.name,
+        "status": status,
+        "attacker": attacker,
+        "defender": defender,
+        "match_id": match.id if match else None,
+        "winner": winner,
+        "round_results": [
+            {"round_number": result.round_number, "winner_id": result.winner_id}
+            for result in sorted(match.round_results, key=lambda item: item.round_number)
+        ] if match else [],
+        "upstream": [CHAMPION_BRACKET_BY_KEY[key].name for key in definition.upstream],
+    }
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/champion-bracket",
+    response_model=schemas.ChampionBracketResponse,
+)
+def get_champion_bracket(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    return {
+        "tournament_id": tournament_id,
+        "matches": [
+            champion_bracket_match_data(
+                definition, players_by_id, matches_by_key, expected_by_key, db
+            )
+            for definition in CHAMPION_BRACKET
+        ],
+    }
+
+
+def validate_champion_match_result(
+    data: schemas.ChampionMatchUpsert,
+    participants: tuple[int, int],
+) -> None:
+    if len(data.round_results) != 5:
+        raise HTTPException(status_code=422, detail="Exactly five round results are required")
+    round_numbers = [result.round_number for result in data.round_results]
+    if sorted(round_numbers) != [1, 2, 3, 4, 5]:
+        raise HTTPException(status_code=422, detail="round_number must contain each value from 1 to 5 exactly once")
+    if data.winner_id not in participants:
+        raise HTTPException(status_code=422, detail="Match winner must be a participant")
+    if any(result.winner_id not in participants for result in data.round_results):
+        raise HTTPException(status_code=422, detail="Round winner must be a participant")
+    attacker_wins = sum(result.winner_id == participants[0] for result in data.round_results)
+    calculated_winner = participants[0] if attacker_wins >= 3 else participants[1]
+    if data.winner_id != calculated_winner:
+        raise HTTPException(status_code=422, detail="Match winner does not match the five-round majority")
+
+
+def delete_champion_match_branch(key, matches_by_key, db: Session) -> None:
+    for dependent in dependent_keys(key):
+        delete_champion_match_branch(dependent, matches_by_key, db)
+    match = matches_by_key.pop(key, None)
+    if match is not None:
+        db.delete(match)
+
+
+def reconcile_champion_dependents(key, tournament_id: int, matches_by_key, db: Session) -> None:
+    _, _, current_matches, _, expected_by_key = champion_bracket_context(tournament_id, db)
+    matches_by_key.update(current_matches)
+    for dependent in dependent_keys(key):
+        dependent_match = matches_by_key.get(dependent)
+        if dependent_match is None:
+            for descendant in dependent_keys(dependent):
+                delete_champion_match_branch(descendant, matches_by_key, db)
+            continue
+        if not champion_match_is_complete(dependent_match, expected_by_key[dependent]):
+            delete_champion_match_branch(dependent, matches_by_key, db)
+        else:
+            reconcile_champion_dependents(dependent, tournament_id, matches_by_key, db)
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/matches/{bracket_stage}/{bracket_slot}",
+    response_model=schemas.ChampionBracketMatchResponse,
+)
+def save_champion_match(
+    tournament_id: int,
+    bracket_stage: str,
+    bracket_slot: int,
+    data: schemas.ChampionMatchUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    require_champion_tournament_manager(tournament_id, db, current_user)
+    definition = get_bracket_definition(bracket_stage, bracket_slot)
+    if definition is None:
+        raise HTTPException(status_code=422, detail="Invalid champion bracket slot")
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    expected = expected_by_key[definition.key]
+    if expected[0] is None or expected[1] is None:
+        raise HTTPException(status_code=409, detail="Upstream participants are not complete")
+    participants = (expected[0], expected[1])
+    if participants[0] == participants[1]:
+        raise HTTPException(status_code=409, detail="Attacker and defender must differ")
+    if any(player_id not in players_by_id for player_id in participants):
+        raise HTTPException(status_code=409, detail="Participant does not belong to tournament")
+    if not all(champion_player_has_complete_deck(player_id, db) for player_id in participants):
+        raise HTTPException(status_code=409, detail="Both participants must have complete decks")
+    validate_champion_match_result(data, participants)
+
+    match = matches_by_key.get(definition.key)
+    old_winner_id = match.winner_id if match and champion_match_is_complete(match, expected) else None
+    if match is None:
+        match = models.Match(
+            tournament_id=tournament_id,
+            stage=definition.name,
+            bracket_stage=definition.key[0],
+            bracket_slot=definition.key[1],
+            attacker_id=participants[0],
+            defender_id=participants[1],
+        )
+        db.add(match)
+        matches_by_key[definition.key] = match
+    else:
+        match.stage = definition.name
+        match.attacker_id = participants[0]
+        match.defender_id = participants[1]
+    match.winner_id = data.winner_id
+    match.round_results.clear()
+    for result in sorted(data.round_results, key=lambda item: item.round_number):
+        match.round_results.append(models.RoundResult(
+            round_number=result.round_number,
+            winner_id=result.winner_id,
+        ))
+    try:
+        db.flush()
+        if old_winner_id != data.winner_id:
+            for dependent in dependent_keys(definition.key):
+                delete_champion_match_branch(dependent, matches_by_key, db)
+        else:
+            reconcile_champion_dependents(definition.key, tournament_id, matches_by_key, db)
+        db.commit()
+        db.refresh(match)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Champion match conflicts with existing data") from exc
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_dashboard_cache_safely(tournament_id)
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    return champion_bracket_match_data(
+        definition, players_by_id, matches_by_key, expected_by_key, db
+    )
 
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
 def get_players(
