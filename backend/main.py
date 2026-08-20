@@ -1647,6 +1647,84 @@ def validate_champion_seed(seed_number: int | None) -> None:
         raise HTTPException(status_code=422, detail="seed_number must be null or between 1 and 64")
 
 
+def require_champion_player_manager(
+    tournament_id: int,
+    player_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> tuple[models.Tournament, models.Player]:
+    tournament = require_champion_tournament_manager(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return tournament, player
+
+
+def champion_teams_response(player: models.Player, deck_set: models.DeckSet | None):
+    if deck_set is None:
+        return {
+            "player_id": player.id,
+            "tournament_id": player.tournament_id,
+            "champion_slot": player.champion_slot,
+            "deck_set_id": None,
+            "status": "not_saved",
+            "teams": [],
+        }
+    teams = sorted(deck_set.teams, key=lambda team: team.team_number)
+    response_teams = []
+    complete = len(teams) == 5
+    for team in teams:
+        character_ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
+        complete = complete and team.team_number in range(1, 6) and all(
+            character_id is not None and character_id != EMPTY_SLOT_CHARACTER_ID
+            for character_id in character_ids
+        )
+        response_teams.append({
+            "team_number": team.team_number,
+            "character_ids": character_ids,
+            "collection_levels": get_team_collection_levels(team),
+        })
+    return {
+        "player_id": player.id,
+        "tournament_id": player.tournament_id,
+        "champion_slot": player.champion_slot,
+        "deck_set_id": deck_set.id,
+        "status": "complete" if complete else "incomplete",
+        "teams": response_teams,
+    }
+
+
+def validate_champion_teams_payload(data: schemas.ChampionTeamsUpsert) -> list[tuple[int, list[int], list[str | None]]]:
+    if len(data.teams) != 5:
+        raise HTTPException(status_code=422, detail="Exactly five teams are required")
+    team_numbers = [team.team_number for team in data.teams]
+    if sorted(team_numbers) != [1, 2, 3, 4, 5]:
+        raise HTTPException(status_code=422, detail="team_number must contain each value from 1 to 5 exactly once")
+    normalized = []
+    all_character_ids = []
+    for team in data.teams:
+        if len(team.characters) != 5:
+            raise HTTPException(status_code=422, detail="Each team must contain exactly five characters")
+        character_ids = [character.id for character in team.characters]
+        if any(character_id <= 0 or character_id == EMPTY_SLOT_CHARACTER_ID for character_id in character_ids):
+            raise HTTPException(status_code=422, detail="All character slots must contain a resolved character")
+        if len(set(character_ids)) != 5:
+            raise HTTPException(status_code=422, detail="Characters must not be duplicated within a team")
+        all_character_ids.extend(character_ids)
+        normalized.append((
+            team.team_number,
+            character_ids,
+            [character.collection_level if character.collection_level in COLLECTION_VALUES else None for character in team.characters],
+        ))
+    if len(set(all_character_ids)) != 25:
+        raise HTTPException(status_code=422, detail="Characters must not be duplicated across teams")
+    return sorted(normalized, key=lambda item: item[0])
+
+
 @app.get(
     "/api/tournaments/{tournament_id}/champion-slots",
     response_model=schemas.ChampionSlotsResponse,
@@ -1764,6 +1842,196 @@ def get_champion_player_by_id(
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     return player
+
+
+CHAMPION_DECK_MAX_IMAGES = 5
+CHAMPION_DECK_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+CHAMPION_DECK_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+@app.post("/api/tournaments/{tournament_id}/players/by-id/{player_id}/analyze-deck")
+async def analyze_champion_deck(
+    tournament_id: int,
+    player_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    # Authorization and ownership checks deliberately precede multipart parsing/decoding.
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    form = await request.form(
+        max_files=CHAMPION_DECK_MAX_IMAGES,
+        max_fields=CHAMPION_DECK_MAX_IMAGES,
+        max_part_size=CHAMPION_DECK_MAX_IMAGE_BYTES,
+    )
+    images = form.getlist("images")
+    if not 1 <= len(images) <= CHAMPION_DECK_MAX_IMAGES:
+        raise HTTPException(status_code=422, detail="Provide between one and five images")
+    pre_cropped_flags = [
+        str(value).strip().lower() in {"1", "true", "yes", "on"}
+        for value in form.getlist("image_pre_cropped")
+    ]
+    saved_paths: list[str] = []
+    analysis_output_paths: list[str] = []
+    try:
+        for index, image in enumerate(images):
+            if getattr(image, "content_type", None) not in CHAMPION_DECK_IMAGE_TYPES:
+                raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+            suffix = Path(image.filename or "deck.png").suffix.lower() or ".png"
+            file_path = os.path.join(
+                UPLOAD_DIR,
+                f"champion_t{tournament_id}_p{player.id}_{secrets.token_hex(6)}_{index}{suffix}",
+            )
+            saved_paths.append(file_path)
+            total = 0
+            with open(file_path, "wb") as output:
+                while chunk := await image.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > CHAMPION_DECK_MAX_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail="Image exceeds 20 MB")
+                    output.write(chunk)
+            if total == 0:
+                raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+        try:
+            result = process_images(
+                saved_paths,
+                tournament_id,
+                player.id,
+                pre_cropped_flags=pre_cropped_flags,
+                include_source_metadata=True,
+                created_output_paths=analysis_output_paths,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[champion-deck] analysis failed tournament={tournament_id} player={player.id}: {exc}")
+            raise HTTPException(status_code=500, detail="Deck analysis failed") from exc
+        # The legacy analyzer uses its third argument only for result/file labels.
+        result["suggested_player_name"] = player.name
+        result["suggested_seed"] = player.seed_number
+        for characters in result.get("suggested_teams", []):
+            for character in characters:
+                # Champion analysis is stateless; generated crop URLs would point
+                # at files removed before this request returns.
+                character.pop("image_url", None)
+                character.pop("template_source_url", None)
+        result["teams"] = [
+            {
+                "team_number": team_number,
+                "source_image_index": next(
+                    (
+                        character.get("source_image_index")
+                        for character in characters
+                        if character.get("source_image_index") is not None
+                    ),
+                    None,
+                ),
+                "characters": [
+                    {
+                        **character,
+                        "character_id": character.get("predicted_character_id"),
+                        "unresolved": character.get("predicted_character_id") in (None, EMPTY_SLOT_CHARACTER_ID),
+                    }
+                    for character in characters
+                ],
+            }
+            for team_number, characters in enumerate(
+                result.get("suggested_teams", []), start=1
+            )
+        ]
+        return result
+    finally:
+        for path in saved_paths + analysis_output_paths:
+            delete_upload_file(path)
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/teams",
+    response_model=schemas.ChampionTeamsResponse,
+)
+def save_champion_teams(
+    tournament_id: int,
+    player_id: int,
+    data: schemas.ChampionTeamsUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    normalized = validate_champion_teams_payload(data)
+    character_ids = {character_id for _, ids, _ in normalized for character_id in ids}
+    existing_character_ids = {
+        row[0]
+        for row in db.query(models.Character.id).filter(
+            models.Character.id.in_(character_ids)
+        ).all()
+    }
+    missing = sorted(character_ids - existing_character_ids)
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Unknown character IDs: {missing}")
+
+    existing_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player.id
+    ).order_by(models.DeckSet.id).all()
+    deck_set = existing_sets[0] if existing_sets else models.DeckSet(player_id=player.id)
+    if not existing_sets:
+        db.add(deck_set)
+    try:
+        for extra_set in existing_sets[1:]:
+            db.delete(extra_set)
+        for old_team in list(deck_set.teams):
+            db.delete(old_team)
+        db.flush()
+        for team_number, ids, collections in normalized:
+            db.add(models.DeckTeam(
+                deck_set=deck_set,
+                team_number=team_number,
+                char1_id=ids[0], char2_id=ids[1], char3_id=ids[2],
+                char4_id=ids[3], char5_id=ids[4],
+                collection1=collections[0], collection2=collections[1],
+                collection3=collections[2], collection4=collections[3],
+                collection5=collections[4],
+            ))
+        db.commit()
+        db.refresh(deck_set)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Deck data conflicts with existing data") from exc
+    except Exception:
+        db.rollback()
+        raise
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
+    return champion_teams_response(player, deck_set)
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/teams",
+    response_model=schemas.ChampionTeamsResponse,
+)
+def get_champion_teams(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    deck_set = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player.id
+    ).order_by(models.DeckSet.id).first()
+    return champion_teams_response(player, deck_set)
 
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
 def get_players(

@@ -94,6 +94,38 @@ class ChampionSlotsResponse(BaseModel):
     slots: List[ChampionSlotItem]
 
 
+class ChampionTeamCharacterInput(BaseModel):
+    id: int
+    collection_level: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionTeamInput(BaseModel):
+    team_number: int
+    characters: List[ChampionTeamCharacterInput]
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionTeamsUpsert(BaseModel):
+    teams: List[ChampionTeamInput]
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionTeamResponse(BaseModel):
+    team_number: int
+    character_ids: List[Optional[int]]
+    collection_levels: List[Optional[str]]
+
+
+class ChampionTeamsResponse(BaseModel):
+    player_id: int
+    tournament_id: int
+    champion_slot: int
+    deck_set_id: Optional[int] = None
+    status: Literal["not_saved", "incomplete", "complete"]
+    teams: List[ChampionTeamResponse]
+
+
 class DeckTeamBase(BaseModel):
     team_number: int
     char1_id: Optional[int] = None
