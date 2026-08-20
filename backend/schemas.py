@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date as date_type, datetime
 
 class CharacterBase(BaseModel):
@@ -41,6 +41,8 @@ class TournamentBase(BaseModel):
     season: Optional[str] = None
     owner_name: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["full_64", "champion_8"] = "full_64"
+    provider_game_start_date: Optional[date_type] = None
 
 class Tournament(TournamentBase):
     id: int
@@ -58,6 +60,7 @@ class PlayerBase(BaseModel):
     tournament_id: int
     name: str
     seed_number: Optional[int] = None
+    champion_slot: Optional[int] = None
 
 class Player(PlayerBase):
     id: int
@@ -109,6 +112,8 @@ class MatchBase(BaseModel):
     attacker_id: int
     defender_id: int
     winner_id: Optional[int] = None
+    bracket_stage: Optional[Literal["quarterfinal", "semifinal", "final"]] = None
+    bracket_slot: Optional[int] = None
 
 class Match(MatchBase):
     id: int
