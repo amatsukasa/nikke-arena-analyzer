@@ -1847,6 +1847,177 @@ def get_champion_player_by_id(
 CHAMPION_DECK_MAX_IMAGES = 5
 CHAMPION_DECK_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 CHAMPION_DECK_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+CHAMPION_ICON_MAX_BYTES = 10 * 1024 * 1024
+CHAMPION_ICON_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+CHAMPION_ICON_MAX_WIDTH = 10_000
+CHAMPION_ICON_MAX_HEIGHT = 10_000
+CHAMPION_ICON_MAX_PIXELS = 25_000_000
+
+
+def champion_player_icon_location(tournament_id: int, player_id: int) -> tuple[Path, str]:
+    icon_dir = (PLAYER_ICONS_DIR / f"tournament_{tournament_id}").resolve()
+    if not _is_within(icon_dir, PLAYER_ICONS_DIR):
+        raise HTTPException(status_code=500, detail="Unsafe player icon path")
+    path = (icon_dir / f"player_{player_id}.png").resolve()
+    if not _is_within(path, icon_dir):
+        raise HTTPException(status_code=500, detail="Unsafe player icon path")
+    return path, f"/api/uploads/player_icons/tournament_{tournament_id}/player_{player_id}.png"
+
+
+def champion_icon_temporary_paths(final_path: Path, token: str) -> tuple[Path, Path, Path]:
+    return (
+        final_path.parent / f".{final_path.name}.{token}.upload",
+        final_path.parent / f".{final_path.name}.{token}.png",
+        final_path.parent / f".{final_path.name}.{token}.backup",
+    )
+
+
+def invalidate_dashboard_cache_after_file_change(tournament_id: int) -> None:
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/icon",
+    response_model=schemas.ChampionPlayerIconResponse,
+)
+async def upload_champion_player_icon(
+    tournament_id: int,
+    player_id: int,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+
+    final_path, icon_url = champion_player_icon_location(tournament_id, player.id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
+    upload_path, normalized_path, backup_path = champion_icon_temporary_paths(
+        final_path, token
+    )
+    replaced_existing = False
+    try:
+        total = 0
+        with open(upload_path, "wb") as output:
+            while chunk := await image.read(1024 * 1024):
+                total += len(chunk)
+                if total > CHAMPION_ICON_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
+                output.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+
+        import cv2
+        decoded = cv2.imread(str(upload_path), cv2.IMREAD_UNCHANGED)
+        if decoded is None or decoded.size == 0:
+            raise HTTPException(status_code=422, detail="File is not a decodable image")
+        height, width = decoded.shape[:2]
+        if (
+            width > CHAMPION_ICON_MAX_WIDTH
+            or height > CHAMPION_ICON_MAX_HEIGHT
+            or width * height > CHAMPION_ICON_MAX_PIXELS
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail="Decoded image dimensions exceed the allowed limit",
+            )
+        if not write_lossless_png(normalized_path, decoded):
+            raise HTTPException(status_code=422, detail="Image normalization failed")
+
+        if final_path.exists():
+            os.replace(final_path, backup_path)
+            replaced_existing = True
+        os.replace(normalized_path, final_path)
+        player.icon_url = icon_url
+        try:
+            db.flush()
+            db.commit()
+            db.refresh(player)
+        except Exception:
+            db.rollback()
+            if final_path.exists():
+                final_path.unlink()
+            if replaced_existing and backup_path.exists():
+                os.replace(backup_path, final_path)
+            raise
+        if backup_path.exists():
+            try:
+                backup_path.unlink()
+            except OSError as exc:
+                print(f"[player-icon] backup cleanup failed tournament={tournament_id} player={player.id}: {exc}")
+    except Exception:
+        if replaced_existing and backup_path.exists() and not final_path.exists():
+            os.replace(backup_path, final_path)
+        raise
+    finally:
+        for temporary_path in (upload_path, normalized_path):
+            if temporary_path.exists():
+                try:
+                    temporary_path.unlink()
+                except OSError as exc:
+                    print(f"[player-icon] temporary cleanup failed path={temporary_path}: {exc}")
+    invalidate_dashboard_cache_after_file_change(tournament_id)
+    return {
+        "player_id": player.id,
+        "tournament_id": tournament_id,
+        "champion_slot": player.champion_slot,
+        "icon_url": player.icon_url,
+    }
+
+
+@app.delete(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/icon",
+    response_model=schemas.ChampionPlayerIconResponse,
+)
+def delete_champion_player_icon(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    final_path, _ = champion_player_icon_location(tournament_id, player.id)
+    backup_path = final_path.parent / f".{final_path.name}.{secrets.token_hex(8)}.delete"
+    moved_file = False
+    commit_succeeded = False
+    try:
+        if final_path.exists():
+            os.replace(final_path, backup_path)
+            moved_file = True
+        player.icon_url = None
+        try:
+            db.commit()
+            db.refresh(player)
+            commit_succeeded = True
+        except Exception:
+            db.rollback()
+            if moved_file and backup_path.exists():
+                os.replace(backup_path, final_path)
+            raise
+    finally:
+        # A successful DB commit may still be followed by an unlink failure. Do
+        # not expose the backup as a public icon; leave a clear operational log.
+        if backup_path.exists() and commit_succeeded:
+            try:
+                backup_path.unlink()
+            except OSError as exc:
+                print(f"[player-icon] cleanup failed tournament={tournament_id} player={player.id}: {exc}")
+    invalidate_dashboard_cache_after_file_change(tournament_id)
+    return {
+        "player_id": player.id,
+        "tournament_id": tournament_id,
+        "champion_slot": player.champion_slot,
+        "icon_url": None,
+    }
 
 
 @app.post("/api/tournaments/{tournament_id}/players/by-id/{player_id}/analyze-deck")

@@ -80,7 +80,15 @@ class ChampionPlayerResponse(BaseModel):
     champion_slot: int
     seed_number: Optional[int] = None
     name: str
+    icon_url: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class ChampionPlayerIconResponse(BaseModel):
+    player_id: int
+    tournament_id: int
+    champion_slot: int
+    icon_url: Optional[str] = None
 
 
 class ChampionSlotItem(BaseModel):
