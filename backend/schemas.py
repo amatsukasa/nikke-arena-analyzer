@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime
 
@@ -67,6 +67,31 @@ class Player(PlayerBase):
     icon_url: Optional[str] = None  # プレイヤーアイコンURL
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class ChampionSlotUpsert(BaseModel):
+    seed_number: Optional[int] = Field(default=None, ge=1, le=64)
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChampionPlayerResponse(BaseModel):
+    id: int
+    tournament_id: int
+    champion_slot: int
+    seed_number: Optional[int] = None
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChampionSlotItem(BaseModel):
+    champion_slot: int
+    player: Optional[ChampionPlayerResponse] = None
+
+
+class ChampionSlotsResponse(BaseModel):
+    tournament_id: int
+    registration_scope: Literal["champion_8"]
+    slots: List[ChampionSlotItem]
 
 
 class DeckTeamBase(BaseModel):

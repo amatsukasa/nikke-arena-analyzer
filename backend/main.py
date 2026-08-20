@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Req
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
@@ -206,6 +207,12 @@ def get_team_collection_levels(team: models.DeckTeam) -> list[str | None]:
 
 def automatic_player_name(seed_number: int) -> str:
     return f"Player {seed_number}"
+
+
+def automatic_champion_player_name(champion_slot: int, seed_number: int | None) -> str:
+    if seed_number is None:
+        return f"champion_slot_{champion_slot}"
+    return automatic_player_name(seed_number)
 
 
 IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -1586,6 +1593,177 @@ def get_championship_matches(
             | (models.Tournament.created_by == current_user.id)
         )
     return query.order_by(models.Tournament.created_at.desc()).all()
+
+
+def require_champion_tournament_viewer(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    try:
+        tournament = require_tournament_viewer(tournament_id, db, current_user)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            exists = db.query(models.Tournament.id).filter(
+                models.Tournament.id == tournament_id
+            ).first()
+            if exists:
+                if current_user is None:
+                    raise HTTPException(status_code=401, detail="Authentication required")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have permission to view this tournament",
+                )
+        raise
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(
+            status_code=409,
+            detail="Champion slot API is available only for champion_8 tournaments",
+        )
+    return tournament
+
+
+def require_champion_tournament_manager(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(
+            status_code=409,
+            detail="Champion slot API is available only for champion_8 tournaments",
+        )
+    return tournament
+
+
+def validate_champion_slot(champion_slot: int) -> None:
+    if not 1 <= champion_slot <= 8:
+        raise HTTPException(status_code=422, detail="champion slot must be between 1 and 8")
+
+
+def validate_champion_seed(seed_number: int | None) -> None:
+    if seed_number is not None and not 1 <= seed_number <= 64:
+        raise HTTPException(status_code=422, detail="seed_number must be null or between 1 and 64")
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/champion-slots",
+    response_model=schemas.ChampionSlotsResponse,
+)
+def get_champion_slots(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    tournament = require_champion_tournament_viewer(tournament_id, db, current_user)
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).order_by(models.Player.champion_slot).all()
+    player_by_slot = {player.champion_slot: player for player in players}
+    return {
+        "tournament_id": tournament.id,
+        "registration_scope": tournament.registration_scope,
+        "slots": [
+            {
+                "champion_slot": champion_slot,
+                "player": player_by_slot.get(champion_slot),
+            }
+            for champion_slot in range(1, 9)
+        ],
+    }
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/champion-slots/{champion_slot}",
+    response_model=schemas.ChampionPlayerResponse,
+)
+def upsert_champion_slot(
+    tournament_id: int,
+    champion_slot: int,
+    body: schemas.ChampionSlotUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    validate_champion_slot(champion_slot)
+    validate_champion_seed(body.seed_number)
+    require_champion_tournament_manager(tournament_id, db, current_user)
+
+    player = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot == champion_slot,
+    ).first()
+
+    if body.seed_number is not None:
+        duplicate_query = db.query(models.Player).filter(
+            models.Player.tournament_id == tournament_id,
+            models.Player.seed_number == body.seed_number,
+        )
+        if player is not None:
+            duplicate_query = duplicate_query.filter(models.Player.id != player.id)
+        if duplicate_query.first():
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="seed_number is already registered in this tournament",
+            )
+
+    generated_name = automatic_champion_player_name(champion_slot, body.seed_number)
+    if player is None:
+        player = models.Player(
+            tournament_id=tournament_id,
+            champion_slot=champion_slot,
+            seed_number=body.seed_number,
+            name=generated_name,
+        )
+        db.add(player)
+    else:
+        player.seed_number = body.seed_number
+        player.name = generated_name
+
+    try:
+        db.commit()
+        db.refresh(player)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="champion slot or seed_number conflicts with another player",
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    # DB commit後に無効化する。失敗しても確定済みDB更新と正常レスポンスを維持する。
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(
+            f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}"
+        )
+    return player
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}",
+    response_model=schemas.ChampionPlayerResponse,
+)
+def get_champion_player_by_id(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return player
 
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
 def get_players(
