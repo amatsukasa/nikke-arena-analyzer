@@ -195,6 +195,8 @@ from services.champion_bracket import (
     get_bracket_definition,
     participant_ids,
 )
+from services.champion_result import normalize_champion_result
+from services.match_processor import extract_match_results
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
@@ -1859,6 +1861,7 @@ CHAMPION_ICON_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 CHAMPION_ICON_MAX_WIDTH = 10_000
 CHAMPION_ICON_MAX_HEIGHT = 10_000
 CHAMPION_ICON_MAX_PIXELS = 25_000_000
+CHAMPION_RESULT_MAX_BYTES = 20 * 1024 * 1024
 
 
 def champion_player_icon_location(tournament_id: int, player_id: int) -> tuple[Path, str]:
@@ -2457,6 +2460,111 @@ def save_champion_match(
     return champion_bracket_match_data(
         definition, players_by_id, matches_by_key, expected_by_key, db
     )
+
+
+@app.post(
+    "/api/tournaments/{tournament_id}/matches/{bracket_stage}/{bracket_slot}/analyze",
+    response_model=schemas.ChampionMatchAnalysisResponse,
+)
+async def analyze_champion_match_result(
+    tournament_id: int,
+    bracket_stage: str,
+    bracket_slot: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    # Authorization, scope, fixed participants and deck readiness must precede
+    # multipart parsing and all image/OCR work.
+    require_champion_tournament_manager(tournament_id, db, current_user)
+    definition = get_bracket_definition(bracket_stage, bracket_slot)
+    if definition is None:
+        raise HTTPException(status_code=422, detail="Invalid champion bracket slot")
+    players_by_id, _, _, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    expected = expected_by_key[definition.key]
+    if expected[0] is None or expected[1] is None:
+        raise HTTPException(status_code=409, detail="Upstream participants are not complete")
+    attacker = players_by_id.get(expected[0])
+    defender = players_by_id.get(expected[1])
+    if attacker is None or defender is None or attacker.id == defender.id:
+        raise HTTPException(status_code=409, detail="Fixed match participants are invalid")
+    if not (
+        champion_player_has_complete_deck(attacker.id, db)
+        and champion_player_has_complete_deck(defender.id, db)
+    ):
+        raise HTTPException(status_code=409, detail="Both participants must have complete decks")
+
+    try:
+        # Parse once, then enforce the exact multipart contract below. Limits
+        # remain finite for resource safety; parser-limit errors are normalized
+        # to this endpoint's 422 input-error contract.
+        form = await request.form(
+            max_files=20,
+            max_fields=20,
+            max_part_size=CHAMPION_RESULT_MAX_BYTES,
+        )
+    except StarletteHTTPException as exc:
+        if exc.status_code == 400:
+            raise HTTPException(status_code=422, detail="Invalid multipart form data") from exc
+        raise
+    if hasattr(form, "multi_items"):
+        unexpected = {key for key, _ in form.multi_items()} - {"image"}
+        if unexpected:
+            raise HTTPException(status_code=422, detail="Unexpected multipart fields")
+    images = form.getlist("image")
+    if len(images) != 1:
+        raise HTTPException(status_code=422, detail="Exactly one result image is required")
+    image = images[0]
+    if getattr(image, "content_type", None) not in CHAMPION_ICON_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+
+    temporary_path = os.path.join(
+        UPLOAD_DIR,
+        f"champion_result_t{tournament_id}_{secrets.token_hex(8)}.upload",
+    )
+    try:
+        total = 0
+        with open(temporary_path, "wb") as output:
+            while chunk := await image.read(1024 * 1024):
+                total += len(chunk)
+                if total > CHAMPION_RESULT_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Image exceeds 20 MB")
+                output.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+
+        import cv2
+        decoded = cv2.imread(temporary_path, cv2.IMREAD_UNCHANGED)
+        if decoded is None or decoded.size == 0:
+            raise HTTPException(status_code=422, detail="File is not a decodable image")
+        height, width = decoded.shape[:2]
+        if (
+            width > CHAMPION_ICON_MAX_WIDTH
+            or height > CHAMPION_ICON_MAX_HEIGHT
+            or width * height > CHAMPION_ICON_MAX_PIXELS
+        ):
+            raise HTTPException(status_code=413, detail="Decoded image dimensions exceed the allowed limit")
+        try:
+            raw_result = extract_match_results(temporary_path)
+        except Exception as exc:
+            print(
+                f"[champion-result] analysis failed tournament={tournament_id} "
+                f"stage={bracket_stage} slot={bracket_slot}: {exc}"
+            )
+            raise HTTPException(status_code=500, detail="Match result analysis failed") from exc
+        converted = normalize_champion_result(raw_result, attacker.id, defender.id)
+        return {
+            "tournament_id": tournament_id,
+            "bracket_stage": definition.key[0],
+            "bracket_slot": definition.key[1],
+            "attacker": attacker,
+            "defender": defender,
+            **converted,
+        }
+    finally:
+        delete_upload_file(temporary_path)
 
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
 def get_players(

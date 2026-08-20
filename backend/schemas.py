@@ -178,6 +178,25 @@ class ChampionBracketResponse(BaseModel):
     matches: List[ChampionBracketMatchResponse]
 
 
+class ChampionAnalyzedRoundResult(BaseModel):
+    round_number: int
+    winner_id: Optional[int] = None
+    side: Optional[Literal["left", "right"]] = None
+    unresolved: bool
+
+
+class ChampionMatchAnalysisResponse(BaseModel):
+    tournament_id: int
+    bracket_stage: Literal["quarterfinal", "semifinal", "final"]
+    bracket_slot: int
+    attacker: ChampionBracketPlayer
+    defender: ChampionBracketPlayer
+    winner_id: Optional[int] = None
+    round_results: List[ChampionAnalyzedRoundResult]
+    complete: bool
+    issues: List[str] = Field(default_factory=list)
+
+
 class DeckTeamBase(BaseModel):
     team_number: int
     char1_id: Optional[int] = None
