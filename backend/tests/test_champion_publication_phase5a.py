@@ -138,7 +138,7 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertEqual(best_results[101], "準優勝")
         self.assertEqual(best_results[51], "ベスト4")
         self.assertEqual(best_results[26], "ベスト8")
-        self.assertFalse(any("adoption_rate" in item for item in stats["character_stats"] + stats["team_usage"]))
+        self.assertTrue(all(item["adoption_rate"] <= 100 for item in stats["character_stats"] + stats["team_usage"]))
         with patch.object(self.db, "commit") as commit, \
              patch.object(main, "SessionLocal") as new_session:
             snapshot = main.apply_snapshot(self.tournament.id, stats, self.db)

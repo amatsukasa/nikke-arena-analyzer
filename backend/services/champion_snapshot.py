@@ -1,28 +1,20 @@
 """Champion-eight-only snapshot corrections over the legacy raw statistics."""
 
-from models import DeckSet, Match, Player
+from models import DeckSet, Match, Player, Tournament
+from services.tournament_results import calculate_player_results, result_label
 
 
 RESULT_SCORE = {"優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8}
 
 
 def champion_player_results(tournament_id, db):
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).one()
     players = db.query(Player).filter(Player.tournament_id == tournament_id).all()
-    results = {player.id: "ベスト8" for player in players}
     matches = db.query(Match).filter(Match.tournament_id == tournament_id).all()
-    by_key = {(match.bracket_stage, match.bracket_slot): match for match in matches}
-    for slot in range(1, 5):
-        match = by_key.get(("quarterfinal", slot))
-        if match and match.winner_id is not None:
-            results[match.winner_id] = "ベスト4"
-    for slot in range(1, 3):
-        match = by_key.get(("semifinal", slot))
-        if match and match.winner_id is not None:
-            results[match.winner_id] = "準優勝"
-    final = by_key.get(("final", 1))
-    if final and final.winner_id is not None:
-        results[final.winner_id] = "優勝"
-    return results
+    return {
+        player_id: result_label(code)
+        for player_id, code in calculate_player_results(tournament, players, matches).items()
+    }
 
 
 def _best_result(player_ids, results):

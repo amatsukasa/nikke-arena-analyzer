@@ -350,13 +350,16 @@ class Full64RegressionTest(unittest.TestCase):
         refreshed = main.get_dashboard_stats(self.tournament.id, None, self.db, self.user)
         self.assertEqual(refreshed, first_cached)
 
-    def test_raw_cross_tournament_stats_raises_known_matches_name_error_until_fixed(self):
-        """Strict known-defect sentinel: a fix or a different exception must fail this test."""
-        with self.assertRaisesRegex(NameError, "name 'matches' is not defined"):
-            main.get_cross_tournament_stats(
-                main.CrossTournamentRequest(tournament_ids=[self.tournament.id]),
-                self.db,
-            )
+    def test_raw_cross_tournament_stats_succeeds_without_snapshot(self):
+        """Raw cross-tournament aggregation remains available without Snapshot."""
+        result = main.get_cross_tournament_stats(
+            main.CrossTournamentRequest(tournament_ids=[self.tournament.id]),
+            self.db,
+        )
+        self.assertEqual((result["total_players"], result["total_matches"]), (64, 63))
+        # The legacy fixture records one RoundResult per Match.  Phase 5B must
+        # count stored rows rather than assuming five rounds for full_64 data.
+        self.assertEqual(result["registration_breakdown"]["total_round_results"], 63)
 
 
 class FrontendFull64ContractTest(unittest.TestCase):

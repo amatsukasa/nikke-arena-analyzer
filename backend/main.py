@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime, timedelta, timezone
 import hashlib
 import secrets
@@ -199,6 +199,11 @@ from services.champion_bracket import (
 from services.champion_result import normalize_champion_result
 from services.champion_publication import validate_champion_publication
 from services.champion_snapshot import enrich_champion_snapshot_stats
+from services.tournament_results import (
+    RESULT_SCORES as TOURNAMENT_RESULT_SCORES,
+    calculate_player_results,
+    result_label,
+)
 from services.match_processor import extract_match_results
 from services.upload_cleanup import (
     cleanup_stale_uploads,
@@ -3792,6 +3797,14 @@ def _compute_dashboard_stats(
     player_result_cache = {}
     for pid in set(p for pids in char_to_players.values() for p in pids):
         player_result_cache[pid] = calc_player_result(pid)
+    player_result_cache = {
+        player_id: result_label(code)
+        for player_id, code in calculate_player_results(
+            require_tournament_viewer(tournament_id, db, current_user),
+            all_players,
+            all_matches,
+        ).items()
+    }
 
     def get_best_result_for_char(c_id):
         """そのキャラを使ったプレイヤーの中で最も良い成績を返す"""
@@ -3857,11 +3870,14 @@ def _compute_dashboard_stats(
                     "best_result": best_res
                 })
                 
+            user_ids = char_to_players.get(c_id, set())
             char_list.append({
                 "id": char.id,
                 "name": char.name,
                 "rarity": char.rarity,
                 "count": count,
+                "player_count": len(user_ids),
+                "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
                 "win_rate": round(win_rate, 1),
@@ -3944,6 +3960,8 @@ def _compute_dashboard_stats(
             "character_ids": original_order,
             "characters": team_chars,
             "count": count,
+            "player_count": len(team_player_ids),
+            "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
             "win_rate": round(win_rate, 1),
@@ -4067,29 +4085,26 @@ def get_best8_decks(
     qf_winners = set(champ_finals["qf_winners"]) # ベスト4進出者
     sf_winners = set(champ_finals["sf_winners"]) # 決勝進出者
     winner_id = champ_finals["winner"]           # 優勝者
+    result_codes = calculate_player_results(
+        tournament,
+        db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all(),
+        db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all(),
+    )
     
     results = []
     for p_info in best8_players:
         pid = p_info["id"]
         if pid:
             # 成績の判定
-            result_label = "ベスト8"
-            sort_score = 4
-            if pid == winner_id:
-                result_label = "優勝"
-                sort_score = 1
-            elif pid in sf_winners:
-                result_label = "準優勝"
-                sort_score = 2
-            elif pid in qf_winners:
-                result_label = "ベスト4"
-                sort_score = 3
+            result_code = result_codes.get(pid, "best8")
+            result_label_value = result_label(result_code)
+            sort_score = TOURNAMENT_RESULT_SCORES[result_code]
                 
             # 認証済みの内部処理としてプレイヤー詳細データを取得
             details = _get_player_details_data(tournament_id, p_info["original_seed"], db)
             results.append({
                 "player": p_info,
-                "result": result_label,
+                "result": result_label_value,
                 "sort_score": sort_score,
                 "decks": details["decks"]
             })
@@ -4138,6 +4153,7 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
         merged_teams[cid] = {
             **team,
             "count": 0,
+            "player_count": 0,
             "win_count": 0,
             "total_matches": 0,
             "adopted_players": [],
@@ -4149,6 +4165,7 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
         }
     target = merged_teams[cid]
     target["count"] += team.get("count", 0)
+    target["player_count"] += team.get("player_count", 0)
     target["win_count"] += team.get("win_count", 0)
     target["total_matches"] += team.get("total_matches", 0)
     
@@ -4303,6 +4320,24 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
                         score = 1
             result_score_by_player[player.id] = score
 
+    tournaments_by_id = {
+        tournament.id: tournament
+        for tournament in db.query(models.Tournament).filter(
+            models.Tournament.id.in_(list(players_by_tournament))
+        ).all()
+    }
+    result_score_by_player = {}
+    for tournament_id, tournament_players in players_by_tournament.items():
+        codes = calculate_player_results(
+            tournaments_by_id[tournament_id],
+            tournament_players,
+            matches_by_tournament.get(tournament_id, []),
+        )
+        result_score_by_player.update({
+            player_id: TOURNAMENT_RESULT_SCORES[code]
+            for player_id, code in codes.items()
+        })
+
     deck_set_to_player = {
         deck_set.id: deck_set.player_id for deck_set in deck_sets
     }
@@ -4389,6 +4424,7 @@ class CrossTournamentRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
 
 
 class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
@@ -4396,6 +4432,82 @@ class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
+
+
+def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope="all"):
+    query = db.query(models.Tournament).filter(
+        models.Tournament.publication_status == "published"
+    )
+    if tournament_ids:
+        query = query.filter(models.Tournament.id.in_(tournament_ids))
+    if registration_scope != "all":
+        query = query.filter(models.Tournament.registration_scope == registration_scope)
+    allowed = {tournament.id for tournament in query.all()}
+    if tournament_ids:
+        return [tournament_id for tournament_id in tournament_ids if tournament_id in allowed]
+    return sorted(allowed)
+
+
+def cross_registration_breakdown(tournament_ids, db: Session):
+    if not tournament_ids:
+        return {
+            "total_tournaments": 0, "full_64_tournaments": 0, "champion_8_tournaments": 0,
+            "total_registered_players": 0, "full_64_registered_players": 0,
+            "champion_8_registered_players": 0, "total_teams": 0,
+            "total_matches": 0, "total_round_results": 0,
+        }
+    tournaments = db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all()
+    players = db.query(models.Player).filter(models.Player.tournament_id.in_(tournament_ids)).all()
+    player_ids = [player.id for player in players]
+    deck_set_ids = [row[0] for row in db.query(models.DeckSet.id).filter(models.DeckSet.player_id.in_(player_ids)).all()] if player_ids else []
+    matches = db.query(models.Match).filter(models.Match.tournament_id.in_(tournament_ids)).all()
+    match_ids = [match.id for match in matches]
+    scope_by_tournament = {tournament.id: tournament.registration_scope for tournament in tournaments}
+    return {
+        "total_tournaments": len(tournaments),
+        "full_64_tournaments": sum(t.registration_scope == "full_64" for t in tournaments),
+        "champion_8_tournaments": sum(t.registration_scope == "champion_8" for t in tournaments),
+        "total_registered_players": len(players),
+        "full_64_registered_players": sum(scope_by_tournament[p.tournament_id] == "full_64" for p in players),
+        "champion_8_registered_players": sum(scope_by_tournament[p.tournament_id] == "champion_8" for p in players),
+        "total_teams": db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id.in_(deck_set_ids)).count() if deck_set_ids else 0,
+        "total_matches": len(matches),
+        "total_round_results": db.query(models.RoundResult).filter(models.RoundResult.match_id.in_(match_ids)).count() if match_ids else 0,
+    }
+
+
+def empty_cross_tournament_stats(db: Session):
+    return {
+        "total_players": 0, "total_matches": 0, "character_usage": [],
+        "character_stats": [], "character_usage_by_result": _compute_character_usage_by_result([], db),
+        "team_usage": [], "matchups": [],
+        "registration_breakdown": cross_registration_breakdown([], db),
+    }
+
+
+def cross_snapshot_has_distinct_counts(snapshot, db: Session):
+    """Accept only structurally complete v2-style aggregation JSON.
+
+    Legacy/corrupt JSON falls back as a whole tournament.  Empty arrays are
+    valid only when the tournament genuinely has no registered players.
+    """
+    char_stats = snapshot.char_stats
+    team_usage = snapshot.team_usage
+    if not isinstance(char_stats, list) or not isinstance(team_usage, list):
+        return False
+    registered_players = db.query(models.Player.id).filter(
+        models.Player.tournament_id == snapshot.tournament_id
+    ).count()
+    if registered_players == 0:
+        return not char_stats and not team_usage
+    if not char_stats or not team_usage:
+        return False
+    return all(
+        isinstance(item, dict) and isinstance(item.get("player_count"), int)
+        and item["player_count"] >= 0
+        for item in char_stats + team_usage
+    )
 
 
 @app.post("/api/dashboard/cross-tournament/stats")
@@ -4409,24 +4521,40 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             body.play_server,
             body.championship_id
         )
+    target_ids = filter_cross_tournament_ids(
+        db, target_ids, body.registration_scope
+    )
 
     print("[cross stats] body.tournament_ids:", body.tournament_ids)
     print("[cross stats] target_ids:", target_ids)
+
+    if not target_ids:
+        return empty_cross_tournament_stats(db)
 
     snaps = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id.in_(target_ids)
     ).all() if target_ids else []
 
-    if target_ids and len(snaps) == len(target_ids):
-        print(f"[cross stats] using snapshots: {len(snaps)} / {len(target_ids)}")
+    usable_snaps = [
+        snapshot for snapshot in snaps
+        if cross_snapshot_has_distinct_counts(snapshot, db)
+    ]
+    snapshot_ids = {snapshot.tournament_id for snapshot in usable_snaps}
+    raw_ids = [tournament_id for tournament_id in target_ids if tournament_id not in snapshot_ids]
+    if usable_snaps:
+        print(f"[cross stats] using snapshots: {len(usable_snaps)} / {len(target_ids)}")
+        raw_stats = _compute_cross_tournament_stats(raw_ids, db) if raw_ids else None
 
-        total_players = sum(s.total_players for s in snaps if s.total_players)
-        total_matches = sum(s.total_matches for s in snaps if s.total_matches)
+        total_players = sum(s.total_players for s in usable_snaps if s.total_players)
+        total_matches = sum(s.total_matches for s in usable_snaps if s.total_matches)
+        if raw_stats:
+            total_players += raw_stats.get("total_players", 0)
+            total_matches += raw_stats.get("total_matches", 0)
         
         merged_chars = {}
         merged_teams = {}
         
-        for snap in snaps:
+        for snap in usable_snaps:
             print("[cross stats] snap total_players:", snap.total_players)
             print("[cross stats] snap total_matches:", snap.total_matches)
             print("[cross stats] snap char_stats len:", len(snap.char_stats or []))
@@ -4442,6 +4570,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                         "name": char_stat.get("name"),
                         "rarity": char_stat.get("rarity"),
                         "count": 0,
+                        "player_count": 0,
                         "win_count": 0,
                         "total_matches": 0,
                         "best_result": char_stat.get("best_result", "不明"),
@@ -4454,6 +4583,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                         "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
                     }
                 merged_chars[cid]["count"] += char_stat.get("count", 0)
+                merged_chars[cid]["player_count"] += char_stat["player_count"]
                 merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
                 merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
                 
@@ -4469,12 +4599,45 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 if not cid: continue
                 _merge_team_position_and_adopted(merged_teams, team, cid)
 
+        # Old/missing snapshots are replaced at the tournament boundary by one
+        # raw aggregate.  Usable snapshot tournament IDs are excluded from this
+        # query, preventing both source-level and field-level double counting.
+        if raw_stats:
+            for char_stat in raw_stats.get("character_stats", []):
+                cid = char_stat.get("id")
+                if not cid:
+                    continue
+                if cid not in merged_chars:
+                    merged_chars[cid] = {
+                        "id": cid, "name": char_stat.get("name"),
+                        "rarity": char_stat.get("rarity"), "count": 0,
+                        "player_count": 0, "win_count": 0, "total_matches": 0,
+                        "best_result": char_stat.get("best_result", "不明"),
+                        "position_stats": [], "team_position_stats": [],
+                        "_pos_map": {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)},
+                        "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)},
+                    }
+                merged_chars[cid]["count"] += char_stat.get("count", 0)
+                merged_chars[cid]["player_count"] += char_stat.get("player_count", 0)
+                merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
+                merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
+                current_score = RESULT_SCORES.get(merged_chars[cid]["best_result"], 999)
+                new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
+                if new_score < current_score:
+                    merged_chars[cid]["best_result"] = char_stat.get("best_result")
+                _merge_char_position_stats(merged_chars, char_stat, cid)
+            for team in raw_stats.get("team_usage", []):
+                canonical_id = team.get("canonical_id")
+                if canonical_id:
+                    _merge_team_position_and_adopted(merged_teams, team, canonical_id)
+
         # Recalculate rates for chars
         char_list = []
         for char in merged_chars.values():
             t = char["total_matches"]
             w = char["win_count"]
             char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            char["adoption_rate"] = round(char["player_count"] / total_players * 100, 1) if total_players else 0.0
             _finalize_char_position_stats(char)
             char_list.append(char)
         char_list.sort(key=lambda x: x["count"], reverse=True)
@@ -4485,6 +4648,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             t = team["total_matches"]
             w = team["win_count"]
             team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            team["adoption_rate"] = round(team.get("player_count", 0) / total_players * 100, 1) if total_players else 0.0
             _finalize_team_position_and_adopted(team)
             team_list.append(team)
         team_list.sort(key=lambda x: x["count"], reverse=True)
@@ -4498,6 +4662,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             "team_usage": team_list[:50],
             "matchups": [] # Usually cross matchups are fetched via their own endpoint
         }
+        stats["registration_breakdown"] = cross_registration_breakdown(target_ids, db)
         return stats
     else:
         print("[cross stats] fallback raw compute")
@@ -4511,7 +4676,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     """複数大会を横断したキャラ採用率・編成使用率・勝率を集計する"""
     tournament_ids = get_published_tournament_ids(tournament_ids_input, db)
     if not tournament_ids:
-        raise HTTPException(status_code=400, detail="tournament_ids が必要です")
+        return empty_cross_tournament_stats(db)
 
     # 対象大会の全プレイヤーを取得
     all_players = db.query(models.Player).filter(
@@ -4762,6 +4927,23 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             t_result_cache[p.id] = calc_result_t(p.id)
         per_tournament_results[tid] = t_result_cache
 
+    tournaments_by_id = {
+        tournament.id: tournament
+        for tournament in db.query(models.Tournament).filter(
+            models.Tournament.id.in_(tournament_ids)
+        ).all()
+    }
+    per_tournament_results = {}
+    for tournament_id in tournament_ids:
+        codes = calculate_player_results(
+            tournaments_by_id[tournament_id],
+            [player for player in all_players if player.tournament_id == tournament_id],
+            [match for match in all_matches if match.tournament_id == tournament_id],
+        )
+        per_tournament_results[tournament_id] = {
+            player_id: result_label(code) for player_id, code in codes.items()
+        }
+
     # キャラ→使用プレイヤーのマッピング
     char_to_players = {}
     for ds in deck_sets:
@@ -4848,6 +5030,8 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                 "name": char.name,
                 "rarity": char.rarity,
                 "count": count,
+                "player_count": len(user_ids),
+                "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
                 "win_rate": round(win_rate, 1),
@@ -4926,6 +5110,8 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             "character_ids": original_order,
             "characters": team_chars,
             "count": count,
+            "player_count": len(team_player_ids),
+            "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
             "win_rate": round(win_rate, 1),
@@ -4941,14 +5127,19 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
         "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db),
         "team_usage": team_list,
         "total_players": len(player_ids),
-        "total_matches": len(matches)
+        "total_matches": len(all_matches),
+        "registration_breakdown": cross_registration_breakdown(tournament_ids, db),
     }
 
 
 @app.post("/api/dashboard/cross-tournament/matchups")
 def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     """複数大会を横断した対戦データを集計する"""
-    tournament_ids = get_published_tournament_ids(body.tournament_ids, db)
+    tournament_ids = filter_cross_tournament_ids(
+        db, body.tournament_ids, body.registration_scope
+    )
+    if not tournament_ids:
+        return {"matchups": []}
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 
@@ -5030,6 +5221,7 @@ class CrossTournamentTeamsRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
     seed: Optional[int] = None
     character_ids: Optional[List[int]] = None
     limit: Optional[int] = 10
@@ -5123,6 +5315,9 @@ def get_cross_dashboard_teams(
     else:
         tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
 
+    tournament_ids = filter_cross_tournament_ids(
+        db, tournament_ids, req.registration_scope
+    )
     print("[cross teams] req.tournament_ids:", req.tournament_ids)
     print("[cross teams] target_ids:", tournament_ids)
     # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
@@ -5195,7 +5390,9 @@ def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailReq
             req.play_server,
             req.championship_id
         )
-    target_ids = get_published_tournament_ids(target_ids, db)
+    target_ids = filter_cross_tournament_ids(
+        db, target_ids, req.registration_scope
+    )
     if not target_ids:
         return {"character_usage": [], "team_usage": []}
 
@@ -5441,5 +5638,13 @@ def get_dashboard_player_stats(
         value = get_player_details(tournament_id, seed, db, current_user)
         return set_private_dashboard_cache(tournament, "player-stats", value, params)
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).order_by(models.Player.seed_number).all()
-    value = {"players": [schemas.Player.from_orm(p) for p in players]}
+    result_codes = calculate_player_results(
+        tournament,
+        players,
+        db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all(),
+    )
+    for player in players:
+        player.result_code = result_codes[player.id]
+        player.result = result_label(result_codes[player.id])
+    value = {"players": players}
     return set_private_dashboard_cache(tournament, "player-stats", value, params)
