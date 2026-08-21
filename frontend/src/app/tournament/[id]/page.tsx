@@ -7,6 +7,9 @@ import Link from "next/link";
 import Cropper from "react-easy-crop";
 import CharacterSearchSelect from "../../../components/CharacterSearchSelect";
 import SharedTeamDisplay from "../../../components/TeamDisplay";
+import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
+import { useAuth } from "../../../context/AuthContext";
+import { apiErrorMessage, normalizeTournament, TournamentSummary } from "../../../lib/tournaments";
 
 const COLLECTION_OPTIONS = [
   { value: "none", label: "コレクションなし" },
@@ -42,7 +45,60 @@ const collectionSelectClass = (value?: string | null) => {
   }
 };
 
-export default function TournamentDetail() {
+export default function TournamentDetailRouter() {
+  const params = useParams();
+  const { user, isLoading: authLoading } = useAuth();
+  const tournamentId = Number(params.id);
+  const [tournament, setTournament] = useState<TournamentSummary | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) {
+      setLoadError("大会IDが正しくありません。");
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setLoadError("");
+    fetch(`/api/tournaments/${tournamentId}`, { cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(apiErrorMessage(data, "大会情報の取得に失敗しました。"));
+        setTournament(normalizeTournament(data));
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setLoadError(error instanceof Error ? error.message : "大会情報の取得に失敗しました。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [tournamentId]);
+
+  if (loading || authLoading) {
+    return <div className="loading-screen min-h-[50vh]"><div className="spinner" /><p>大会情報を読み込み中...</p></div>;
+  }
+  if (loadError || !tournament) {
+    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{loadError || "大会情報が見つかりません。"}</div></main>;
+  }
+  if (tournament.registration_scope === "champion_8") {
+    const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));
+    return (
+      <ChampionTournamentRegistrationShell
+        tournamentId={tournament.id}
+        publicationStatus={tournament.publication_status}
+        providerGameStartDate={tournament.provider_game_start_date}
+        canEdit={canEdit}
+      />
+    );
+  }
+  return <Full64TournamentDetail />;
+}
+
+function Full64TournamentDetail() {
   const params = useParams();
   const id = params.id;
   const router = useRouter();

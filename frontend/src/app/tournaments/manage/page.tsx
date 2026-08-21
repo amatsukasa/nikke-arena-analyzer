@@ -1,21 +1,21 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole, RefreshCw } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
-
-interface Tournament {
-  id: number;
-  name: string;
-  date: string;
-  start_date: string;
-  owner_name?: string;
-  championship_id?: number;
-  creator_email?: string;
-  created_at?: string;
-  publication_status: "draft" | "published";
-  published_at?: string | null;
-}
+import RegistrationScopeBadge from "../../../components/RegistrationScopeBadge";
+import {
+  apiErrorMessage,
+  createTournamentFormScopeState,
+  editTournamentFormScopeState,
+  isValidDateInput,
+  normalizeTournament,
+  REGISTRATION_SCOPE_DESCRIPTIONS,
+  REGISTRATION_SCOPE_LABELS,
+  RegistrationScope,
+  TournamentSummary as Tournament,
+} from "../../../lib/tournaments";
 
 interface PublicationReadiness {
   player_count: number;
@@ -29,6 +29,7 @@ interface PublicationReadiness {
 
 export default function Home() {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [championships, setChampionships] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -37,6 +38,11 @@ export default function Home() {
   const [newOwnerName, setNewOwnerName] = useState("");
   const [newDate, setNewDate] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
+  const [registrationScope, setRegistrationScope] = useState<RegistrationScope>("full_64");
+  const [providerGameStartDate, setProviderGameStartDate] = useState("");
+  const providerDateTouched = useRef(false);
+  const providerDateInitialized = useRef(false);
+  const formUserId = useRef<number | null>(null);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [publicationUpdatingId, setPublicationUpdatingId] = useState<number | null>(null);
@@ -54,7 +60,7 @@ export default function Home() {
       throw new Error("大会一覧の取得に失敗しました。");
     }
     const data = await res.json();
-    setTournaments(data);
+    setTournaments(data.map(normalizeTournament));
   };
 
   const loadChampionships = async () => {
@@ -76,6 +82,19 @@ export default function Home() {
       .catch(err => console.error(err));
   }, []);
 
+  useEffect(() => {
+    if (!isModalOpen || editTournamentId !== null || !user) return;
+    if (formUserId.current !== user.id) {
+      formUserId.current = user.id;
+      providerDateTouched.current = false;
+      providerDateInitialized.current = true;
+      setProviderGameStartDate(user.game_start_date || "");
+    } else if (!providerDateTouched.current && !providerDateInitialized.current) {
+      setProviderGameStartDate(user.game_start_date || "");
+      providerDateInitialized.current = true;
+    }
+  }, [isModalOpen, editTournamentId, user]);
+
   const openCreateModal = () => {
     setEditTournamentId(null);
     setSaveError("");
@@ -87,6 +106,12 @@ export default function Home() {
     setNewOwnerName("");
     setNewDate(new Date().toISOString().split('T')[0]);
     setNewStartDate("");
+    const scopeState = createTournamentFormScopeState(user?.game_start_date);
+    setRegistrationScope(scopeState.registrationScope);
+    setProviderGameStartDate(scopeState.providerGameStartDate);
+    providerDateTouched.current = scopeState.providerDateTouched;
+    providerDateInitialized.current = scopeState.providerDateInitialized;
+    formUserId.current = user?.id ?? null;
     setIsModalOpen(true);
   };
 
@@ -98,27 +123,42 @@ export default function Home() {
     setNewOwnerName(t.owner_name || "");
     setNewDate(t.date ? t.date.split('T')[0] : new Date().toISOString().split('T')[0]);
     setNewStartDate(t.start_date ? t.start_date.split('T')[0] : "");
+    const scopeState = editTournamentFormScopeState(normalizeTournament(t));
+    setRegistrationScope(scopeState.registrationScope);
+    setProviderGameStartDate(scopeState.providerGameStartDate);
+    providerDateTouched.current = scopeState.providerDateTouched;
+    providerDateInitialized.current = scopeState.providerDateInitialized;
+    formUserId.current = user?.id ?? null;
     setIsModalOpen(true);
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
     if (!selectedChampionshipId) {
       alert("大会名称（大会タイトル）を選択してください。まだ登録されていない場合は、管理者画面から登録してください。");
       return;
     }
     setSaveError("");
+    if (providerGameStartDate && !isValidDateInput(providerGameStartDate)) {
+      setSaveError("ゲーム開始日はYYYY-MM-DD形式の正しい日付で入力してください。");
+      return;
+    }
     setIsSaving(true);
     try {
       const champId = parseInt(selectedChampionshipId);
       const selectedChamp = championships.find(c => c.id === champId);
-      const body = {
+      const commonBody = {
         name: selectedChamp ? selectedChamp.name : "",
         date: newDate || null,
         start_date: newStartDate || null,
         owner_name: newOwnerName || null,
         championship_id: champId,
-        season: selectedChamp ? selectedChamp.name : ""
+        season: selectedChamp ? selectedChamp.name : "",
+        provider_game_start_date: providerGameStartDate || null,
       };
+      const body = editTournamentId
+        ? commonBody
+        : { ...commonBody, registration_scope: registrationScope };
       const url = editTournamentId
         ? `/api/tournaments/${editTournamentId}`
         : "/api/tournaments";
@@ -130,20 +170,28 @@ export default function Home() {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        const detail = data.detail || data.message;
-        throw new Error(typeof detail === "string" ? detail : "大会の保存に失敗しました。");
+        throw new Error(apiErrorMessage(data, "大会の保存に失敗しました。"));
       }
 
+      const normalized = normalizeTournament(data);
+
       setTournaments(prev => editTournamentId
-        ? prev.map(tournament => tournament.id === data.id ? data : tournament)
-        : [data, ...prev.filter(tournament => tournament.id !== data.id)]
+        ? prev.map(tournament => tournament.id === normalized.id ? normalized : tournament)
+        : [normalized, ...prev.filter(tournament => tournament.id !== normalized.id)]
       );
       setIsModalOpen(false);
+      if (!editTournamentId) router.push(`/tournament/${normalized.id}`);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "大会の保存に失敗しました。");
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const closeModal = () => {
+    if (isSaving) return;
+    setIsModalOpen(false);
+    setSaveError("");
   };
 
   const handleDelete = async (e: React.MouseEvent, id: number) => {
@@ -319,6 +367,7 @@ export default function Home() {
                           {t.publication_status === "published" ? <Globe2 size={12} /> : <LockKeyhole size={12} />}
                           {t.publication_status === "published" ? "公開中" : "下書き"}
                         </span>
+                        <RegistrationScopeBadge scope={t.registration_scope} />
                       </div>
                       <div className="text-xs text-slate-400 mt-2 flex flex-wrap gap-x-4 gap-y-1">
                         <div>作成者: <span className="text-slate-300 font-medium">{t.owner_name || t.creator_email || "未設定"}</span></div>
@@ -386,10 +435,10 @@ export default function Home() {
       {/* カスタムポップアップ (Modal) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 ring-1 ring-white/10 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-slate-900 shadow-2xl ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-white/5">
               <h3 className="text-xl font-bold text-slate-100">{editTournamentId ? "大会情報の編集" : "新規大会の作成"}</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
+              <button type="button" onClick={closeModal} disabled={isSaving} aria-label="大会フォームを閉じる" className="text-slate-400 hover:text-white transition-colors disabled:cursor-not-allowed disabled:opacity-40">
                 <X size={20} />
               </button>
             </div>
@@ -413,6 +462,51 @@ export default function Home() {
                       </option>
                     ))}
                   </select>
+                )}
+              </div>
+              <fieldset className="space-y-2" aria-describedby="registration-scope-help registration-scope-warning">
+                <legend className="text-sm font-medium text-slate-300">登録範囲</legend>
+                {editTournamentId ? (
+                  <div className="rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
+                    <RegistrationScopeBadge scope={registrationScope} />
+                    <p id="registration-scope-help" className="mt-2 text-sm text-slate-400">{REGISTRATION_SCOPE_DESCRIPTIONS[registrationScope]}</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-2">
+                    {(Object.keys(REGISTRATION_SCOPE_LABELS) as RegistrationScope[]).map(scope => (
+                      <label key={scope} className="flex cursor-pointer items-start gap-3 rounded-xl bg-white/5 p-3 ring-1 ring-white/10 hover:bg-white/10">
+                        <input
+                          type="radio"
+                          name="registration_scope"
+                          value={scope}
+                          checked={registrationScope === scope}
+                          onChange={() => setRegistrationScope(scope)}
+                          className="mt-1"
+                        />
+                        <span className="min-w-0"><span className="block font-bold text-slate-200">{REGISTRATION_SCOPE_LABELS[scope]}</span><span className="mt-1 block text-sm leading-6 text-slate-400">{REGISTRATION_SCOPE_DESCRIPTIONS[scope]}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p id="registration-scope-warning" className="text-xs leading-5 text-amber-300">登録範囲は大会作成後に変更できません。選択を誤った場合は、大会を作り直す必要があります。</p>
+              </fieldset>
+              <div>
+                <label htmlFor="provider-game-start-date" className="block text-sm font-medium text-slate-300">データ提供者のゲーム開始日</label>
+                <p id="provider-game-start-date-help" className="mt-1 text-xs leading-5 text-slate-400">この大会をシステムへ登録する人ではなく、大会データやスクリーンショットを提供した人のゲーム開始日です。代理登録の場合は変更してください。</p>
+                <input
+                  id="provider-game-start-date"
+                  type="date"
+                  aria-describedby="provider-game-start-date-help provider-game-start-date-profile"
+                  value={providerGameStartDate}
+                  onChange={event => {
+                    providerDateTouched.current = true;
+                    providerDateInitialized.current = true;
+                    setProviderGameStartDate(event.target.value);
+                  }}
+                  className="mt-2 w-full rounded-xl border border-white/10 bg-slate-800/50 px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {!editTournamentId && user && !user.game_start_date && (
+                  <p id="provider-game-start-date-profile" className="mt-2 text-xs text-amber-300">プロフィールにゲーム開始日が設定されていません。分かる場合は入力してください。</p>
                 )}
               </div>
               {saveError && (
