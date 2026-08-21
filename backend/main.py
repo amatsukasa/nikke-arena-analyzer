@@ -193,9 +193,12 @@ from services.champion_bracket import (
     CHAMPION_BRACKET_BY_KEY,
     dependent_keys,
     get_bracket_definition,
+    match_is_complete,
     participant_ids,
 )
 from services.champion_result import normalize_champion_result
+from services.champion_publication import validate_champion_publication
+from services.champion_snapshot import enrich_champion_snapshot_stats
 from services.match_processor import extract_match_results
 from services.upload_cleanup import (
     cleanup_stale_uploads,
@@ -1190,6 +1193,8 @@ def get_published_tournament_ids(
 
 
 def get_publication_readiness(tournament: models.Tournament, db: Session):
+    if tournament.registration_scope == "champion_8":
+        return validate_champion_publication(tournament, db)
     players = db.query(models.Player).filter(
         models.Player.tournament_id == tournament.id
     ).all()
@@ -1469,16 +1474,54 @@ def update_tournament_publication(
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
     tournament = require_tournament_manager(tournament_id, db, current_user)
+    if tournament.registration_scope == "champion_8":
+        tournament = require_locked_champion_tournament_manager(
+            tournament_id, db, current_user
+        )
     publish = body.get("published") is True
     readiness = get_publication_readiness(tournament, db)
 
     if publish and not readiness["can_publish"]:
+        if tournament.registration_scope == "champion_8":
+            raise HTTPException(status_code=409, detail=readiness)
         raise HTTPException(
             status_code=400,
             detail="未完成の編成データがあるため公開できません",
         )
 
     # ステータスが変わった場合のみ処理
+    if tournament.registration_scope == "champion_8":
+        status_changed = (tournament.publication_status == "published") != publish
+        try:
+            if publish:
+                stats = _compute_dashboard_stats(tournament_id, db, current_user)
+                stats = enrich_champion_snapshot_stats(stats, tournament_id, db)
+                apply_snapshot(tournament_id, stats, db)
+                tournament.publication_status = "published"
+                tournament.published_at = datetime.now(timezone.utc)
+                tournament.published_by = current_user.id
+            else:
+                tournament.publication_status = "draft"
+                tournament.published_at = None
+                tournament.published_by = None
+                db.query(models.TournamentSnapshot).filter(
+                    models.TournamentSnapshot.tournament_id == tournament_id
+                ).delete(synchronize_session=False)
+            db.commit()
+            db.refresh(tournament)
+        except Exception:
+            db.rollback()
+            raise
+        if status_changed:
+            invalidate_dashboard_cache_safely(tournament_id)
+        return {
+            "ok": True,
+            "publication_status": tournament.publication_status,
+            "published_at": tournament.published_at,
+            "published_by": tournament.published_by,
+            "readiness": readiness,
+        }
+
     status_changed = (tournament.publication_status == "published") != publish
 
     tournament.publication_status = "published" if publish else "draft"
@@ -1646,6 +1689,38 @@ def require_champion_tournament_manager(
     return tournament
 
 
+def require_locked_champion_tournament_manager(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    """Lock Tournament first, then recheck authorization, scope and status."""
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    tournament = (
+        db.query(models.Tournament)
+        .filter(models.Tournament.id == tournament_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if current_user.role != "admin" and tournament.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this tournament")
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(status_code=409, detail="Champion API is available only for champion_8 tournaments")
+    return tournament
+
+
+def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
+    if tournament.publication_status == "published":
+        raise HTTPException(
+            status_code=409,
+            detail="Unpublish this tournament before editing it, then validate and publish it again.",
+        )
+
+
 def validate_champion_slot(champion_slot: int) -> None:
     if not 1 <= champion_slot <= 8:
         raise HTTPException(status_code=422, detail="champion slot must be between 1 and 8")
@@ -1669,6 +1744,26 @@ def require_champion_player_manager(
         models.Player.champion_slot.isnot(None),
     ).first()
     if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return tournament, player
+
+
+def require_locked_champion_player_manager(
+    tournament_id: int,
+    player_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> tuple[models.Tournament, models.Player]:
+    tournament = require_locked_champion_tournament_manager(
+        tournament_id, db, current_user
+    )
+    require_unpublished_champion_edit(tournament)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
     return tournament, player
 
@@ -1775,7 +1870,8 @@ def upsert_champion_slot(
 ):
     validate_champion_slot(champion_slot)
     validate_champion_seed(body.seed_number)
-    require_champion_tournament_manager(tournament_id, db, current_user)
+    tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
 
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
@@ -2139,7 +2235,7 @@ def save_champion_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    _, player = require_champion_player_manager(
+    tournament, player = require_locked_champion_player_manager(
         tournament_id, player_id, db, current_user
     )
     normalized = validate_champion_teams_payload(data)
@@ -2237,21 +2333,7 @@ def champion_match_is_complete(
     match: models.Match | None,
     expected_participants: tuple[int | None, int | None] | None = None,
 ) -> bool:
-    if match is None or match.winner_id is None:
-        return False
-    participants = (match.attacker_id, match.defender_id)
-    if expected_participants is not None and participants != expected_participants:
-        return False
-    if participants[0] is None or participants[1] is None or participants[0] == participants[1]:
-        return False
-    rounds = list(match.round_results)
-    if len(rounds) != 5 or sorted(result.round_number for result in rounds) != [1, 2, 3, 4, 5]:
-        return False
-    if any(result.winner_id not in participants for result in rounds):
-        return False
-    attacker_wins = sum(result.winner_id == participants[0] for result in rounds)
-    calculated_winner = participants[0] if attacker_wins >= 3 else participants[1]
-    return match.winner_id == calculated_winner
+    return match_is_complete(match, expected_participants)
 
 
 def champion_bracket_context(tournament_id: int, db: Session):
@@ -2395,7 +2477,8 @@ def save_champion_match(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    require_champion_tournament_manager(tournament_id, db, current_user)
+    tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
     definition = get_bracket_definition(bracket_stage, bracket_slot)
     if definition is None:
         raise HTTPException(status_code=422, detail="Invalid champion bracket slot")
@@ -3357,6 +3440,22 @@ def get_dashboard_stats(
 
 
 # ===== スナップショット管理 =====
+
+def apply_snapshot(tournament_id: int, stats: dict, db: Session):
+    """Apply snapshot values without committing the current Session."""
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is None:
+        snap = models.TournamentSnapshot(tournament_id=tournament_id)
+        db.add(snap)
+    snap.team_usage = stats.get("team_usage", [])
+    snap.char_stats = stats.get("character_stats", [])
+    snap.matchups = stats.get("matchups", [])
+    snap.total_players = stats.get("total_players")
+    snap.total_matches = stats.get("total_matches")
+    return snap
+
 
 def save_snapshot(tournament_id: int, stats: dict, db: Session):
     """_compute_dashboard_stats の結果を tournament_snapshots テーブルに保存する"""

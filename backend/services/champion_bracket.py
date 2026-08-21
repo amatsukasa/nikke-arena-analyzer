@@ -56,3 +56,22 @@ def participant_ids(
 
 def dependent_keys(key: BracketKey) -> tuple[BracketKey, ...]:
     return CHAMPION_DEPENDENTS[key]
+
+
+def match_is_complete(match, expected_participants=None) -> bool:
+    """Pure completeness rule shared by bracket state and publication checks."""
+    if match is None or match.winner_id is None:
+        return False
+    participants = (match.attacker_id, match.defender_id)
+    if expected_participants is not None and participants != expected_participants:
+        return False
+    if participants[0] is None or participants[1] is None or participants[0] == participants[1]:
+        return False
+    rounds = list(match.round_results)
+    if len(rounds) != 5 or sorted(result.round_number for result in rounds) != [1, 2, 3, 4, 5]:
+        return False
+    if any(result.winner_id not in participants for result in rounds):
+        return False
+    attacker_wins = sum(result.winner_id == participants[0] for result in rounds)
+    calculated_winner = participants[0] if attacker_wins >= 3 else participants[1]
+    return match.winner_id == calculated_winner
