@@ -105,6 +105,12 @@ class ChampionSlotsResponse(BaseModel):
 class ChampionTeamCharacterInput(BaseModel):
     id: int
     collection_level: Optional[str] = None
+    image_url: Optional[str] = None
+    original_predicted_id: Optional[int] = None
+    was_unrecognized: bool = False
+    add_to_templates: bool = False
+    template_source_url: Optional[str] = None
+    template_source_data_url: Optional[str] = None
     model_config = ConfigDict(extra="forbid")
 
 

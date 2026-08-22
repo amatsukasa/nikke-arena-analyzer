@@ -54,9 +54,10 @@ class CrossScopePhase5BTest(unittest.TestCase):
     def _players(self, tournament, count, champion):
         players = {}
         for number in range(1, count + 1):
+            seed_number = (number - 1) * 8 + 1 if champion else number
             player = models.Player(
-                tournament_id=tournament.id, seed_number=number,
-                champion_slot=number if champion else None, name=f"Player {number}",
+                tournament_id=tournament.id, seed_number=seed_number,
+                champion_slot=number if champion else None, name=f"Player {seed_number}",
             )
             self.db.add(player); self.db.flush(); players[number] = player
             deck_set = models.DeckSet(player_id=player.id); self.db.add(deck_set); self.db.flush()
@@ -242,6 +243,17 @@ class CrossScopePhase5BTest(unittest.TestCase):
         self.assertEqual(report["legacy_snapshot_raw_fallback_tournament_ids"], [])
         self.assertEqual(self.db.query(models.Tournament).count(), before)
 
+    def test_audit_detects_champion_seed_slot_mismatch(self):
+        player = self.champion_players[2]
+        player.seed_number = 8
+        player.name = "Player 8"
+        self.db.commit()
+        report = run_registration_audit(self.db)
+        self.assertEqual(
+            report["champion_seed_slot_mismatch"]["tournament_ids"],
+            [self.champion.id],
+        )
+
     def test_empty_partial_null_and_malformed_snapshots_fall_back_as_whole_tournament(self):
         expected = main._compute_cross_tournament_stats([self.full.id], self.db)
         valid = main._compute_dashboard_stats(self.full.id, self.db, self.user)
@@ -316,7 +328,8 @@ class CrossScopePhase5BTest(unittest.TestCase):
             ))
             good_players = []
             for slot in range(1, 9):
-                player = models.Player(tournament_id=good.id, champion_slot=slot, seed_number=slot, name=f"Player {slot}")
+                seed = (slot - 1) * 8 + 1
+                player = models.Player(tournament_id=good.id, champion_slot=slot, seed_number=seed, name=f"Player {seed}")
                 pg.add(player); pg.flush(); good_players.append(player)
                 deck_set = models.DeckSet(player_id=player.id); pg.add(deck_set); pg.flush()
                 for team_number in range(1, 6):
@@ -326,7 +339,8 @@ class CrossScopePhase5BTest(unittest.TestCase):
                         **{f"char{position}_id": start + position - 1 for position in range(1, 6)},
                     ))
             for slot in range(1, 8):
-                pg.add(models.Player(tournament_id=missing.id, champion_slot=slot, seed_number=slot, name=f"Player {slot}"))
+                seed = (slot - 1) * 8 + 1
+                pg.add(models.Player(tournament_id=missing.id, champion_slot=slot, seed_number=seed, name=f"Player {seed}"))
             match_pairs = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (4, 6), (0, 4)]
             match_keys = [("quarterfinal", i) for i in range(1, 5)] + [("semifinal", i) for i in range(1, 3)] + [("final", 1)]
             for (left, right), (stage, slot) in zip(match_pairs, match_keys):

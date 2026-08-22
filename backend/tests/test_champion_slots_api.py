@@ -97,7 +97,7 @@ class ChampionSlotsApiTest(unittest.TestCase):
         return raised.exception
 
     def test_slot_list_always_returns_ordered_eight_slots_and_registered_players(self):
-        seed_player = self._upsert(self.champion, 2, 17)
+        seed_player = self._upsert(self.champion, 2, 9)
         unknown_player = self._upsert(self.champion, 8, None)
 
         response = schemas.ChampionSlotsResponse.model_validate(
@@ -108,8 +108,8 @@ class ChampionSlotsApiTest(unittest.TestCase):
         self.assertEqual([slot.champion_slot for slot in response.slots], list(range(1, 9)))
         self.assertIsNone(response.slots[0].player)
         self.assertEqual(response.slots[1].player.id, seed_player.id)
-        self.assertEqual(response.slots[1].player.seed_number, 17)
-        self.assertEqual(response.slots[1].player.name, "Player 17")
+        self.assertEqual(response.slots[1].player.seed_number, 9)
+        self.assertEqual(response.slots[1].player.name, "Player 9")
         self.assertEqual(response.slots[7].player.id, unknown_player.id)
         self.assertIsNone(response.slots[7].player.seed_number)
         self.assertEqual(response.slots[7].player.name, "champion_slot_8")
@@ -155,26 +155,56 @@ class ChampionSlotsApiTest(unittest.TestCase):
         self.assertEqual((unknown_two.seed_number, unknown_two.name), (None, "champion_slot_3"))
         self.assertEqual(same_seed_other_tournament.seed_number, 1)
 
+    def test_each_slot_accepts_only_its_seed_range_or_unknown(self):
+        for slot in range(1, 9):
+            minimum = (slot - 1) * 8 + 1
+            maximum = slot * 8
+            for seed in (minimum, maximum, None):
+                tournament = models.Tournament(
+                    name=f"slot-{slot}-{seed}", date=date(2026, 1, 1),
+                    registration_scope="champion_8", created_by=self.owner.id,
+                )
+                self.db.add(tournament)
+                self.db.commit()
+                player = main.upsert_champion_slot(
+                    tournament.id, slot, self._body(seed), self.db, self.owner
+                )
+                self.assertEqual(player.seed_number, seed)
+
+            for seed in (minimum - 1, maximum + 1):
+                if not 1 <= seed <= 64:
+                    continue
+                tournament = models.Tournament(
+                    name=f"invalid-slot-{slot}-{seed}", date=date(2026, 1, 1),
+                    registration_scope="champion_8", created_by=self.owner.id,
+                )
+                self.db.add(tournament)
+                self.db.commit()
+                self._assert_http_status(
+                    422, main.upsert_champion_slot, tournament.id, slot,
+                    self._body(seed), self.db, self.owner,
+                )
+
     def test_updates_keep_player_id_generate_name_are_idempotent_and_invalidate_cache(self):
-        player = self._upsert(self.champion, 1, 32)
+        player = self._upsert(self.champion, 1, 2)
         original_id = player.id
         cache_key = main._dashboard_cache_key(self.champion.id, "stats")
         main._dashboard_cache[cache_key] = {"value": {}, "expires_at": float("inf")}
 
-        changed_seed = self._upsert(self.champion, 1, 33)
-        self.assertEqual((changed_seed.id, changed_seed.name), (original_id, "Player 33"))
+        changed_seed = self._upsert(self.champion, 1, 3)
+        self.assertEqual((changed_seed.id, changed_seed.name), (original_id, "Player 3"))
         self.assertNotIn(cache_key, main._dashboard_cache)
 
         changed_to_unknown = self._upsert(self.champion, 1, None)
         self.assertEqual((changed_to_unknown.id, changed_to_unknown.name), (original_id, "champion_slot_1"))
 
-        changed_to_known = self._upsert(self.champion, 1, 34)
-        self.assertEqual((changed_to_known.id, changed_to_known.name), (original_id, "Player 34"))
+        changed_to_known = self._upsert(self.champion, 1, 4)
+        self.assertEqual((changed_to_known.id, changed_to_known.name), (original_id, "Player 4"))
 
         with patch.object(self.db, "commit", wraps=self.db.commit) as commit:
-            repeated = self._upsert(self.champion, 1, 34)
+            repeated = self._upsert(self.champion, 1, 4)
         self.assertEqual(repeated.id, original_id)
-        self.assertEqual(repeated.name, "Player 34")
+        self.assertEqual(repeated.name, "Player 4")
         commit.assert_called_once_with()
 
     def test_cache_invalidation_failure_is_logged_without_failing_committed_update(self):
@@ -187,12 +217,12 @@ class ChampionSlotsApiTest(unittest.TestCase):
             ),
             patch("builtins.print") as log,
         ):
-            player = self._upsert(self.champion, 5, 55)
+            player = self._upsert(self.champion, 5, 33)
 
-        self.assertEqual((player.seed_number, player.name), (55, "Player 55"))
+        self.assertEqual((player.seed_number, player.name), (33, "Player 33"))
         commit.assert_called_once_with()
         stored = self.db.query(models.Player).filter_by(id=player.id).one()
-        self.assertEqual((stored.seed_number, stored.name), (55, "Player 55"))
+        self.assertEqual((stored.seed_number, stored.name), (33, "Player 33"))
         log.assert_called_once()
         log_message = log.call_args.args[0]
         self.assertIn(f"tournament={self.champion.id}", log_message)
@@ -309,20 +339,20 @@ class ChampionSlotsApiTest(unittest.TestCase):
         self.assertIs(player_by_id.endpoint, main.get_champion_player_by_id)
         self.assertNotEqual(seed_details.path, player_by_id.path)
 
-    def test_duplicate_seed_precheck_and_integrity_conflict_rollback_partial_updates(self):
-        first = self._upsert(self.champion, 1, 10)
-        second = self._upsert(self.champion, 2, 20)
+    def test_cross_slot_seed_is_rejected_and_integrity_conflict_rolls_back(self):
+        first = self._upsert(self.champion, 1, 1)
+        second = self._upsert(self.champion, 2, 9)
         self._assert_http_status(
-            409,
+            422,
             main.upsert_champion_slot,
             self.champion.id,
             2,
-            self._body(10),
+            self._body(1),
             self.db,
             self.owner,
         )
         self.db.refresh(second)
-        self.assertEqual((second.seed_number, second.name), (20, "Player 20"))
+        self.assertEqual((second.seed_number, second.name), (9, "Player 9"))
 
         conflict = IntegrityError("UPDATE players", {}, Exception("simulated unique conflict"))
         with patch.object(self.db, "commit", side_effect=conflict):
@@ -331,12 +361,12 @@ class ChampionSlotsApiTest(unittest.TestCase):
                 main.upsert_champion_slot,
                 self.champion.id,
                 1,
-                self._body(11),
+                self._body(2),
                 self.db,
                 self.owner,
             )
         self.db.refresh(first)
-        self.assertEqual((first.seed_number, first.name), (10, "Player 10"))
+        self.assertEqual((first.seed_number, first.name), (1, "Player 1"))
 
     def test_player_id_detail_requires_membership_and_supports_unknown_seed(self):
         unknown = self._upsert(self.champion, 4, None)
@@ -354,7 +384,7 @@ class ChampionSlotsApiTest(unittest.TestCase):
         other_player = main.upsert_champion_slot(
             self.other_champion.id,
             1,
-            self._body(12),
+            self._body(1),
             self.db,
             self.other,
         )

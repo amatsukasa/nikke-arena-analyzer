@@ -41,12 +41,14 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.db.add(self.tournament)
         for character_id in range(1, 201):
             self.db.add(models.Character(id=character_id, name=f"Character {character_id}"))
+        self.db.add(models.Character(id=9999, name="空枠"))
         self.db.flush()
         self.players = []
         for slot in range(1, 9):
             player = models.Player(
                 tournament_id=self.tournament.id, champion_slot=slot,
-                seed_number=slot, name=f"Player {slot}",
+                seed_number=(slot - 1) * 8 + 1,
+                name=f"Player {(slot - 1) * 8 + 1}",
             )
             self.db.add(player); self.db.flush(); self.players.append(player)
             deck_set = models.DeckSet(player_id=player.id)
@@ -108,6 +110,14 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         })
         self.assertEqual(result["invalid_slots"], [])
         self.assertEqual(result["invalid_match_slots"], [])
+
+    def test_seed_must_belong_to_the_players_champion_slot(self):
+        self.players[1].seed_number = 8
+        self.players[1].name = "Player 8"
+        self.db.commit()
+        result = self._validate()
+        self.assertFalse(result["can_publish"])
+        self.assertIn("seed_outside_champion_slot_range", self._codes(result))
 
     def test_champion_snapshot_uses_8_players_40_teams_7_matches_and_correct_results(self):
         raw = main._compute_dashboard_stats(self.tournament.id, self.db, self.owner)
@@ -173,7 +183,7 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
     def test_team_unknown_character_and_player_character_duplicate_are_rejected(self):
         deck_set = self.players[0].deck_sets[0]
         team = deck_set.teams[0]
-        team.char1_id = 9999
+        team.char1_id = 9998
         team.char2_id = team.char3_id
         team.char4_id = None
         self.db.commit()
@@ -183,6 +193,24 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertIn("unresolved_team_characters", self._codes(result))
         self.db.delete(deck_set.teams[-1]); self.db.commit()
         self.assertIn("invalid_team_numbers", self._codes(self._validate()))
+
+    def test_repeated_empty_slots_are_publishable_and_not_character_duplicates(self):
+        first_set = self.players[0].deck_sets[0]
+        first_set.teams[0].char1_id = 9999
+        first_set.teams[1].char1_id = 9999
+        self.db.commit()
+        result = self._validate()
+        self.assertTrue(result["can_publish"], result["errors"])
+        self.assertNotIn("duplicate_player_characters", self._codes(result))
+        self.assertEqual(result["complete_player_count"], 8)
+        stats = enrich_champion_snapshot_stats(
+            main._compute_dashboard_stats(self.tournament.id, self.db, self.owner),
+            self.tournament.id,
+            self.db,
+        )
+        self.assertEqual(sum(team["count"] for team in stats["team_usage"]), 40)
+        self.assertEqual(sum(character["count"] for character in stats["character_stats"]), 198)
+        self.assertNotIn(9999, {character["id"] for character in stats["character_stats"]})
 
     def test_match_and_round_count_slot_and_number_errors(self):
         final = self.db.query(models.Match).filter_by(

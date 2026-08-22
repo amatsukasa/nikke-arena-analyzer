@@ -1,0 +1,26 @@
+"use client";
+
+import { Trophy } from "lucide-react";
+import { ChampionSlotState, visibleChampionStatus } from "../lib/championRegistration";
+import TournamentPlayerPill from "./TournamentPlayerPill";
+
+interface Props { slots: ChampionSlotState[]; onPlayerClick: (slot: ChampionSlotState) => void; iconRevision?: number; pendingSlot?: number|null; selectedSlot?: number|null }
+
+export default function ChampionBracketTree({ slots, onPlayerClick, iconRevision = 0, pendingSlot=null, selectedSlot=null }: Props) {
+  const player = (slot: number) => slots[slot - 1];
+  const PlayerCard = ({ slot, align = "left" }: { slot: ChampionSlotState; align?: "left" | "right" }) => {
+    const icon = slot.player?.icon_url;
+    const status=visibleChampionStatus(slot,pendingSlot===slot.champion_slot);
+    return <div className="relative pb-5"><TournamentPlayerPill onClick={()=>onPlayerClick(slot)} selected={selectedSlot===slot.champion_slot} align={align} scale={.75} iconUrl={icon?`${icon}${icon.includes("?")?"&":"?"}v=${iconRevision}`:null} eyebrow={slot.player?.seed_number?`SEED ${slot.player.seed_number}`:`SLOT ${slot.champion_slot}`} name={slot.player?.name||"未登録"}/><span className={`absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap text-[8px] font-bold ${status==="登録完了"?"text-emerald-400":status.includes("確認待ち")?"text-amber-400":status==="修正が必要"?"text-red-400":"text-slate-500"}`}>{status}</span></div>;
+  };
+  const MatchCard = ({ label, align = "left", scale = 1 }: { label: string; align?: "left" | "right" | "center"; scale?: number }) => <div className={`relative z-30 flex cursor-not-allowed items-center gap-2 rounded-full border border-dashed border-slate-700 bg-slate-900/60 p-1.5 opacity-50 backdrop-blur-md ${align === "right" ? "flex-row-reverse" : ""}`} style={{ transform: `scale(${scale})` }}><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-slate-700 bg-slate-900 text-[10px] font-black italic text-blue-500">VS</span><span className={`flex min-w-[80px] max-w-[100px] flex-col px-2 ${align === "right" ? "items-end text-right" : "items-start"}`}><span className="text-[10px] font-bold tracking-wider text-slate-400">{label}</span><span className="w-full truncate text-xs font-black italic text-slate-500">未確定</span></span></div>;
+  const Line = ({ x1, y1, x2, y2, color = "#3b82f6" }: { x1: number; y1: number; x2: number; y2: number; color?: string }) => { const mid = x1 + (x2 - x1) * .5; return <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ overflow: "visible" }}><path d={`M ${x1} ${y1} L ${mid} ${y1} L ${mid} ${y2} L ${x2} ${y2}`} fill="none" stroke={color} strokeWidth=".3" strokeOpacity=".6" strokeLinejoin="round" /></svg>; };
+  const pos = (left: number, top: number, child: React.ReactNode, z = 20) => <div className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left: `${left}%`, top: `${top}%`, zIndex: z }}>{child}</div>;
+  const LX=15,MX=32,CX=50,RX=85,RMX=68,Y1=12,Y2=28,Y3=72,Y4=88,YM1=20,YM2=80,YS1=35,YS2=65,YF=50;
+  return <div className="relative mx-auto aspect-[9/16] w-full max-w-4xl overflow-hidden rounded-3xl border border-white/5 bg-slate-950/50 p-4 shadow-inner md:aspect-[3/4] lg:aspect-square">
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-10"><Trophy size={400} className="text-blue-500 blur-3xl" /></div><div className="absolute left-1/2 top-2 z-10 w-full -translate-x-1/2 text-center"><div className="text-xs font-bold tracking-widest text-blue-400 md:text-sm">CHAMPION FINALS</div><div className="text-xl font-black uppercase tracking-widest text-slate-100 md:text-3xl">チャンピオン対抗戦</div></div>
+    <Line x1={LX} y1={Y1} x2={MX} y2={YM1}/><Line x1={LX} y1={Y2} x2={MX} y2={YM1}/><Line x1={LX} y1={Y3} x2={MX} y2={YM2}/><Line x1={LX} y1={Y4} x2={MX} y2={YM2}/><Line x1={RX} y1={Y1} x2={RMX} y2={YM1}/><Line x1={RX} y1={Y2} x2={RMX} y2={YM1}/><Line x1={RX} y1={Y3} x2={RMX} y2={YM2}/><Line x1={RX} y1={Y4} x2={RMX} y2={YM2}/><Line x1={MX} y1={YM1} x2={CX} y2={YS1}/><Line x1={RMX} y1={YM1} x2={CX} y2={YS1}/><Line x1={MX} y1={YM2} x2={CX} y2={YS2}/><Line x1={RMX} y1={YM2} x2={CX} y2={YS2}/><Line x1={CX} y1={YS1} x2={CX} y2={YF} color="#fbbf24"/><Line x1={CX} y1={YS2} x2={CX} y2={YF} color="#fbbf24"/>
+    {pos(LX,Y1,<PlayerCard slot={player(1)}/>)}{pos(LX,Y2,<PlayerCard slot={player(2)}/>)}{pos(RX,Y1,<PlayerCard slot={player(3)} align="right"/>)}{pos(RX,Y2,<PlayerCard slot={player(4)} align="right"/>)}{pos(LX,Y3,<PlayerCard slot={player(5)}/>)}{pos(LX,Y4,<PlayerCard slot={player(6)}/>)}{pos(RX,Y3,<PlayerCard slot={player(7)} align="right"/>)}{pos(RX,Y4,<PlayerCard slot={player(8)} align="right"/>)}
+    {pos(MX,YM1,<MatchCard label="Best 8" scale={.85}/> ,30)}{pos(RMX,YM1,<MatchCard label="Best 8" scale={.85} align="right"/>,30)}{pos(MX,YM2,<MatchCard label="Best 8" scale={.85}/>,30)}{pos(RMX,YM2,<MatchCard label="Best 8" scale={.85} align="right"/>,30)}{pos(CX,YS1,<MatchCard label="Best 4"/>,30)}{pos(CX,YS2,<MatchCard label="Best 4" align="right"/>,30)}{pos(CX,YF,<MatchCard label="FINAL" scale={1.2}/>,40)}
+  </div>;
+}

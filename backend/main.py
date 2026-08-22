@@ -9,12 +9,14 @@ import models, schemas
 from typing import List, Literal, Optional
 from datetime import datetime, timedelta, timezone
 import hashlib
+import base64
 import secrets
 import asyncio
 import contextlib
 import shutil
 import os
 import time
+import re
 from pathlib import Path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -34,6 +36,13 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = "uploads"
+
+CHAMPION_TEMPLATE_SOURCE_MAX_BYTES = 1024 * 1024
+CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES = 10 * 1024 * 1024
+CHAMPION_CROP_TTL_SECONDS = int(os.environ.get("CHAMPION_CROP_TTL_SECONDS", "21600"))
+CHAMPION_CROP_NAME = re.compile(
+    r"^crop_t(?P<tournament>\d+)_p(?P<player>\d+)_(?P<token>[0-9a-f]{12})_r\d+_c\d+(?:_preview)?\.(?:png|webp)$"
+)
 
 RESULT_SCORES = {
     "優勝": 1,
@@ -212,6 +221,7 @@ from services.upload_cleanup import (
     delete_upload_file,
     path_from_upload_url,
     stale_age_hours_from_env,
+    CROPPED_DIR,
     PLAYER_ICONS_DIR,
     _is_within,
 )
@@ -1731,9 +1741,20 @@ def validate_champion_slot(champion_slot: int) -> None:
         raise HTTPException(status_code=422, detail="champion slot must be between 1 and 8")
 
 
-def validate_champion_seed(seed_number: int | None) -> None:
-    if seed_number is not None and not 1 <= seed_number <= 64:
-        raise HTTPException(status_code=422, detail="seed_number must be null or between 1 and 64")
+def champion_seed_range(champion_slot: int) -> tuple[int, int]:
+    validate_champion_slot(champion_slot)
+    return (champion_slot - 1) * 8 + 1, champion_slot * 8
+
+
+def validate_champion_seed(champion_slot: int, seed_number: int | None) -> None:
+    if seed_number is None:
+        return
+    minimum, maximum = champion_seed_range(champion_slot)
+    if not minimum <= seed_number <= maximum:
+        raise HTTPException(
+            status_code=422,
+            detail=f"seed_number for champion slot {champion_slot} must be null or between {minimum} and {maximum}",
+        )
 
 
 def require_champion_player_manager(
@@ -1789,8 +1810,7 @@ def champion_teams_response(player: models.Player, deck_set: models.DeckSet | No
     for team in teams:
         character_ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
         complete = complete and team.team_number in range(1, 6) and all(
-            character_id is not None and character_id != EMPTY_SLOT_CHARACTER_ID
-            for character_id in character_ids
+            character_id is not None for character_id in character_ids
         )
         response_teams.append({
             "team_number": team.team_number,
@@ -1807,7 +1827,7 @@ def champion_teams_response(player: models.Player, deck_set: models.DeckSet | No
     }
 
 
-def validate_champion_teams_payload(data: schemas.ChampionTeamsUpsert) -> list[tuple[int, list[int], list[str | None]]]:
+def validate_champion_teams_payload(data: schemas.ChampionTeamsUpsert) -> list[tuple[int, list[int], list[str | None], list[schemas.ChampionTeamCharacterInput]]]:
     if len(data.teams) != 5:
         raise HTTPException(status_code=422, detail="Exactly five teams are required")
     team_numbers = [team.team_number for team in data.teams]
@@ -1819,19 +1839,144 @@ def validate_champion_teams_payload(data: schemas.ChampionTeamsUpsert) -> list[t
         if len(team.characters) != 5:
             raise HTTPException(status_code=422, detail="Each team must contain exactly five characters")
         character_ids = [character.id for character in team.characters]
-        if any(character_id <= 0 or character_id == EMPTY_SLOT_CHARACTER_ID for character_id in character_ids):
-            raise HTTPException(status_code=422, detail="All character slots must contain a resolved character")
-        if len(set(character_ids)) != 5:
+        if any(character_id <= 0 for character_id in character_ids):
+            raise HTTPException(status_code=422, detail="All character slots must contain a resolved character or the empty-slot marker")
+        real_character_ids = [character_id for character_id in character_ids if character_id != EMPTY_SLOT_CHARACTER_ID]
+        if len(set(real_character_ids)) != len(real_character_ids):
             raise HTTPException(status_code=422, detail="Characters must not be duplicated within a team")
-        all_character_ids.extend(character_ids)
+        all_character_ids.extend(real_character_ids)
         normalized.append((
             team.team_number,
             character_ids,
-            [character.collection_level if character.collection_level in COLLECTION_VALUES else None for character in team.characters],
+            [
+                None if character.id == EMPTY_SLOT_CHARACTER_ID
+                else character.collection_level if character.collection_level in COLLECTION_VALUES else None
+                for character in team.characters
+            ],
+            team.characters,
         ))
-    if len(set(all_character_ids)) != 25:
+    if len(set(all_character_ids)) != len(all_character_ids):
         raise HTTPException(status_code=422, detail="Characters must not be duplicated across teams")
     return sorted(normalized, key=lambda item: item[0])
+
+
+def decode_champion_template_source(data_url: str):
+    if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
+        raise HTTPException(status_code=422, detail="Template source must be a PNG data URL")
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[1], validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Template source is not valid base64") from exc
+    if not raw or len(raw) > CHAMPION_TEMPLATE_SOURCE_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="Template source exceeds the size limit")
+    import cv2 as _cv2
+    import numpy as _np
+    image = _cv2.imdecode(_np.frombuffer(raw, dtype=_np.uint8), _cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(status_code=422, detail="Template source is not a decodable image")
+    height, width = image.shape[:2]
+    if width > CHAMPION_ICON_MAX_WIDTH or height > CHAMPION_ICON_MAX_HEIGHT or width * height > CHAMPION_ICON_MAX_PIXELS:
+        raise HTTPException(status_code=422, detail="Template source dimensions exceed the limit")
+    return image, len(raw)
+
+
+def validate_owned_champion_crop_url(
+    url: str,
+    tournament_id: int,
+    player_id: int,
+    *,
+    require_lossless: bool = False,
+) -> Path:
+    source_path = path_from_upload_url(url)
+    match = CHAMPION_CROP_NAME.fullmatch(source_path.name) if source_path else None
+    if (
+        source_path is None
+        or not _is_within(source_path, CROPPED_DIR)
+        or match is None
+        or int(match.group("tournament")) != tournament_id
+        or int(match.group("player")) != player_id
+        or (require_lossless and source_path.suffix.lower() != ".png")
+        or not source_path.is_file()
+    ):
+        raise HTTPException(status_code=422, detail="The analysis crop does not belong to this tournament and Player")
+    age = time.time() - source_path.stat().st_mtime
+    if age < 0 or age > CHAMPION_CROP_TTL_SECONDS:
+        raise HTTPException(status_code=422, detail="The analysis crop has expired")
+    return source_path
+
+
+def load_champion_template_source(
+    character: schemas.ChampionTeamCharacterInput,
+    tournament_id: int,
+    player_id: int,
+):
+    """Load only a live crop issued for the current tournament and Player."""
+    if character.template_source_url:
+        source_path = validate_owned_champion_crop_url(
+            character.template_source_url,
+            tournament_id,
+            player_id,
+            require_lossless=True,
+        )
+        source_size = source_path.stat().st_size
+        if not 0 < source_size <= CHAMPION_TEMPLATE_SOURCE_MAX_BYTES:
+            raise HTTPException(status_code=422, detail="Template source exceeds the size limit")
+        import cv2 as _cv2
+        source_image = _cv2.imread(str(source_path), _cv2.IMREAD_COLOR)
+        if source_image is None:
+            raise HTTPException(status_code=422, detail="Template source is not a decodable image")
+        height, width = source_image.shape[:2]
+        if width > CHAMPION_ICON_MAX_WIDTH or height > CHAMPION_ICON_MAX_HEIGHT or width * height > CHAMPION_ICON_MAX_PIXELS:
+            raise HTTPException(status_code=422, detail="Template source dimensions exceed the limit")
+        return source_image, source_size
+    if character.template_source_data_url:
+        raise HTTPException(status_code=422, detail="Inline template sources are no longer accepted; analyze the image again")
+    raise HTTPException(status_code=422, detail="A corrected Character requires its source crop")
+
+
+def install_champion_character_template(character_id: int, source_image, db: Session):
+    """Install one corrected crop using the legacy full_64 naming/dedup rules."""
+    import cv2 as _cv2
+
+    template_dir = Path(UPLOAD_DIR) / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    existing = sorted(
+        path for path in template_dir.iterdir()
+        if path.is_file() and (path.name.startswith(f"char_{character_id}_") or path.name == f"char_{character_id}.png")
+    )
+    prepared_source = prepare_character_image(source_image)
+    representative = existing[0].name if existing else None
+    for path in existing:
+        existing_image = _cv2.imread(str(path))
+        if existing_image is None:
+            continue
+        try:
+            prepared_existing = prepare_character_image(existing_image)
+            height, width = prepared_source.shape[:2]
+            resized = _cv2.resize(prepared_existing, (width, height))
+            similarity = 1.0 - (_cv2.absdiff(prepared_source, resized).mean() / 255.0)
+            if similarity > 0.92:
+                character = db.get(models.Character, character_id)
+                character.is_template_available = True
+                if not character.template_filename:
+                    character.template_filename = path.name
+                return None
+        except Exception:
+            continue
+    used_numbers = []
+    for path in existing:
+        stem_suffix = path.stem.removeprefix(f"char_{character_id}_")
+        if stem_suffix.isdigit():
+            used_numbers.append(int(stem_suffix))
+    next_number = max(used_numbers, default=0) + 1
+    destination = template_dir / f"char_{character_id}_{next_number:03d}.png"
+    if not write_lossless_png(str(destination), source_image):
+        raise OSError(f"Failed to save template: {destination}")
+    character = db.get(models.Character, character_id)
+    character.is_template_available = True
+    if not character.template_filename:
+        character.template_filename = destination.name
+    return destination
 
 
 @app.get(
@@ -1874,7 +2019,7 @@ def upsert_champion_slot(
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
     validate_champion_slot(champion_slot)
-    validate_champion_seed(body.seed_number)
+    validate_champion_seed(champion_slot, body.seed_number)
     tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
     require_unpublished_champion_edit(tournament)
 
@@ -2157,6 +2302,7 @@ async def analyze_champion_deck(
     ]
     saved_paths: list[str] = []
     analysis_output_paths: list[str] = []
+    keep_analysis_outputs = False
     try:
         for index, image in enumerate(images):
             if getattr(image, "content_type", None) not in CHAMPION_DECK_IMAGE_TYPES:
@@ -2184,6 +2330,7 @@ async def analyze_champion_deck(
                 pre_cropped_flags=pre_cropped_flags,
                 include_source_metadata=True,
                 created_output_paths=analysis_output_paths,
+                crop_owner_player_id=player.id,
             )
         except HTTPException:
             raise
@@ -2193,12 +2340,6 @@ async def analyze_champion_deck(
         # The legacy analyzer uses its third argument only for result/file labels.
         result["suggested_player_name"] = player.name
         result["suggested_seed"] = player.seed_number
-        for characters in result.get("suggested_teams", []):
-            for character in characters:
-                # Champion analysis is stateless; generated crop URLs would point
-                # at files removed before this request returns.
-                character.pop("image_url", None)
-                character.pop("template_source_url", None)
         result["teams"] = [
             {
                 "team_number": team_number,
@@ -2214,7 +2355,7 @@ async def analyze_champion_deck(
                     {
                         **character,
                         "character_id": character.get("predicted_character_id"),
-                        "unresolved": character.get("predicted_character_id") in (None, EMPTY_SLOT_CHARACTER_ID),
+                        "unresolved": character.get("predicted_character_id") is None,
                     }
                     for character in characters
                 ],
@@ -2223,9 +2364,18 @@ async def analyze_champion_deck(
                 result.get("suggested_teams", []), start=1
             )
         ]
+        # The structured response retains the same temporary crop URLs as the
+        # existing full_64 flow. They remain available while the user reviews
+        # and corrects the result, and are deleted only after a successful save.
+        for characters in result.get("suggested_teams", []):
+            for character in characters:
+                character.pop("image_url", None)
+                character.pop("template_source_url", None)
+        keep_analysis_outputs = True
         return result
     finally:
-        for path in saved_paths + analysis_output_paths:
+        cleanup_paths = saved_paths + ([] if keep_analysis_outputs else analysis_output_paths)
+        for path in cleanup_paths:
             delete_upload_file(path)
 
 
@@ -2244,7 +2394,23 @@ def save_champion_teams(
         tournament_id, player_id, db, current_user
     )
     normalized = validate_champion_teams_payload(data)
-    character_ids = {character_id for _, ids, _ in normalized for character_id in ids}
+    temporary_crop_urls = [
+        url
+        for _, _, _, characters in normalized
+        for character in characters
+        for url in (character.image_url, character.template_source_url)
+        if url
+    ]
+    owned_crop_paths = {
+        validate_owned_champion_crop_url(url, tournament_id, player_id)
+        for url in temporary_crop_urls
+    }
+    character_ids = {
+        character_id
+        for _, ids, _, _ in normalized
+        for character_id in ids
+        if character_id != EMPTY_SLOT_CHARACTER_ID
+    }
     existing_character_ids = {
         row[0]
         for row in db.query(models.Character.id).filter(
@@ -2255,19 +2421,43 @@ def save_champion_teams(
     if missing:
         raise HTTPException(status_code=422, detail=f"Unknown character IDs: {missing}")
 
+    template_sources = []
+    total_template_bytes = 0
+    for _, _, _, characters in normalized:
+        for character in characters:
+            if not character.add_to_templates:
+                continue
+            if character.id == EMPTY_SLOT_CHARACTER_ID:
+                raise HTTPException(status_code=422, detail="The empty slot cannot be added as a Character template")
+            if not (
+                character.was_unrecognized
+                or character.original_predicted_id != character.id
+            ):
+                raise HTTPException(status_code=422, detail="Templates may only be added for manually corrected analysis results")
+            source_image, source_bytes = load_champion_template_source(
+                character, tournament_id, player_id
+            )
+            total_template_bytes += source_bytes
+            if total_template_bytes > CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES:
+                raise HTTPException(status_code=422, detail="Corrected template sources exceed the total size limit")
+            template_sources.append((character.id, source_image))
+
     existing_sets = db.query(models.DeckSet).filter(
         models.DeckSet.player_id == player.id
     ).order_by(models.DeckSet.id).all()
     deck_set = existing_sets[0] if existing_sets else models.DeckSet(player_id=player.id)
     if not existing_sets:
         db.add(deck_set)
+    created_template_paths: list[Path] = []
+    committed = False
+    response_data = None
     try:
         for extra_set in existing_sets[1:]:
             db.delete(extra_set)
         for old_team in list(deck_set.teams):
             db.delete(old_team)
         db.flush()
-        for team_number, ids, collections in normalized:
+        for team_number, ids, collections, _ in normalized:
             db.add(models.DeckTeam(
                 deck_set=deck_set,
                 team_number=team_number,
@@ -2277,19 +2467,41 @@ def save_champion_teams(
                 collection3=collections[2], collection4=collections[3],
                 collection5=collections[4],
             ))
+        for character_id, source_image in template_sources:
+            created_path = install_champion_character_template(character_id, source_image, db)
+            if created_path is not None:
+                created_template_paths.append(created_path)
+        db.flush()
         db.commit()
-        db.refresh(deck_set)
+        committed = True
+        response_data = champion_teams_response(player, deck_set)
     except IntegrityError as exc:
         db.rollback()
+        for path in created_template_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
         raise HTTPException(status_code=409, detail="Deck data conflicts with existing data") from exc
     except Exception:
-        db.rollback()
+        if not committed:
+            db.rollback()
+        for path in ([] if committed else created_template_paths):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
         raise
+    for path in owned_crop_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            print(f"[champion-crop] committed crop cleanup failed file={path.name}: {cleanup_error}")
     try:
         invalidate_dashboard_cache(tournament_id)
     except Exception as exc:
         print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
-    return champion_teams_response(player, deck_set)
+    return response_data
 
 
 @app.get(
@@ -2328,10 +2540,13 @@ def champion_player_has_complete_deck(player_id: int, db: Session) -> bool:
     character_ids = []
     for team in teams:
         ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
-        if any(character_id in (None, EMPTY_SLOT_CHARACTER_ID) for character_id in ids):
+        if any(character_id is None for character_id in ids):
             return False
-        character_ids.extend(ids)
-    return len(set(character_ids)) == 25
+        character_ids.extend(
+            character_id for character_id in ids
+            if character_id != EMPTY_SLOT_CHARACTER_ID
+        )
+    return len(set(character_ids)) == len(character_ids)
 
 
 def champion_match_is_complete(

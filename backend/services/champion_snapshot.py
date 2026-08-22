@@ -5,6 +5,7 @@ from services.tournament_results import calculate_player_results, result_label
 
 
 RESULT_SCORE = {"優勝": 1, "準優勝": 2, "ベスト4": 4, "ベスト8": 8}
+EMPTY_SLOT_CHARACTER_ID = 9999
 
 
 def champion_player_results(tournament_id, db):
@@ -40,6 +41,8 @@ def enrich_champion_snapshot_stats(stats, tournament_id, db):
             players_by_team.setdefault(canonical, set()).add(deck_set.player_id)
             players_by_team_position.setdefault((canonical, team.team_number), set()).add(deck_set.player_id)
             for character_id in character_ids:
+                if character_id == EMPTY_SLOT_CHARACTER_ID:
+                    continue
                 players_by_character.setdefault(character_id, set()).add(deck_set.player_id)
                 players_by_character_team_position.setdefault((character_id, team.team_number), set()).add(deck_set.player_id)
 

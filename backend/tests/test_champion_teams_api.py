@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import cv2
+import numpy as np
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("DASHBOARD_CACHE_TTL_SECONDS", "60")
@@ -24,6 +26,7 @@ from database import Base, SessionLocal, engine  # noqa: E402
 import main  # noqa: E402
 import models  # noqa: E402
 import schemas  # noqa: E402
+from services import upload_cleanup  # noqa: E402
 
 
 class FakeForm:
@@ -61,6 +64,15 @@ class ChampionTeamsApiTest(unittest.TestCase):
         self.upload_directory = tempfile.TemporaryDirectory()
         self.original_upload_directory = main.UPLOAD_DIR
         main.UPLOAD_DIR = self.upload_directory.name
+        self.original_upload_cleanup_roots = (
+            upload_cleanup.UPLOAD_ROOT,
+            upload_cleanup.CROPPED_DIR,
+            upload_cleanup.PLAYER_ICONS_DIR,
+        )
+        upload_cleanup.UPLOAD_ROOT = Path(self.upload_directory.name).resolve()
+        upload_cleanup.CROPPED_DIR = (upload_cleanup.UPLOAD_ROOT / "cropped").resolve()
+        upload_cleanup.PLAYER_ICONS_DIR = (upload_cleanup.UPLOAD_ROOT / "player_icons").resolve()
+        main.CROPPED_DIR = upload_cleanup.CROPPED_DIR
         self.upload_delete_patcher = patch.object(
             main,
             "delete_upload_file",
@@ -79,6 +91,7 @@ class ChampionTeamsApiTest(unittest.TestCase):
         self.full_player = self._player(self.full, None, 1)
         for character_id in range(1, 51):
             self.db.add(models.Character(id=character_id, name=f"Character {character_id}"))
+        self.db.add(models.Character(id=9999, name="空枠"))
         self.db.commit()
 
     def tearDown(self):
@@ -86,6 +99,12 @@ class ChampionTeamsApiTest(unittest.TestCase):
         main._dashboard_cache.clear()
         self.upload_delete_patcher.stop()
         main.UPLOAD_DIR = self.original_upload_directory
+        (
+            upload_cleanup.UPLOAD_ROOT,
+            upload_cleanup.CROPPED_DIR,
+            upload_cleanup.PLAYER_ICONS_DIR,
+        ) = self.original_upload_cleanup_roots
+        main.CROPPED_DIR = upload_cleanup.CROPPED_DIR
         self.upload_directory.cleanup()
 
     def _user(self, email, role):
@@ -129,6 +148,17 @@ class ChampionTeamsApiTest(unittest.TestCase):
             payload or self._payload(), self.db, user or self.owner,
         )
 
+    def _owned_crop(self, *, player=None, tournament=None, preview=False, token="abcdef123456"):
+        player = player or self.player
+        tournament = tournament or self.champion
+        crop_dir = Path(self.upload_directory.name) / "cropped"
+        crop_dir.mkdir(exist_ok=True)
+        suffix = "_preview.webp" if preview else ".png"
+        path = crop_dir / f"crop_t{tournament.id}_p{player.id}_{token}_r1_c1{suffix}"
+        image = np.full((64, 64, 3), (30, 120, 220), dtype=np.uint8)
+        self.assertTrue(cv2.imwrite(str(path), image))
+        return path, f"/api/uploads/cropped/{path.name}"
+
     def _assert_status(self, status, function, *args):
         with self.assertRaises(HTTPException) as raised:
             function(*args)
@@ -168,7 +198,6 @@ class ChampionTeamsApiTest(unittest.TestCase):
             if count == 6:
                 data["teams"][0]["characters"].append({"id": 26, "collection_level": None})
             variants.append(data)
-        unresolved = self._payload().model_dump(); unresolved["teams"][0]["characters"][0]["id"] = 9999; variants.append(unresolved)
         unknown = self._payload().model_dump(); unknown["teams"][0]["characters"][0]["id"] = 999; variants.append(unknown)
         within = self._payload().model_dump(); within["teams"][0]["characters"][1]["id"] = 1; variants.append(within)
         across = self._payload().model_dump(); across["teams"][1]["characters"][0]["id"] = 1; variants.append(across)
@@ -177,6 +206,198 @@ class ChampionTeamsApiTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             schemas.ChampionTeamsUpsert.model_validate({"teams": [{"team_number": 1, "characters": [{"id": None}]}]})
         self.assertEqual(self.db.query(models.DeckSet).count(), 0)
+
+    def test_multiple_empty_slots_are_complete_and_excluded_from_duplicate_validation(self):
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0] = {"id": 9999, "collection_level": "sr_15"}
+        data["teams"][1]["characters"][0] = {"id": 9999, "collection_level": "treasure_15"}
+        response = schemas.ChampionTeamsResponse.model_validate(
+            self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        )
+        self.assertEqual(response.status, "complete")
+        self.assertEqual(response.teams[0].character_ids[0], 9999)
+        self.assertIsNone(response.teams[0].collection_levels[0])
+        self.assertTrue(main.champion_player_has_complete_deck(self.player.id, self.db))
+
+    def test_empty_slot_is_reserved_and_not_subject_to_normal_character_lookup(self):
+        self.db.query(models.Character).filter(models.Character.id == 9999).delete()
+        self.db.commit()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0]["id"] = 9999
+        response = schemas.ChampionTeamsResponse.model_validate(
+            self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        )
+        self.assertEqual(response.status, "complete")
+
+    def test_manual_correction_adds_template_and_updates_character_metadata(self):
+        _, source = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "original_predicted_id": None,
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source,
+        })
+        self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        character = self.db.get(models.Character, 1)
+        self.assertTrue(character.is_template_available)
+        self.assertEqual(character.template_filename, "char_1_001.png")
+        self.assertTrue((Path(self.upload_directory.name) / "templates" / "char_1_001.png").is_file())
+
+        _, second_source = self._owned_crop(token="abcdef123457")
+        data["teams"][0]["characters"][0]["template_source_url"] = second_source
+        self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        self.assertEqual(
+            len(list((Path(self.upload_directory.name) / "templates").glob("char_1_*.png"))),
+            1,
+        )
+
+    def test_manual_correction_uses_full64_crop_lifecycle_and_deletes_after_save(self):
+        crop_dir = Path(self.upload_directory.name) / "cropped"
+        crop_dir.mkdir(exist_ok=True)
+        source_path, source_url = self._owned_crop()
+        preview_path, preview_url = self._owned_crop(preview=True)
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "image_url": preview_url,
+            "original_predicted_id": None,
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+
+        self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+
+        self.assertTrue((Path(self.upload_directory.name) / "templates" / "char_1_001.png").is_file())
+        self.assertFalse(source_path.exists())
+        self.assertFalse(preview_path.exists())
+
+    def test_successful_save_consumes_preview_and_lossless_crop_without_template_addition(self):
+        source_path, source_url = self._owned_crop()
+        preview_path, preview_url = self._owned_crop(preview=True)
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "image_url": preview_url,
+            "template_source_url": source_url,
+            "add_to_templates": False,
+        })
+        response = schemas.ChampionTeamsResponse.model_validate(
+            self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        )
+        self.assertEqual(response.status, "complete")
+        self.assertFalse(source_path.exists())
+        self.assertFalse(preview_path.exists())
+        self.assertFalse((Path(self.upload_directory.name) / "templates" / "char_1_001.png").exists())
+
+    def test_template_write_is_rolled_back_with_failed_deck_commit(self):
+        source_path, source_url = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+        with patch.object(self.db, "commit", side_effect=RuntimeError("commit failed")):
+            with self.assertRaises(RuntimeError):
+                self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        self.assertFalse((Path(self.upload_directory.name) / "templates" / "char_1_001.png").exists())
+        self.assertTrue(source_path.exists())
+        self.db.refresh(self.db.get(models.Character, 1))
+        self.assertFalse(self.db.get(models.Character, 1).is_template_available)
+
+    def test_template_creation_failure_rolls_back_without_consuming_crop(self):
+        source_path, source_url = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+        with patch.object(main, "install_champion_character_template", side_effect=OSError("template failed")):
+            with self.assertRaisesRegex(OSError, "template failed"):
+                self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        self.assertEqual(self.db.query(models.DeckSet).filter_by(player_id=self.player.id).count(), 0)
+        self.assertTrue(source_path.exists())
+
+    def test_second_flush_failure_removes_new_template_and_preserves_crop(self):
+        source_path, source_url = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+        real_flush = self.db.flush
+        calls = 0
+
+        def fail_second_flush(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("flush failed")
+            return real_flush(*args, **kwargs)
+
+        with patch.object(self.db, "flush", side_effect=fail_second_flush):
+            with self.assertRaisesRegex(RuntimeError, "flush failed"):
+                self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        self.assertEqual(self.db.query(models.DeckSet).filter_by(player_id=self.player.id).count(), 0)
+        self.assertFalse((Path(self.upload_directory.name) / "templates" / "char_1_001.png").exists())
+        self.assertTrue(source_path.exists())
+
+    def test_successfully_consumed_crop_cannot_be_reused(self):
+        source_path, source_url = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+        payload = schemas.ChampionTeamsUpsert.model_validate(data)
+        first = schemas.ChampionTeamsResponse.model_validate(self._save(payload))
+        self.assertEqual(first.status, "complete")
+        self.assertFalse(source_path.exists())
+        self._assert_status(422, self._save, payload)
+        current = schemas.ChampionTeamsResponse.model_validate(
+            main.get_champion_teams(self.champion.id, self.player.id, self.db, self.owner)
+        )
+        self.assertEqual(current.deck_set_id, first.deck_set_id)
+        self.assertEqual(current.status, "complete")
+
+    def test_crop_ownership_expiry_and_traversal_are_rejected_without_deletion(self):
+        cases = []
+        other_path, other_url = self._owned_crop(player=self.other_player, tournament=self.other_champion)
+        cases.append((other_url, other_path))
+        traversal = "/api/uploads/cropped/../templates/char_1_001.png"
+        cases.append((traversal, None))
+        expired_path, expired_url = self._owned_crop(token="abcdef123458")
+        os.utime(expired_path, (0, 0))
+        cases.append((expired_url, expired_path))
+        for url, path in cases:
+            data = self._payload().model_dump()
+            data["teams"][0]["characters"][0].update({
+                "was_unrecognized": True,
+                "add_to_templates": True,
+                "template_source_url": url,
+            })
+            self._assert_status(422, self._save, schemas.ChampionTeamsUpsert.model_validate(data))
+            if path is not None:
+                self.assertTrue(path.exists())
+        self.assertEqual(self.db.query(models.DeckSet).count(), 0)
+
+    def test_post_commit_response_failure_keeps_db_and_template(self):
+        source_path, source_url = self._owned_crop()
+        data = self._payload().model_dump()
+        data["teams"][0]["characters"][0].update({
+            "was_unrecognized": True,
+            "add_to_templates": True,
+            "template_source_url": source_url,
+        })
+        with patch.object(main, "champion_teams_response", side_effect=RuntimeError("response failed")):
+            with self.assertRaises(RuntimeError):
+                self._save(schemas.ChampionTeamsUpsert.model_validate(data))
+        self.assertEqual(self.db.query(models.DeckTeam).count(), 5)
+        self.assertTrue((Path(self.upload_directory.name) / "templates" / "char_1_001.png").exists())
+        self.assertTrue(source_path.exists(), "post-commit response failure must not consume review crops")
 
     def test_idempotent_resave_reuses_deck_set_replaces_teams_and_commits_once(self):
         first = schemas.ChampionTeamsResponse.model_validate(self._save())
@@ -248,22 +469,27 @@ class ChampionTeamsApiTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 403)
         self.assertFalse(request.form_called)
 
-    def test_analyze_one_and_five_images_null_seed_no_db_write_and_cleanup(self):
+    def test_analyze_one_and_five_images_keep_crop_urls_until_save(self):
         for count in (1, 5):
             request = FakeRequest([self._upload(content=f"image-{index}".encode()) for index in range(count)])
             observed_paths = []
+            retained_paths = []
             def fake_process(paths, tournament_id, reference, **kwargs):
                 observed_paths.extend(paths)
                 self.assertEqual(reference, self.player.id)
                 self.assertTrue(kwargs["include_source_metadata"])
-                intermediate = Path(self.upload_directory.name) / "generated-crop.png"
+                self.assertEqual(kwargs["crop_owner_player_id"], self.player.id)
+                crop_dir = Path(self.upload_directory.name) / "cropped"
+                crop_dir.mkdir(exist_ok=True)
+                intermediate = crop_dir / "crop_generated.png"
                 intermediate.write_bytes(b"crop")
+                retained_paths.append(intermediate)
                 kwargs["created_output_paths"].append(str(intermediate))
                 character = {
                     "predicted_character_id": None,
                     "confidence": 0,
-                    "image_url": str(intermediate.resolve()),
-                    "template_source_url": "/api/uploads/cropped/generated-crop.png",
+                    "image_url": "/api/uploads/cropped/crop_generated.png",
+                    "template_source_url": "/api/uploads/cropped/crop_generated.png",
                 }
                 return {"suggested_teams": [[dict(character) for _ in range(5)] for _ in range(5)]}
             with patch.object(main, "process_images", side_effect=fake_process):
@@ -271,10 +497,43 @@ class ChampionTeamsApiTest(unittest.TestCase):
             self.assertIsNone(result["suggested_seed"])
             self.assertEqual([team["team_number"] for team in result["teams"]], [1, 2, 3, 4, 5])
             self.assertTrue(result["teams"][0]["characters"][0]["unresolved"])
+            self.assertEqual(result["teams"][0]["characters"][0]["image_url"], "/api/uploads/cropped/crop_generated.png")
+            self.assertEqual(result["teams"][0]["characters"][0]["template_source_url"], "/api/uploads/cropped/crop_generated.png")
             self.assertTrue(all(not Path(path).exists() for path in observed_paths))
             self.assertNotIn(str(Path(self.upload_directory.name).resolve()), str(result))
-            self.assertNotIn("generated-crop.png", str(result))
+            self.assertTrue(retained_paths[0].exists())
             self.assertEqual(self.db.query(models.DeckSet).count(), 0)
+            main.delete_temporary_crop_urls([result["teams"][0]["characters"][0]["image_url"]])
+
+    def test_analysis_returns_relative_url_without_embedding_or_absolute_path(self):
+        request = FakeRequest([self._upload()])
+        retained_paths = []
+
+        def fake_process(paths, tournament_id, reference, **kwargs):
+            crop_dir = Path(self.upload_directory.name) / "cropped"
+            crop_dir.mkdir(exist_ok=True)
+            intermediate = crop_dir / "crop_large-preview.png"
+            intermediate.write_bytes(b"x")
+            retained_paths.append(intermediate)
+            kwargs["created_output_paths"].append(str(intermediate))
+            character = {
+                "predicted_character_id": None,
+                "image_url": "/api/uploads/cropped/crop_large-preview.png",
+            }
+            return {"suggested_teams": [[dict(character) for _ in range(5)]]}
+
+        with patch.object(main, "process_images", side_effect=fake_process):
+            result = asyncio.run(
+                main.analyze_champion_deck(
+                    self.champion.id, self.player.id, request, self.db, self.owner
+                )
+            )
+        character = result["teams"][0]["characters"][0]
+        self.assertEqual(character["image_url"], "/api/uploads/cropped/crop_large-preview.png")
+        self.assertNotIn("preview_image_data_url", character)
+        self.assertNotIn(str(Path(self.upload_directory.name).resolve()), str(result))
+        self.assertTrue(retained_paths[0].exists())
+        main.delete_temporary_crop_urls([character["image_url"]])
 
     def test_analyze_rejects_image_count_mime_empty_and_cleans_on_analysis_error(self):
         for images in ([], [self._upload() for _ in range(6)]):

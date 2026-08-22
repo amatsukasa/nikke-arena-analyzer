@@ -1,39 +1,60 @@
-import RegistrationScopeBadge from "./RegistrationScopeBadge";
+"use client";
 
-interface Props {
-  tournamentId: number;
-  publicationStatus: "draft" | "published";
-  providerGameStartDate: string | null;
-  canEdit: boolean;
-  error?: string;
-}
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BarChart3, ChevronLeft, Loader2, X } from "lucide-react";
+import ChampionBracketTree from "./ChampionBracketTree";
+import DeckRegistrationEditor, { RegistrationCharacter } from "./DeckRegistrationEditor";
+import DeckRegistrationViewer from "./DeckRegistrationViewer";
+import PlayerIconEditor from "./PlayerIconEditor";
+import { useAuth } from "../context/AuthContext";
+import { apiErrorMessage } from "../lib/tournaments";
+import { ChampionSlotState, ChampionTeam, championAnalyzeUrl, championIconUrl, championProgress, championSaveConfirmation, championTeamsPayload, championTeamsUrl, normalizeAnalyzedTeams, normalizeSavedTeams } from "../lib/championRegistration";
 
-export default function ChampionTournamentRegistrationShell({
-  tournamentId,
-  publicationStatus,
-  providerGameStartDate,
-  canEdit,
-  error,
-}: Props) {
-  return (
-    <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-8" data-tournament-id={tournamentId}>
-      <section className="rounded-2xl bg-slate-900/80 p-5 ring-1 ring-white/10 md:p-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <RegistrationScopeBadge scope="champion_8" />
-            <h1 className="mt-3 text-2xl font-black text-slate-100 md:text-3xl">チャンピオン対抗戦 登録</h1>
-          </div>
-          <span className="text-sm text-slate-400">{publicationStatus === "published" ? "公開中" : "下書き"}</span>
-        </div>
-        <p className="mt-5 text-sm leading-7 text-slate-300">
-          チャンピオン対抗戦へ進出した8人の登録状況とトーナメントを、この画面で管理します。
-        </p>
-        <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
-          <div className="rounded-xl bg-white/5 p-4"><dt className="text-slate-500">データ提供者のゲーム開始日</dt><dd className="mt-1 text-slate-200">{providerGameStartDate || "未設定"}</dd></div>
-          <div className="rounded-xl bg-white/5 p-4"><dt className="text-slate-500">編集権限</dt><dd className="mt-1 text-slate-200">{canEdit ? "編集可能" : "閲覧のみ"}</dd></div>
-        </dl>
-        {error && <div role="alert" className="mt-5 rounded-xl border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">{error}</div>}
-      </section>
-    </main>
-  );
+interface Props { tournamentId:number; publicationStatus:"draft"|"published"; providerGameStartDate:string|null; canEdit:boolean; error?:string }
+const initialSlots=():ChampionSlotState[]=>Array.from({length:8},(_,i)=>({champion_slot:i+1,player:null,teamStatus:"not_saved",teams:[]}));
+export const championSeedRange=(slot:number)=>({minimum:(slot-1)*8+1,maximum:slot*8});
+
+export default function ChampionTournamentRegistrationShell({tournamentId,publicationStatus,canEdit,error=""}:Props){
+  const {apiFetch}=useAuth();
+  const [slots,setSlots]=useState(initialSlots); const [characters,setCharacters]=useState<RegistrationCharacter[]>([]); const [loading,setLoading]=useState(true); const [pageError,setPageError]=useState(error);
+  const [selectedSlot,setSelectedSlot]=useState<number>(1); const [seed,setSeed]=useState(""); const [step,setStep]=useState<"seed"|"summary"|"player"|"decks">("seed"); const [teams,setTeams]=useState<ChampionTeam[]>([]); const [dirty,setDirty]=useState(false); const [busy,setBusy]=useState<""|"player"|"analysis"|"teams"|"icon">(""); const [formError,setFormError]=useState(""); const [iconRevision,setIconRevision]=useState(0);
+  const generation=useRef(0); const initialized=useRef(false); const formRef=useRef<HTMLElement>(null); const activeTournamentId=useRef(tournamentId); activeTournamentId.current=tournamentId; const published=publicationStatus==="published"; const selected=slots[selectedSlot-1]; const range=championSeedRange(selected.champion_slot);
+  const loadSlots=useCallback(async()=>{const current=++generation.current;setLoading(true);try{const response=await apiFetch(`/api/tournaments/${tournamentId}/champion-slots`,{cache:"no-store"});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(apiErrorMessage(data,"8枠を取得できませんでした。"));const next=initialSlots().map(slot=>({...slot,player:data.slots?.find((item:any)=>item.champion_slot===slot.champion_slot)?.player??null}));await Promise.all(next.filter(slot=>slot.player).map(async slot=>{try{const result=await apiFetch(championTeamsUrl(tournamentId,slot.player!.id),{cache:"no-store"});const body=await result.json().catch(()=>({}));if(result.ok){slot.teamStatus=body.status==="complete"?"complete":"incomplete";slot.teams=normalizeSavedTeams(body);}else slot.teamStatus="load_failed";}catch{slot.teamStatus="load_failed";}}));if(current===generation.current){setSlots(next);if(!initialized.current){const first=next[0];setSeed(first.player?.seed_number?.toString()??"");setTeams(first.teams);setStep(first.player?(first.teamStatus==="complete"?"summary":"player"):"seed");initialized.current=true;}}}catch(caught){if(current===generation.current)setPageError(caught instanceof Error?caught.message:"8枠を取得できませんでした。");}finally{if(current===generation.current)setLoading(false);}},[apiFetch,tournamentId]);
+  useEffect(()=>{
+    generation.current+=1; initialized.current=false;
+    setSlots(initialSlots()); setSelectedSlot(1); setSeed(""); setStep("seed"); setTeams([]);
+    setDirty(false); setBusy(""); setFormError(""); setPageError(error); setIconRevision(0); setLoading(true);
+  },[tournamentId,error]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    void loadSlots();
+    const current=generation.current;
+    fetch("/api/characters",{cache:"no-store",signal:controller.signal}).then(response=>response.json()).then(data=>{if(current===generation.current)setCharacters(Array.isArray(data)?data:[]);}).catch(caught=>{if(!(caught instanceof DOMException&&caught.name==="AbortError")&&current===generation.current)setPageError("キャラクター一覧を取得できませんでした。");});
+    return()=>{controller.abort();generation.current+=1;};
+  },[loadSlots]);
+  const open=(slot:ChampionSlotState)=>{if(busy)return;if(slot.champion_slot!==selectedSlot&&dirty&&!window.confirm("未保存の変更があります。別のPlayerへ移動すると変更内容は破棄されます。移動しますか？"))return;setSelectedSlot(slot.champion_slot);setSeed(slot.player?.seed_number?.toString()??"");setTeams(slot.teams);setDirty(false);setFormError("");setStep(slot.player?(slot.teamStatus==="complete"?"summary":"player"):"seed");setTimeout(()=>formRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),0);};
+  const close=()=>{if(busy)return;if(dirty&&!window.confirm("未保存の変更を破棄しますか？"))return;setTeams(selected.teams);setDirty(false);setFormError("");setStep(selected.player?(selected.teamStatus==="complete"?"summary":"player"):"seed");};
+  const savePlayer=async()=>{if(!selected||!canEdit||published||busy)return;const operationTournament=tournamentId;const operationSlot=selected.champion_slot;setBusy("player");setFormError("");try{const response=await apiFetch(`/api/tournaments/${operationTournament}/champion-slots/${operationSlot}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({seed_number:seed===""?null:Number(seed)})});const data=await response.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!response.ok)throw new Error(apiErrorMessage(data,"Playerを登録できませんでした。"));setSlots(old=>old.map(slot=>slot.champion_slot===operationSlot?{...slot,player:data}:slot));setStep("player");}catch(caught){if(activeTournamentId.current===operationTournament)setFormError(caught instanceof Error?caught.message:"Playerを登録できませんでした。");}finally{if(activeTournamentId.current===operationTournament)setBusy("");}};
+  const analyze=async(prepared:{file:File;preCropped:boolean}[])=>{if(!selected?.player||busy)return;if(dirty&&!window.confirm("現在の未保存編集を破棄して再解析しますか？"))return;const operationTournament=tournamentId;const operationPlayer=selected.player.id;setBusy("analysis");setFormError("");try{const body=new FormData();prepared.forEach(item=>{body.append("images",item.file);body.append("image_pre_cropped",item.preCropped?"true":"false");});const response=await apiFetch(championAnalyzeUrl(operationTournament,operationPlayer),{method:"POST",body});const data=await response.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!response.ok)throw new Error(apiErrorMessage(data,"画像解析に失敗しました。"));setTeams(normalizeAnalyzedTeams(data));setDirty(true);}catch(caught){if(activeTournamentId.current===operationTournament)setFormError(caught instanceof Error?caught.message:"画像解析に失敗しました。");}finally{if(activeTournamentId.current===operationTournament)setBusy("");}};
+  const saveTeams=async()=>{if(!selected.player||busy||published)return;const operationTournament=tournamentId;const operationPlayer=selected.player.id;const operationSlot=selected.champion_slot;const isOverwrite=selected.teamStatus==="complete";const names=new Map(characters.map(character=>[character.id,character.name]));if(!window.confirm(championSaveConfirmation(selected.player.name,operationSlot,selected.player.seed_number,teams,names,isOverwrite)))return;setBusy("teams");setFormError("");try{const correctedIds=new Set(teams.flatMap(team=>team.characters.filter(character=>character.add_to_templates&&character.id!=null&&character.id!==9999).map(character=>character.id as number)));const response=await apiFetch(championTeamsUrl(operationTournament,operationPlayer),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(championTeamsPayload(teams))});const data=await response.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!response.ok)throw new Error(apiErrorMessage(data,"編成を保存できませんでした。"));const verify=await apiFetch(championTeamsUrl(operationTournament,operationPlayer),{cache:"no-store"});const verified=await verify.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!verify.ok||verified.status!=="complete")throw new Error("保存後の完成状態を確認できませんでした。");const saved=normalizeSavedTeams(verified);setTeams(saved);setCharacters(old=>old.map(character=>correctedIds.has(character.id)?{...character,icon_url:`/api/char-icon/${character.id}.png`}:character));setDirty(false);setSlots(old=>old.map(slot=>slot.champion_slot===operationSlot?{...slot,teamStatus:"complete",teams:saved}:slot));setStep("summary");window.alert(isOverwrite?"既存の編成データを上書きしました！（古いデータは自動削除済み）":"編成データを保存しました！");}catch(caught){if(activeTournamentId.current===operationTournament)setFormError(caught instanceof Error?caught.message:"編成を保存できませんでした。");}finally{if(activeTournamentId.current===operationTournament)setBusy("");}};
+  const uploadIcon=async(file:File)=>{if(!selected?.player)return;const operationTournament=tournamentId;const operationPlayer=selected.player.id;const operationSlot=selected.champion_slot;setBusy("icon");setFormError("");try{const body=new FormData();body.append("image",file);const response=await apiFetch(championIconUrl(operationTournament,operationPlayer),{method:"PUT",body});const data=await response.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!response.ok)throw new Error(apiErrorMessage(data,"画像を保存できませんでした。"));setSlots(old=>old.map(slot=>slot.champion_slot===operationSlot&&slot.player?{...slot,player:{...slot.player,icon_url:data.icon_url}}:slot));setIconRevision(Date.now());}catch(caught){if(activeTournamentId.current===operationTournament)setFormError(caught instanceof Error?caught.message:"画像を保存できませんでした。");throw caught;}finally{if(activeTournamentId.current===operationTournament)setBusy("");}};
+  const deleteIcon=async()=>{if(!selected?.player||!window.confirm("Player画像を削除しますか？"))return;const operationTournament=tournamentId;const operationPlayer=selected.player.id;const operationSlot=selected.champion_slot;setBusy("icon");try{const response=await apiFetch(championIconUrl(operationTournament,operationPlayer),{method:"DELETE"});const data=await response.json().catch(()=>({}));if(activeTournamentId.current!==operationTournament)return;if(!response.ok)throw new Error(apiErrorMessage(data,"画像を削除できませんでした。"));setSlots(old=>old.map(slot=>slot.champion_slot===operationSlot&&slot.player?{...slot,player:{...slot.player,icon_url:null}}:slot));}catch(caught){if(activeTournamentId.current===operationTournament)setFormError(caught instanceof Error?caught.message:"画像を削除できませんでした。");}finally{if(activeTournamentId.current===operationTournament)setBusy("");}};
+
+  return <main className="mx-auto max-w-7xl space-y-8 p-4 pb-32 md:p-8">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-4"><Link href="/tournaments/manage" aria-label="大会一覧に戻る" className="rounded-full bg-white/5 p-2 text-slate-400 transition-colors hover:bg-white/10"><ChevronLeft size={24}/></Link><h1 className="text-2xl font-black text-slate-100 md:text-3xl">トーナメント表</h1></div>
+      <Link href={`/tournament/${tournamentId}/dashboard`} className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-500/20 ring-1 ring-white/10"><BarChart3 size={18}/><span>この大会の分析を見る（メンバー専用）</span></Link>
+    </div>
+    {pageError&&<div role="alert" className="rounded-xl bg-red-950/40 p-3 text-red-300">{pageError}</div>}
+    <section className="overflow-hidden rounded-3xl bg-slate-900/80 shadow-2xl ring-1 ring-white/10"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-slate-950/80 px-6 py-4"><span className="font-black text-amber-400">チャンピオン対抗戦</span><span className="text-sm font-bold text-slate-400">Player {championProgress(slots).players} / 8・編成完了 {championProgress(slots).complete} / 8</span></div><div className="bg-slate-900 p-4 md:p-8">{loading?<p className="flex min-h-96 items-center justify-center gap-2"><Loader2 className="animate-spin"/>読み込み中...</p>:<ChampionBracketTree slots={slots} onPlayerClick={open} iconRevision={iconRevision} selectedSlot={selectedSlot} pendingSlot={dirty?selectedSlot:null}/>}</div></section>
+    <section ref={formRef} className="scroll-mt-24 rounded-3xl bg-slate-900/80 p-4 shadow-2xl ring-1 ring-white/10 md:p-6">
+      <div className="flex items-start justify-between"><div><p className="text-sm font-bold text-blue-400">対抗戦枠{selected.champion_slot}</p><h2 className="text-2xl font-black text-white">データ登録フォーム</h2><p className="mt-1 text-slate-300">{selected.player?.name||"Player登録"}</p></div><button onClick={close} disabled={Boolean(busy)} className="flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-slate-300" aria-label="編集を終了して登録済み内容へ戻る"><X size={18}/>編集を終了</button></div>
+      {formError&&<div role="alert" className="mt-4 rounded-xl bg-red-950/50 p-3 text-red-300">{formError}</div>}
+      {(step==="seed"||!selected.player)&&range&&<section className="mx-auto mt-8 max-w-lg rounded-2xl bg-slate-950/60 p-6 ring-1 ring-white/10"><h3 className="text-xl font-black">対抗戦枠{selected.champion_slot}</h3><p className="mt-2 text-slate-300">この枠は元シード{range.minimum}～{range.maximum}のPlayerです</p><select aria-label="元シード番号" value={seed} onChange={event=>setSeed(event.target.value)} className="mt-5 w-full rounded-xl bg-slate-800 p-3"><option value="">不明</option>{Array.from({length:8},(_,i)=>range.minimum+i).map(value=><option key={value} value={value}>{value}</option>)}</select><div className="mt-5 flex gap-3"><button onClick={close} className="flex-1 rounded-xl bg-slate-800 py-3 font-bold">キャンセル</button><button onClick={()=>void savePlayer()} disabled={!canEdit||published||Boolean(busy)} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold disabled:opacity-40">{busy==="player"?"保存中...":"決定"}</button></div></section>}
+      {selected.player&&step==="summary"&&<div className="mt-6"><DeckRegistrationViewer playerName={selected.player.name} playerDetail={`元シード: ${selected.player.seed_number??"不明"} / 編成登録完了`} playerIconUrl={selected.player.icon_url?`${selected.player.icon_url}?v=${iconRevision}`:null} teams={selected.teams} characters={characters} canEdit={canEdit&&!published} onEditPlayer={canEdit&&!published?()=>setStep("player"):undefined} onEditTeams={canEdit&&!published?()=>setStep("decks"):undefined}/></div>}
+      {selected.player&&step==="player"&&<div className="mt-6 space-y-4"><section className="rounded-xl bg-white/5 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><b>{selected.player.name}</b><p className="text-sm text-slate-400">元シード: {selected.player.seed_number??"不明"} / {selected.teamStatus==="complete"?"編成登録完了":"編成未登録"}</p></div>{canEdit&&!published&&<button onClick={()=>setStep("seed")} className="rounded-xl bg-slate-800 px-4 py-2">元シードを変更</button>}</div></section><PlayerIconEditor key={`icon-${tournamentId}-${selected.player.id}`} iconUrl={selected.player.icon_url?`${selected.player.icon_url}?v=${iconRevision}`:null} disabled={!canEdit} busy={busy==="icon"} onUpload={uploadIcon} onDelete={deleteIcon} onSkip={canEdit&&!published?()=>setStep("decks"):undefined}/>{canEdit&&!published?<button onClick={()=>setStep("decks")} className="w-full rounded-xl bg-blue-600 py-4 font-bold">{selected.teamStatus==="complete"?"保存済み編成を確認・修正する":"次へ（編成登録）"}</button>:<button onClick={()=>setStep(selected.teamStatus==="complete"?"summary":"player")} disabled={selected.teamStatus!=="complete"} className="w-full rounded-xl bg-slate-800 py-4 font-bold disabled:opacity-40">{selected.teamStatus==="complete"?"編成を見る":"編成は未登録です"}</button>}</div>}
+      {selected.player&&step==="decks"&&<div className="mt-6"><DeckRegistrationEditor key={`decks-${tournamentId}-${selected.player.id}`} teams={teams} characters={characters} saved={selected.teamStatus==="complete"} disabled={!canEdit||published} busy={busy} error={formError} dirty={dirty} onTeamsChange={next=>{setTeams(next);setDirty(true);}} onAnalyze={analyze} onSave={saveTeams} onClose={()=>{setTeams(selected.teams);setDirty(false);setStep(selected.teamStatus==="complete"?"summary":"player");}}/></div>}
+    </section>
+  </main>;
 }

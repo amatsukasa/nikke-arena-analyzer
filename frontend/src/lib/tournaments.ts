@@ -17,8 +17,8 @@ export interface TournamentSummary {
 }
 
 export const REGISTRATION_SCOPE_LABELS: Record<RegistrationScope, string> = {
-  full_64: "通常登録（64人）",
-  champion_8: "チャンピオン対抗戦のみ（8人）",
+  full_64: "64人モード",
+  champion_8: "8人モード",
 };
 
 export const REGISTRATION_SCOPE_DESCRIPTIONS: Record<RegistrationScope, string> = {

@@ -6,6 +6,9 @@ from models import Character, DeckSet, DeckTeam, Match, Player, RoundResult
 from services.champion_bracket import CHAMPION_BRACKET, match_is_complete, participant_ids
 
 
+EMPTY_SLOT_CHARACTER_ID = 9999
+
+
 def _issue(code: str, message: str, **context):
     return {"code": code, "message": message, **context}
 
@@ -41,6 +44,18 @@ def validate_champion_publication(tournament, db):
         errors.append(_issue("invalid_seed_numbers", "seed_number must be null or between 1 and 64.", seeds=invalid_seeds))
     if duplicate_seeds:
         errors.append(_issue("duplicate_seed_numbers", "Known seed numbers must be unique within the tournament.", seeds=duplicate_seeds))
+    mismatched_seed_slots = sorted(
+        player.champion_slot for player in slotted
+        if player.champion_slot in range(1, 9)
+        and player.seed_number is not None
+        and not ((player.champion_slot - 1) * 8 + 1 <= player.seed_number <= player.champion_slot * 8)
+    )
+    if mismatched_seed_slots:
+        errors.append(_issue(
+            "seed_outside_champion_slot_range",
+            "Known seed numbers must belong to the eight-seed range assigned to their champion slot.",
+            slots=mismatched_seed_slots,
+        ))
 
     players_by_slot = {}
     players_by_id = {player.id: player for player in players}
@@ -78,16 +93,21 @@ def validate_champion_publication(tournament, db):
             errors.append(_issue("invalid_team_numbers", "Each DeckSet must contain team_number 1 through 5 exactly once.", player_id=player.id))
             player_valid = False
         character_ids = []
+        occupied_character_ids = []
         for team in player_teams:
             slots = [getattr(team, f"char{index}_id") for index in range(1, 6)]
             if len(slots) != 5 or any(character_id is None for character_id in slots):
                 errors.append(_issue("unresolved_team_characters", "Every team must contain five resolved characters.", player_id=player.id, team_number=team.team_number))
                 player_valid = False
             character_ids.extend(character_id for character_id in slots if character_id is not None)
-        referenced_characters.update(character_ids)
-        character_ids_by_player[player.id] = set(character_ids)
-        if len(character_ids) != 25 or len(set(character_ids)) != 25:
-            errors.append(_issue("duplicate_player_characters", "A player's 25 character slots must be unique.", player_id=player.id))
+            occupied_character_ids.extend(
+                character_id for character_id in slots
+                if character_id not in (None, EMPTY_SLOT_CHARACTER_ID)
+            )
+        referenced_characters.update(occupied_character_ids)
+        character_ids_by_player[player.id] = set(occupied_character_ids)
+        if len(character_ids) != 25 or len(set(occupied_character_ids)) != len(occupied_character_ids):
+            errors.append(_issue("duplicate_player_characters", "A player's occupied Character slots must be unique; repeated empty slots are allowed.", player_id=player.id))
             player_valid = False
         if player_valid:
             complete_player_ids.add(player.id)

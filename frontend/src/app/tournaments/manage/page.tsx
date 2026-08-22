@@ -372,6 +372,7 @@ export default function Home() {
                       <div className="text-xs text-slate-400 mt-2 flex flex-wrap gap-x-4 gap-y-1">
                         <div>作成者: <span className="text-slate-300 font-medium">{t.owner_name || t.creator_email || "未設定"}</span></div>
                         <div>開催日: <span className="text-slate-300 font-medium">{t.date ? t.date.split('T')[0] : "未設定"}</span></div>
+                        <div>ゲーム開始日: <span className="text-slate-300 font-medium">{t.provider_game_start_date || "未設定"}</span></div>
                         <div>作成日: <span className="text-slate-300 font-medium">{t.created_at ? new Date(t.created_at).toLocaleString('ja-JP') : "未記録"}</span></div>
                       </div>
                     </div>

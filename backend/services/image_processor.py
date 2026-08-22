@@ -58,6 +58,7 @@ def process_images(
     pre_cropped_flags=None,
     include_source_metadata=False,
     created_output_paths=None,
+    crop_owner_player_id=None,
 ):
     analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
@@ -182,10 +183,12 @@ def process_images(
                 })
                 continue
             
-            crop_stem = (
-                f"crop_t{tournament_id}_s{seed_number}_{analysis_id}"
-                f"_r{r_idx+1}_c{c_idx+1}"
+            owner_label = (
+                f"p{int(crop_owner_player_id)}"
+                if crop_owner_player_id is not None
+                else f"s{seed_number}"
             )
+            crop_stem = f"crop_t{tournament_id}_{owner_label}_{analysis_id}_r{r_idx+1}_c{c_idx+1}"
             crop_filename = f"{crop_stem}.png"
             crop_path = os.path.join(cropped_dir, crop_filename)
             cv2.imwrite(crop_path, face)

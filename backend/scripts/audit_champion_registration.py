@@ -27,6 +27,9 @@ if str(BACKEND_DIR) not in sys.path:
 import models  # noqa: E402
 
 
+EMPTY_SLOT_CHARACTER_ID = 9999
+
+
 def ids(values):
     return sorted(set(value for value in values if value is not None))
 
@@ -55,6 +58,8 @@ def snapshot_audit(snapshot, players_by_id, deck_sets_by_player, teams_by_deck_s
                     raw_teams[canonical] += 1
                     raw_team_players[canonical].add(player.id)
                 for character_id in set(character_ids):
+                    if character_id == EMPTY_SLOT_CHARACTER_ID:
+                        continue
                     raw_chars[character_id] += 1
                     raw_char_players[character_id].add(player.id)
 
@@ -143,6 +148,14 @@ def run(session):
     add_issue(report, "seed_duplicate", (
         t.id for t in tournaments if any(count > 1 for count in Counter(p.seed_number for p in players_by_tournament[t.id] if p.seed_number is not None).values())
     ))
+    add_issue(report, "champion_seed_slot_mismatch", (
+        t.id for t in champions if any(
+            p.champion_slot in range(1, 9)
+            and p.seed_number is not None
+            and not ((p.champion_slot - 1) * 8 + 1 <= p.seed_number <= p.champion_slot * 8)
+            for p in players_by_tournament[t.id]
+        )
+    ))
 
     duplicate_char_players = []
     duplicate_team_players = []
@@ -151,7 +164,12 @@ def run(session):
         player_sets = deck_sets_by_player[player.id]
         player_teams = [team for deck_set in player_sets for team in teams_by_deck_set[deck_set.id]]
         deck_shape[(len(player_sets), len(player_teams))] += 1
-        characters = [character_id for team in player_teams for character_id in team_characters(team) if character_id is not None]
+        characters = [
+            character_id
+            for team in player_teams
+            for character_id in team_characters(team)
+            if character_id not in (None, EMPTY_SLOT_CHARACTER_ID)
+        ]
         if len(characters) != len(set(characters)):
             duplicate_char_players.append(player.id)
         canonical_teams = [tuple(sorted(c for c in team_characters(team) if c is not None)) for team in player_teams]
