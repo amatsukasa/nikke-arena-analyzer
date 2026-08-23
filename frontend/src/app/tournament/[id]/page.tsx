@@ -2,86 +2,102 @@
 export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, ChevronDown, Check, Swords, Scissors, ZoomIn, X, Save, BarChart3 } from "lucide-react";
+import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-react";
 import Link from "next/link";
-import Cropper from "react-easy-crop";
-import CharacterSearchSelect from "../../../components/CharacterSearchSelect";
-import SharedTeamDisplay from "../../../components/TeamDisplay";
+import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
+import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
+import DeckRegistrationViewer from "../../../components/DeckRegistrationViewer";
+import PlayerIconEditor from "../../../components/PlayerIconEditor";
+import TournamentPlayerPill from "../../../components/TournamentPlayerPill";
+import MatchResultEditor from "../../../components/MatchResultEditor";
+import { useAuth } from "../../../context/AuthContext";
+import { apiErrorMessage, normalizeTournament, TournamentSummary } from "../../../lib/tournaments";
+import { prepareAnalysisImage } from "../../../lib/deckImagePreparation";
+import { hasCompleteRegistrationStructure, normalizeAnalyzedRegistrationTeams, normalizeSavedRegistrationTeams, registrationSaveConfirmation, registrationTeamsPayload, validateRegistrationTeams } from "../../../lib/deckRegistration";
+import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } from "../../../lib/matchRegistration";
 
-const COLLECTION_OPTIONS = [
-  { value: "none", label: "コレクションなし" },
-  { value: "r_0_14", label: "R 0～14" },
-  { value: "r_15", label: "R 15" },
-  { value: "sr_0_14", label: "SR 0～14" },
-  { value: "sr_15", label: "SR 15" },
-  { value: "treasure_0_14", label: "宝物 0～14" },
-  { value: "treasure_15", label: "宝物 15" },
-  { value: "unknown", label: "判定不能" },
-] as const;
+export default function TournamentDetailRouter() {
+  const params = useParams();
+  const { user, isLoading: authLoading } = useAuth();
+  const tournamentId = Number(params.id);
+  const [tournament, setTournament] = useState<TournamentSummary | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-const collectionSelectClass = (value?: string | null) => {
-  switch (value) {
-    case "r_0_14":
-      return "border-blue-500 bg-white text-blue-700";
-    case "r_15":
-      return "border-blue-500 bg-black text-white";
-    case "sr_0_14":
-      return "border-purple-500 bg-white text-purple-700";
-    case "sr_15":
-      return "border-purple-500 bg-black text-white";
-    case "treasure_0_14":
-      return "border-orange-500 bg-white text-orange-700";
-    case "treasure_15":
-      return "border-orange-500 bg-black text-white";
-    case "unknown":
-      return "border-red-500 bg-red-50 text-red-700";
-    case "none":
-      return "border-slate-400 bg-white text-slate-700";
-    default:
-      return "border-slate-600 bg-slate-800 text-slate-300";
+  useEffect(() => {
+    if (!Number.isInteger(tournamentId) || tournamentId <= 0) {
+      setLoadError("大会IDが正しくありません。");
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setLoadError("");
+    fetch(`/api/tournaments/${tournamentId}`, { cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(apiErrorMessage(data, "大会情報の取得に失敗しました。"));
+        setTournament(normalizeTournament(data));
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setLoadError(error instanceof Error ? error.message : "大会情報の取得に失敗しました。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [tournamentId]);
+
+  if (loading || authLoading) {
+    return <div className="loading-screen min-h-[50vh]"><div className="spinner" /><p>大会情報を読み込み中...</p></div>;
   }
-};
+  if (loadError || !tournament) {
+    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{loadError || "大会情報が見つかりません。"}</div></main>;
+  }
+  if (tournament.registration_scope === "champion_8") {
+    const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));
+    return (
+      <ChampionTournamentRegistrationShell
+        tournamentId={tournament.id}
+        publicationStatus={tournament.publication_status}
+        providerGameStartDate={tournament.provider_game_start_date}
+        canEdit={canEdit}
+      />
+    );
+  }
+  const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));
+  return <Full64TournamentDetail canEdit={canEdit} />;
+}
 
-export default function TournamentDetail() {
+function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const params = useParams();
   const id = params.id;
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const seedFieldRef = useRef<HTMLDivElement>(null);
-  const roundToggleRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const [seed, setSeed] = useState(1);
-  const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
-  const [result, setResult] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [characters, setCharacters] = useState<any[]>([]);
   const [selectedTeams, setSelectedTeams] = useState<any[]>([]);
-  const [expandedPreviewRound, setExpandedPreviewRound] = useState(0);
 
   // 勝敗登録用state
   const [mode, setMode] = useState<"deck" | "match">("deck");
   const [attackerSeed, setAttackerSeed] = useState(1);
   const [defenderSeed, setDefenderSeed] = useState(2);
-  const [matchFile, setMatchFile] = useState<File | null>(null);
-  const [matchPreview, setMatchPreview] = useState<string | null>(null);
-  const [matchResult, setMatchResult] = useState<any>(null);
   const [matchStage, setMatchStage] = useState("Groups");
+  const [full64MatchTeams,setFull64MatchTeams]=useState<{attacker:any[];defender:any[]}>({attacker:[],defender:[]});
+  const [full64MatchDirty,setFull64MatchDirty]=useState(false);
 
   // フォーム用プレイヤー情報
   const [formPlayerIcon, setFormPlayerIcon] = useState("");
   const [registeredDecks, setRegisteredDecks] = useState<any[]>([]);
   const [isLoadingRegisteredDecks, setIsLoadingRegisteredDecks] = useState(false);
+  const [deckScreen, setDeckScreen] = useState<"view" | "edit">("edit");
+  const [deckDirty, setDeckDirty] = useState(false);
 
-  // クロップ用ステート
-  const [showCropModal, setShowCropModal] = useState(false);
-  const [imageToCrop, setImageToCrop] = useState<string | null>(null);
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
   const [isUploadingIcon, setIsUploadingIcon] = useState(false);
-  const [cropTarget, setCropTarget] = useState<"form" | "result">("form");
 
   // トーナメント表データ
   const [bracketData, setBracketData] = useState<any>(null);
@@ -120,10 +136,17 @@ export default function TournamentDetail() {
       const data = await response.json();
       const iconUrl = data.player?.icon_url;
       setFormPlayerIcon(iconUrl ? `${iconUrl}?t=${Date.now()}` : "");
+      const savedTeams = normalizeSavedRegistrationTeams(data);
       setRegisteredDecks(data.decks || []);
+      setSelectedTeams(savedTeams);
+      setDeckScreen(hasCompleteRegistrationStructure(savedTeams) ? "view" : "edit");
+      setDeckDirty(false);
     } catch {
       setFormPlayerIcon("");
       setRegisteredDecks([]);
+      setSelectedTeams([]);
+      setDeckScreen("edit");
+      setDeckDirty(false);
     } finally {
       setIsLoadingRegisteredDecks(false);
     }
@@ -135,17 +158,27 @@ export default function TournamentDetail() {
       loadPlayerDetails(seed);
     }
   }, [seed, mode, tournamentId]);
+  useEffect(()=>{if(mode!=="match"||!tournamentId)return;const controller=new AbortController();Promise.all([attackerSeed,defenderSeed].map(async playerSeed=>{const response=await fetch(`/api/tournaments/${tournamentId}/players/${playerSeed}/details`,{cache:"no-store",signal:controller.signal});if(!response.ok)return [];return normalizeSavedRegistrationTeams(await response.json());})).then(([attacker,defender])=>setFull64MatchTeams({attacker,defender})).catch(error=>{if(!(error instanceof DOMException&&error.name==="AbortError"))setFull64MatchTeams({attacker:[],defender:[]});});return()=>controller.abort();},[mode,tournamentId,attackerSeed,defenderSeed]);
 
   const seeds = Array.from({ length: 64 }, (_, i) => i + 1);
-  const resultsRef = useRef<HTMLDivElement>(null);
 
   const handlePlayerClick = (s: number) => {
+    if (mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄してPlayer登録へ移動しますか？")) return;
+    setFull64MatchDirty(false);
     setMode("deck");
     setSeed(s);
+    if (s === seed) void loadPlayerDetails(s);
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const editFull64PlayerInfo = () => {
+    setDeckScreen("edit");
+    window.requestAnimationFrame(() => seedFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
   const handlePairClick = (s1: number, s2: number, stage: string) => {
+    if (mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して別の試合へ移動しますか？")) return;
+    setFull64MatchDirty(false);
     setMode("match");
     setAttackerSeed(s1);
     setDefenderSeed(s2);
@@ -153,319 +186,9 @@ export default function TournamentDetail() {
     formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  // --- クロップ関連のヘルパー ---
-  const onCropComplete = (croppedArea: any, croppedAreaPixels: any) => {
-    setCroppedAreaPixels(croppedAreaPixels);
-  };
-
-  const handleIconUpload = async () => {
-    if (!imageToCrop || !croppedAreaPixels) return;
-    setIsUploadingIcon(true);
-    try {
-      const croppedImage = await getCroppedImg(imageToCrop, croppedAreaPixels);
-      const formData = new FormData();
-      formData.append("image", croppedImage, "avatar.png");
-      // 永続保存先を特定するために tournament_id と seed_number を必須で付与
-      if (!tournamentId) {
-        alert("大会IDが確定していません。しばらく待ってから再試行してください。");
-        return;
-      }
-      formData.append("tournament_id", String(tournamentId));
-      formData.append("seed_number", String(seed));
-
-      const res = await fetch("/api/upload/player-icon", {
-        method: "POST",
-        body: formData,
-        credentials: "include", // 認証Cookie（auth_token）を送信する
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        const errMsg = errData?.detail || `アップロードに失敗しました (HTTP ${res.status})`;
-        alert(errMsg);
-        return;
-      }
-
-      const data = await res.json();
-      // キャッシュバスターを付与してブラウザキャッシュを回避
-      const bustUrl = `${data.url}?t=${Date.now()}`;
-
-      // 常に基本フォーム側のアイコンを更新
-      setFormPlayerIcon(bustUrl);
-
-      // 解析結果が表示されている場合は、そちらの表示も更新
-      if (result) {
-        setResult((prev: any) => ({ ...prev, player_icon_url: bustUrl }));
-      }
-
-      setShowCropModal(false);
-      setImageToCrop(null);
-    } catch (e) {
-      console.error(e);
-      alert("アップロード中にエラーが発生しました。");
-    } finally {
-      setIsUploadingIcon(false);
-    }
-  };
-
-
-  const onFileChange = async (e: any) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.addEventListener("load", () => {
-        setImageToCrop(reader.result as string);
-        setShowCropModal(true);
-      });
-      reader.readAsDataURL(file);
-    }
-  };
-
-  async function getCroppedImg(imageSrc: string, pixelCrop: any): Promise<Blob> {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.addEventListener("load", () => resolve(img));
-      img.addEventListener("error", (error) => reject(error));
-      img.src = imageSrc;
-    });
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas context is null");
-
-    canvas.width = pixelCrop.width;
-    canvas.height = pixelCrop.height;
-
-    ctx.drawImage(
-      image,
-      pixelCrop.x,
-      pixelCrop.y,
-      pixelCrop.width,
-      pixelCrop.height,
-      0,
-      0,
-      pixelCrop.width,
-      pixelCrop.height
-    );
-
-    return new Promise((resolve) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-      }, "image/png");
-    });
-  }
-
-  // ------------------
-  // Upload Handlers
-  // ------------------
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newFiles = Array.from(e.target.files);
-      setFiles(prev => {
-        const combined = [...prev, ...newFiles].slice(0, 5);
-        setPreviews(combined.map(f => URL.createObjectURL(f)));
-        return combined;
-      });
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const handleClear = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setFiles([]);
-    setPreviews([]);
-  };
-
-  const prepareAnalysisImage = (
-    file: File,
-    options: { maxOutputWidth?: number; filenameSuffix?: string } = {},
-  ): Promise<{ file: File; preCropped: boolean }> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const detectionScale = Math.min(1, 960 / img.width);
-        const detectionWidth = Math.max(1, Math.round(img.width * detectionScale));
-        const detectionHeight = Math.max(1, Math.round(img.height * detectionScale));
-        const detectionCanvas = document.createElement("canvas");
-        detectionCanvas.width = detectionWidth;
-        detectionCanvas.height = detectionHeight;
-        const detectionContext = detectionCanvas.getContext("2d", {
-          willReadFrequently: true,
-        });
-        if (!detectionContext) {
-          URL.revokeObjectURL(img.src);
-          resolve({ file, preCropped: false });
-          return;
-        }
-
-        detectionContext.drawImage(img, 0, 0, detectionWidth, detectionHeight);
-        const pixels = detectionContext.getImageData(
-          0,
-          0,
-          detectionWidth,
-          detectionHeight,
-        ).data;
-        const whiteMask = new Uint8Array(detectionWidth * detectionHeight);
-
-        // Match the backend white-modal condition: HSV S < 50, V > 200.
-        for (let index = 0; index < whiteMask.length; index += 1) {
-          const offset = index * 4;
-          const red = pixels[offset];
-          const green = pixels[offset + 1];
-          const blue = pixels[offset + 2];
-          const maximum = Math.max(red, green, blue);
-          const minimum = Math.min(red, green, blue);
-          const saturation = maximum === 0
-            ? 0
-            : ((maximum - minimum) * 255) / maximum;
-          if (maximum > 200 && saturation < 50) {
-            whiteMask[index] = 1;
-          }
-        }
-
-        let bestBounds: {
-          x: number;
-          y: number;
-          width: number;
-          height: number;
-          area: number;
-        } | null = null;
-        const stack: number[] = [];
-
-        for (let start = 0; start < whiteMask.length; start += 1) {
-          if (whiteMask[start] !== 1) continue;
-          whiteMask[start] = 2;
-          stack.length = 0;
-          stack.push(start);
-          let cursor = 0;
-          let area = 0;
-          let minX = detectionWidth;
-          let maxX = 0;
-          let minY = detectionHeight;
-          let maxY = 0;
-
-          while (cursor < stack.length) {
-            const current = stack[cursor++];
-            const x = current % detectionWidth;
-            const y = Math.floor(current / detectionWidth);
-            area += 1;
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
-
-            const neighbours = [
-              x > 0 ? current - 1 : -1,
-              x + 1 < detectionWidth ? current + 1 : -1,
-              y > 0 ? current - detectionWidth : -1,
-              y + 1 < detectionHeight ? current + detectionWidth : -1,
-            ];
-            for (const neighbour of neighbours) {
-              if (neighbour >= 0 && whiteMask[neighbour] === 1) {
-                whiteMask[neighbour] = 2;
-                stack.push(neighbour);
-              }
-            }
-          }
-
-          const width = maxX - minX + 1;
-          const height = maxY - minY + 1;
-          if (
-            width > detectionWidth * 0.25
-            && height > detectionHeight * 0.15
-            && (!bestBounds || area > bestBounds.area)
-          ) {
-            bestBounds = { x: minX, y: minY, width, height, area };
-          }
-        }
-
-        if (!bestBounds) {
-          URL.revokeObjectURL(img.src);
-          resolve({ file, preCropped: false });
-          return;
-        }
-
-        const sourceX = Math.max(0, Math.floor(bestBounds.x / detectionScale));
-        const sourceY = Math.max(0, Math.floor(bestBounds.y / detectionScale));
-        const sourceWidth = Math.min(
-          img.width - sourceX,
-          Math.ceil(bestBounds.width / detectionScale),
-        );
-        const sourceHeight = Math.min(
-          img.height - sourceY,
-          Math.ceil(bestBounds.height / detectionScale),
-        );
-        const maxOutputWidth = options.maxOutputWidth && options.maxOutputWidth > 0
-          ? options.maxOutputWidth
-          : undefined;
-        const outputScale = maxOutputWidth && sourceWidth > maxOutputWidth
-          ? maxOutputWidth / sourceWidth
-          : 1;
-        const outputWidth = Math.max(1, Math.round(sourceWidth * outputScale));
-        const outputHeight = Math.max(1, Math.round(sourceHeight * outputScale));
-        const outputCanvas = document.createElement("canvas");
-        outputCanvas.width = outputWidth;
-        outputCanvas.height = outputHeight;
-        const outputContext = outputCanvas.getContext("2d");
-        if (!outputContext) {
-          URL.revokeObjectURL(img.src);
-          resolve({ file, preCropped: false });
-          return;
-        }
-        outputContext.imageSmoothingEnabled = true;
-        outputContext.imageSmoothingQuality = "high";
-        outputContext.drawImage(
-          img,
-          sourceX,
-          sourceY,
-          sourceWidth,
-          sourceHeight,
-          0,
-          0,
-          outputWidth,
-          outputHeight,
-        );
-        outputCanvas.toBlob(
-          (blob) => {
-            URL.revokeObjectURL(img.src);
-            if (blob) {
-              const suffix = options.filenameSuffix ?? ".modal.png";
-              const outputFilename = /\.[^.]+$/.test(file.name)
-                ? file.name.replace(/\.[^.]+$/, suffix)
-                : `${file.name}${suffix}`;
-              resolve({
-                file: new File(
-                  [blob],
-                  outputFilename,
-                  { type: "image/png", lastModified: Date.now() },
-                ),
-                preCropped: true,
-              });
-            } else {
-              resolve({ file, preCropped: false });
-            }
-          },
-          "image/png",
-        );
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(img.src);
-        resolve({ file, preCropped: false });
-      };
-      img.src = URL.createObjectURL(file);
-    });
-  };
-
-  const handleUpload = async () => {
-    if (files.length === 0 || !tournamentId) return;
+  const analyzeFull64Teams = async (preparedImages: { file: File; preCropped: boolean }[]) => {
+    if (!tournamentId) return;
     setIsUploading(true);
-    
-    // Crop only the modal and keep its pixels lossless. If client-side modal
-    // detection fails, the original image is sent to the backend fallback.
-    const preparedImages = await Promise.all(
-      files.map(file => prepareAnalysisImage(file)),
-    );
-    
     const formData = new FormData();
     formData.append("tournament_id", tournamentId.toString());
     formData.append("seed_number", seed.toString());
@@ -473,234 +196,23 @@ export default function TournamentDetail() {
       formData.append("images", file);
       formData.append("image_pre_cropped", preCropped ? "true" : "false");
     });
-
     try {
-      const res = await fetch("/api/analyze/deck", { method: "POST", body: formData });
-      const data = await res.json();
-
-      // フォームの入力を解析結果に統合
-      const augmentedData = {
-        ...data,
-        suggested_player_name: `Player ${seed}`,
-        player_icon_url: formPlayerIcon || data.player_icon_url
-      };
-
-      setResult(augmentedData);
-      setExpandedPreviewRound(0);
-      setSelectedTeams(augmentedData.suggested_teams.map((team: any, r_idx: number) => ({
-        team_number: r_idx + 1,
-        characters: team.map((c: any) => ({
-          id: c.predicted_character_id || "",
-          image_url: c.image_url,
-          template_source_url: c.template_source_url,
-          original_predicted_id: c.predicted_character_id ?? null,
-          was_unrecognized: c.predicted_character_id == null,
-          add_to_templates: false,
-          collection_level: c.predicted_character_id === 9999
-            ? null
-            : c.collection_level || "unknown",
-          collection_confidence: c.collection_confidence ?? 0,
-        }))
-      })));
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
-    } catch (err) {
-      alert("エラーが発生しました。");
+      const response = await fetch("/api/analyze/deck", { method: "POST", body: formData });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.detail || "画像解析に失敗しました。");
+      setSelectedTeams(normalizeAnalyzedRegistrationTeams(data));
+      setDeckScreen("edit");
+      setDeckDirty(true);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const movePreviewRound = (roundIndex: number, offset: number) => {
-    const targetIndex = roundIndex + offset;
-    if (targetIndex < 0 || targetIndex >= result.suggested_teams.length) return;
-
-    const suggestedTeams = [...result.suggested_teams];
-    [suggestedTeams[roundIndex], suggestedTeams[targetIndex]] = [
-      suggestedTeams[targetIndex],
-      suggestedTeams[roundIndex]
-    ];
-    setResult((prev: any) => ({ ...prev, suggested_teams: suggestedTeams }));
-
-    const teams = [...selectedTeams];
-    [teams[roundIndex], teams[targetIndex]] = [teams[targetIndex], teams[roundIndex]];
-    setSelectedTeams(teams.map((team, index) => ({ ...team, team_number: index + 1 })));
-    setExpandedPreviewRound(targetIndex);
-  };
-
-  const updateSelectedCharacter = (roundIndex: number, characterIndex: number, characterId: number | null) => {
-    setSelectedTeams(prev => prev.map((team, teamIndex) => (
-      teamIndex !== roundIndex
-        ? team
-        : {
-            ...team,
-            characters: team.characters.map((character: any, index: number) => (
-              index === characterIndex
-                ? {
-                    ...character,
-                    id: characterId,
-                    add_to_templates: (
-                      character.was_unrecognized
-                      || character.original_predicted_id !== characterId
-                    )
-                      && characterId !== null
-                      && characterId !== 9999,
-                    collection_level: characterId === 9999
-                      ? null
-                      : character.collection_level || "unknown",
-                  }
-                : character
-            ))
-          }
-    )));
-  };
-
-  const updateCollectionLevel = (
-    roundIndex: number,
-    characterIndex: number,
-    collectionLevel: string,
-  ) => {
-    setSelectedTeams(previous => previous.map((team, teamIndex) => (
-      teamIndex !== roundIndex
-        ? team
-        : {
-            ...team,
-            characters: team.characters.map((character: any, index: number) => (
-              index === characterIndex
-                ? { ...character, collection_level: collectionLevel }
-                : character
-            )),
-          }
-    )));
-  };
-
-  const scrollAfterRender = (
-    element: HTMLElement | null,
-    block: ScrollLogicalPosition,
-  ) => {
-    if (!element) return;
-    // Two frames allow React to commit the conditional content and the
-    // browser to finish layout before calculating the cross-platform target.
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        element.scrollIntoView({ behavior: "smooth", block });
-      });
-    });
-  };
-
-  const handlePreviewRoundToggle = (roundIndex: number) => {
-    const willExpand = expandedPreviewRound !== roundIndex;
-    setExpandedPreviewRound(willExpand ? roundIndex : -1);
-    if (!willExpand || !window.matchMedia("(max-width: 639px)").matches) return;
-
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const roundToggle = roundToggleRefs.current[roundIndex];
-        if (!roundToggle) return;
-        roundToggle.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-      });
-    });
-  };
-
   const handleSave = async () => {
-    const unresolvedSlots = selectedTeams.flatMap((team, roundIndex) =>
-      team.characters.flatMap((character: any, characterIndex: number) =>
-        character.id
-          ? []
-          : [`R${roundIndex + 1}・${characterIndex + 1}人目`]
-      )
-    );
-    if (unresolvedSlots.length > 0) {
-      alert(
-        "不明のキャラクターが残っているため登録できません。\n"
-        + "キャラクター名または「空枠」を選択してください。\n\n"
-        + unresolvedSlots.map(slot => `・${slot}`).join("\n")
-      );
-      return;
-    }
-
-    // 重複チェック (ID: 9999 は空枠なので除外)
-    const allIds: number[] = [];
-    const duplicates: Set<number> = new Set();
-    selectedTeams.forEach(team => {
-      team.characters.forEach((c: any) => {
-        if (c.id && c.id !== 9999) {
-          if (allIds.includes(c.id)) {
-            duplicates.add(c.id);
-          }
-          allIds.push(c.id);
-        }
-      });
-    });
-
-    if (duplicates.size > 0) {
-      const dupNames = Array.from(duplicates).map(id => characters.find(c => c.id === id)?.name || id).join("、");
-      alert(`同じキャラクターを複数の部隊に編成することはできません。\n重複しているキャラクター: ${dupNames}`);
-      return;
-    }
-
-    const getCharacterName = (characterId: number | null) => {
-      if (characterId == null) return "（不明）";
-      if (characterId === 9999) return "空枠";
-      return characters.find(c => c.id === characterId)?.name || `ID:${characterId}`;
-    };
-    const correctedCharacters = selectedTeams.flatMap((team, roundIndex) =>
-      team.characters.flatMap((character: any, characterIndex: number) => {
-        if (!character.was_unrecognized || !character.add_to_templates) return [];
-        const characterName = getCharacterName(character.id);
-        return [`R${roundIndex + 1}・${characterIndex + 1}人目：（不明）→ ${characterName}`];
-      })
-    );
-    const changedPredictions = selectedTeams.flatMap((team, roundIndex) =>
-      team.characters.flatMap((character: any, characterIndex: number) => {
-        const originalId = character.original_predicted_id;
-        if (
-          character.was_unrecognized
-          || character.id === originalId
-        ) {
-          return [];
-        }
-        return [
-          `R${roundIndex + 1}・${characterIndex + 1}人目：`
-          + `${getCharacterName(originalId)} → ${getCharacterName(character.id)}`
-        ];
-      })
-    );
-    const correctionSummary = correctedCharacters.length > 0
-      ? correctedCharacters.map(line => `・${line}`).join("\n")
-      : "・なし";
-    const predictionChangeSummary = changedPredictions.length > 0
-      ? changedPredictions.map(line => `・${line}`).join("\n")
-      : "・なし";
-    const emptySlots = selectedTeams.flatMap((team, roundIndex) =>
-      team.characters.flatMap((character: any, characterIndex: number) =>
-        character.id === 9999
-          ? [`R${roundIndex + 1}・${characterIndex + 1}人目`]
-          : []
-      )
-    );
-    const emptySlotSummary = emptySlots.length > 0
-      ? emptySlots.map(slot => `・${slot}`).join("\n")
-      : "・なし";
-    const hasTemplateAdditions = selectedTeams.some(team =>
-      team.characters.some((character: any) => character.add_to_templates)
-    );
-    const templateNotice = hasTemplateAdditions
-      ? "\n\n補正した画像は、今後の解析テンプレートへ自動追加されます。"
-      : "";
-    const playerLabel = `Player ${seed}`;
-
-    if (!window.confirm(
-      `${playerLabel}（シード${seed}）をこの内容で登録しますか？\n\n`
-      + `不明から補正したキャラ：\n${correctionSummary}`
-      + `\n\n推測結果から変更したキャラ：\n${predictionChangeSummary}`
-      + `\n\n空枠：\n${emptySlotSummary}`
-      + templateNotice
-    )) {
-      return;
-    }
+    const issues = validateRegistrationTeams(selectedTeams, new Set(characters.map(character => character.id)));
+    if (issues.length) { alert(issues.join("\n")); return; }
+    const names = new Map<number,string>(characters.map(character => [character.id, character.name]));
+    if (!window.confirm(registrationSaveConfirmation(`Player ${seed}`, `シード${seed}`, selectedTeams, names, registeredDecks.length > 0))) return;
 
     if (!tournamentId) return;
     try {
@@ -709,8 +221,8 @@ export default function TournamentDetail() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           seed_number: seed,
-          teams: selectedTeams,
-          player_icon_url: result?.player_icon_url
+          teams: registrationTeamsPayload(selectedTeams),
+          player_icon_url: formPlayerIcon ? formPlayerIcon.split("?")[0] : null
         })
       });
       if (res.ok) {
@@ -720,41 +232,14 @@ export default function TournamentDetail() {
         } else {
           alert("編成データを保存しました！");
         }
-        setSeed(prev => prev < 64 ? prev + 1 : 1);
-        setFiles([]);
-        setPreviews([]);
-        setResult(null);
-        scrollAfterRender(seedFieldRef.current, "start");
-        fetchBracket();
-      } else {
-        alert("保存に失敗しました。");
-      }
-    } catch (err) {
-      alert("エラーが発生しました。");
-    }
-  };
-
-  const handleSavePlayerInfo = async () => {
-    if (!tournamentId) return;
-    try {
-      const res = await fetch(`/api/tournaments/${tournamentId}/players/${seed}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          icon_url: formPlayerIcon ? formPlayerIcon.split('?')[0] : ""
-        })
-      });
-      if (res.ok) {
-        alert("プレイヤー情報を保存しました！");
-        // 解析結果（result）のステートも同期させる
-        if (result) {
-          setResult((prev: any) => ({
-            ...prev,
-            suggested_player_name: `Player ${seed}`,
-            player_icon_url: formPlayerIcon
-          }));
+        if (registeredDecks.length > 0) {
+          await loadPlayerDetails(seed);
+          setDeckScreen("view");
+          setDeckDirty(false);
+        } else {
+          setSeed(prev => prev < 64 ? prev + 1 : 1);
+          window.requestAnimationFrame(() => seedFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
         }
-        await loadPlayerDetails();
         fetchBracket();
       } else {
         alert("保存に失敗しました。");
@@ -764,84 +249,22 @@ export default function TournamentDetail() {
     }
   };
 
-  const handleMatchFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      setMatchFile(file);
-      setMatchPreview(URL.createObjectURL(file));
-    }
-  };
-
-  const handleMatchUpload = async () => {
-    if (!matchFile || !tournamentId) return;
-    setIsUploading(true);
-
+  const uploadFull64PlayerIcon = async (file: File) => {
+    if (!tournamentId) throw new Error("大会IDが確定していません。");
+    setIsUploadingIcon(true);
     try {
-      const preparedMatchImage = await prepareAnalysisImage(matchFile, {
-        maxOutputWidth: 1080,
-        filenameSuffix: ".match-modal.png",
-      });
-      const preparedSizeRatio = matchFile.size > 0
-        ? preparedMatchImage.file.size / matchFile.size
-        : 1;
-      const uploadFile = preparedMatchImage.preCropped && preparedSizeRatio <= 1.2
-        ? preparedMatchImage.file
-        : matchFile;
-      console.info("[match-image-preparation]", {
-        originalName: matchFile.name,
-        originalBytes: matchFile.size,
-        preparedName: preparedMatchImage.file.name,
-        preparedBytes: preparedMatchImage.file.size,
-        uploadName: uploadFile.name,
-        uploadBytes: uploadFile.size,
-        reductionPercent: matchFile.size > 0
-          ? Math.round((1 - preparedSizeRatio) * 100)
-          : 0,
-        preparedSizeRatio,
-        preCropped: preparedMatchImage.preCropped,
-        usedPreparedImage: uploadFile === preparedMatchImage.file,
-      });
-
       const formData = new FormData();
-      formData.append("tournament_id", tournamentId.toString());
-      formData.append("attacker_seed", attackerSeed.toString());
-      formData.append("defender_seed", defenderSeed.toString());
-      formData.append("stage", matchStage);
-      formData.append("image", uploadFile);
-
-      const res = await fetch("/api/analyze/match_result", { method: "POST", body: formData });
-      const data = await res.json();
-      setMatchResult(data);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
-    } catch (err) {
-      console.error("Failed to prepare or upload match image:", err);
-      alert("解析エラーが発生しました。");
+      formData.append("image", file, "avatar.png");
+      formData.append("tournament_id", String(tournamentId));
+      formData.append("seed_number", String(seed));
+      const response = await fetch("/api/upload/player-icon", { method: "POST", body: formData, credentials: "include" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.detail || `アップロードに失敗しました (HTTP ${response.status})`);
+      setFormPlayerIcon(`${data.url}?t=${Date.now()}`);
+      await loadPlayerDetails(seed);
+      await fetchBracket();
     } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleMatchSave = async () => {
-    if (!tournamentId) return;
-    try {
-      const res = await fetch(`/api/tournaments/${tournamentId}/matches`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(matchResult)
-      });
-      if (res.ok) {
-        alert("勝敗データを保存しました！");
-        setMatchFile(null);
-        setMatchPreview(null);
-        setMatchResult(null);
-        fetchBracket();
-        // トーナメント表に自動スクロール
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      } else {
-        alert("保存に失敗しました。両プレイヤーの編成が登録されている必要があります。");
-      }
-    } catch (err) {
-      alert("エラーが発生しました。");
+      setIsUploadingIcon(false);
     }
   };
 
@@ -870,29 +293,29 @@ export default function TournamentDetail() {
     if (!player) return null;
     const iconUrl = getPlayerIconUrl(player);
     const isUnknown = !player.id && player.name === "未確定";
+    return <TournamentPlayerPill name={player.name} eyebrow={`SEED ${player.seed}`} iconUrl={iconUrl} align={align} scale={scale} winner={isWinner} selected={mode==="deck"&&(player.original_seed||player.seed)===seed} disabled={isUnknown} onClick={()=>handlePlayerClick(player.original_seed||player.seed)}/>;
+  };
 
-    return (
-      <div
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!isUnknown) handlePlayerClick(player.original_seed || player.seed);
-        }}
-        className={`flex items-center gap-2 p-1.5 rounded-full border transition-all bg-slate-900/90 backdrop-blur-md ${isUnknown ? 'cursor-default' : 'cursor-pointer hover:bg-slate-800'} ${isWinner ? 'border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.4)] z-30 relative' : 'border-slate-600/50 hover:border-blue-400'} ${align === 'right' ? 'flex-row-reverse' : ''}`}
-        style={{ transform: `scale(${scale})` }}
-      >
-        <div className={`relative w-10 h-10 rounded-full shrink-0 border-2 bg-slate-800 overflow-hidden flex items-center justify-center ${isWinner ? 'border-amber-400' : 'border-slate-700'}`}>
-          {iconUrl ? (
-            <img src={iconUrl} alt="icon" className="w-full h-full object-cover" />
-          ) : (
-            <User size={20} className="text-slate-600" />
-          )}
-        </div>
-        <div className={`flex flex-col justify-center px-2 min-w-[80px] max-w-[100px] ${align === 'right' ? 'items-end text-right' : 'items-start text-left'}`}>
-          <div className="text-[10px] text-slate-400 font-bold tracking-wider">SEED {player.seed}</div>
-          <div className={`text-xs font-black truncate w-full ${isWinner ? 'text-amber-400' : 'text-slate-200'}`}>{player.name}</div>
-        </div>
-      </div>
-    );
+  const analyzeFull64Match = async (file: File): Promise<MatchEditorResult> => {
+    if (!tournamentId) throw new Error("大会IDが確定していません。");
+    setIsUploading(true);
+    try {
+      const prepared = await prepareAnalysisImage(file, { maxOutputWidth: 1080, filenameSuffix: ".match-modal.png" });
+      const ratio = file.size > 0 ? prepared.file.size / file.size : 1;
+      const upload = prepared.preCropped && ratio <= 1.2 ? prepared.file : file;
+      const body = new FormData(); body.append("tournament_id",String(tournamentId)); body.append("attacker_seed",String(attackerSeed)); body.append("defender_seed",String(defenderSeed)); body.append("stage",matchStage); body.append("image",upload);
+      const response = await fetch("/api/analyze/match_result",{method:"POST",body}); const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data?.detail||"解析エラーが発生しました。");
+      return normalizeFull64MatchAnalysis(data);
+    } finally { setIsUploading(false); }
+  };
+
+  const saveFull64Match = async (result: MatchEditorResult) => {
+    if (!tournamentId) return;
+    const payload=full64MatchPayload(result,tournamentId,matchStage,attackerSeed,defenderSeed);
+    const response=await fetch(`/api/tournaments/${tournamentId}/matches`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(!response.ok)throw new Error("保存に失敗しました。両プレイヤーの編成が登録されている必要があります。");
+    window.alert("勝敗データを保存しました！"); await fetchBracket(); window.scrollTo({top:0,behavior:"smooth"});
   };
 
   const MatchCard = ({ p1, p2, winner, label, scale = 1, align = "left" }: { p1: any, p2: any, winner: any, label: string, scale?: number, align?: "left" | "right" | "center" }) => {
@@ -1084,7 +507,7 @@ export default function TournamentDetail() {
         {/* Mode Switcher */}
         <div className="flex bg-slate-800 p-1 rounded-xl mb-6 ring-1 ring-white/5 max-w-md mx-auto w-full">
           <button
-            onClick={() => setMode("deck")}
+            onClick={() => {if(mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して編成登録へ移動しますか？"))return;setFull64MatchDirty(false);setMode("deck");}}
             className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all ${mode === "deck" ? "bg-blue-500 text-white shadow" : "text-slate-400 hover:text-slate-300"}`}
           >
             編成の登録
@@ -1113,514 +536,58 @@ export default function TournamentDetail() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <label className="block text-sm font-medium text-slate-400">顔画像 (オプション)</label>
-                    <span className="text-xs font-bold text-slate-500">登録名: Player {seed}</span>
-                  </div>
-                  <div className="flex items-center space-x-4">
-                    <div className="w-20 h-20 rounded-full border-2 border-emerald-500 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
-                      {formPlayerIcon ? (
-                        <img src={formPlayerIcon} alt="Preview" className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={32} className="text-slate-600" />
-                      )}
-                    </div>
-                    <button
-                      onClick={() => {
-                        setCropTarget("form");
-                        const input = document.createElement("input");
-                        input.type = "file";
-                        input.accept = "image/*";
-                        input.onchange = onFileChange;
-                        input.click();
-                      }}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold border border-white/5 transition-all"
-                    >
-                      画像を編集
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    onClick={handleSavePlayerInfo}
-                    className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl text-xs font-bold border border-emerald-500/30 transition-all flex items-center justify-center space-x-2"
-                  >
-                    <Save size={14} />
-                    <span>プレイヤー情報を保存</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-slate-900/40 p-4">
-                <h3 className="mb-3 text-sm font-bold text-slate-300">登録済み編成</h3>
-                {isLoadingRegisteredDecks ? (
-                  <p className="py-4 text-center text-sm text-slate-500">編成を読み込んでいます...</p>
-                ) : registeredDecks.length > 0 ? (
-                  <div className="space-y-2">
-                    {[1, 2, 3, 4, 5].map(teamNumber => {
-                      const deck = registeredDecks.find((item: any) => item.team_number === teamNumber);
-                      return (
-                        <div key={teamNumber} className="flex min-w-0 items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2 ring-1 ring-white/5">
-                          <span className="w-14 shrink-0 text-xs font-black text-slate-500">TEAM {teamNumber}</span>
-                          {deck ? (
-                            <div className="min-w-0 overflow-x-auto py-1">
-                              <SharedTeamDisplay
-                                charIds={deck.character_ids}
-                                allCharacters={characters}
-                                collectionLevels={deck.collection_levels}
-                              />
-                            </div>
-                          ) : (
-                            <span className="text-xs text-slate-600">未登録</span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="py-4 text-center text-sm text-slate-500">編成が登録されていません</p>
-                )}
-              </div>
-
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <label className="block text-sm font-medium text-slate-400">スクリーンショット ({files.length} / 5枚)</label>
-                  {files.length > 0 && (
-                    <button onClick={handleClear} className="px-3 py-1 bg-red-500/20 text-red-400 rounded-lg text-sm font-bold hover:bg-red-500/30 transition-colors">
-                      すべてクリア
-                    </button>
-                  )}
-                </div>
-
-                <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4">
-                  {previews.length > 0 && (
-                    <div className="grid grid-cols-5 gap-2 mb-4">
-                      {previews.map((p, idx) => (
-                        <div key={idx} className="relative aspect-[9/16]">
-                          <img src={p} alt={`Preview ${idx}`} className="w-full h-full object-cover rounded-lg shadow-lg border border-white/10" />
-                          <div className="absolute top-0 right-0 bg-black/60 text-white text-[10px] px-1 rounded-bl-lg rounded-tr-lg">{idx + 1}</div>
-                        </div>
-                      ))}
-                      {Array.from({ length: 5 - previews.length }).map((_, idx) => (
-                        <div key={`empty-${idx}`} className="aspect-[9/16] rounded-lg border border-dashed border-white/20 flex flex-col items-center justify-center text-white/20">
-                          <Upload size={16} className="mb-1 opacity-50" />
-                          <span className="text-[10px]">空き</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {files.length < 5 && (
-                    <button onClick={() => fileInputRef.current?.click()} className="w-full py-4 border-2 border-dashed border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/20 rounded-xl flex flex-col items-center justify-center transition-colors text-blue-400">
-                      <Upload size={24} className="mb-2" />
-                      <span className="font-bold">画像を追加する</span>
-                    </button>
-                  )}
-                  <input type="file" ref={fileInputRef} onChange={handleFileChange} multiple accept="image/*" className="hidden" />
-                </div>
-              </div>
-
-              <button
-                onClick={handleUpload}
-                disabled={files.length !== 5 || isUploading}
-                className={`w-full py-4 rounded-xl font-bold transition-all shadow-lg text-lg flex items-center justify-center space-x-2
-                ${files.length === 5 && !isUploading ? "bg-blue-500 hover:bg-blue-600 text-white shadow-blue-500/25" : "bg-slate-800 text-slate-500 cursor-not-allowed"}`}
-              >
-                {isUploading ? <span>AIが解析中...</span> : <span>AIで編成を解析する</span>}
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">攻撃側 (左)</label>
-                  <div className="flex items-center space-x-2">
-                    <div className="w-10 h-10 rounded-full border border-slate-600 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center">
-                      {getPlayerIconUrl(getPlayerBySeed(attackerSeed)) ? (
-                        <img src={getPlayerIconUrl(getPlayerBySeed(attackerSeed))} className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={16} className="text-slate-500" />
-                      )}
-                    </div>
-                    <select value={attackerSeed} onChange={(e) => setAttackerSeed(parseInt(e.target.value))} className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-3 py-2 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                      {seeds.map(s => <option key={s} value={s}>シード {s}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1 text-right">防衛側 (右)</label>
-                  <div className="flex items-center space-x-2 flex-row-reverse">
-                    <div className="w-10 h-10 rounded-full border border-slate-600 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center ml-2">
-                      {getPlayerIconUrl(getPlayerBySeed(defenderSeed)) ? (
-                        <img src={getPlayerIconUrl(getPlayerBySeed(defenderSeed))} className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={16} className="text-slate-500" />
-                      )}
-                    </div>
-                    <select value={defenderSeed} onChange={(e) => setDefenderSeed(parseInt(e.target.value))} className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-3 py-2 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                      {seeds.map(s => <option key={s} value={s}>シード {s}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">リザルト画面 (1枚)</label>
-                <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4">
-                  {matchPreview ? (
-                    <div className="relative aspect-[9/16] max-w-[200px] mx-auto">
-                      <img src={matchPreview} className="w-full h-full object-cover rounded-lg shadow-lg border border-white/10" />
-                      <button onClick={() => { setMatchFile(null); setMatchPreview(null); }} className="absolute -top-3 -right-3 bg-red-500 text-white w-8 h-8 rounded-full font-bold shadow-lg flex items-center justify-center">×</button>
-                    </div>
-                  ) : (
-                    <label className="w-full py-12 border-2 border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-xl flex flex-col items-center justify-center transition-colors text-emerald-400 cursor-pointer">
-                      <Upload size={24} className="mb-2" />
-                      <span className="font-bold">画像を選択</span>
-                      <input type="file" onChange={handleMatchFileChange} accept="image/*" className="hidden" />
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              <button
-                onClick={handleMatchUpload}
-                disabled={!matchFile || isUploading}
-                className={`w-full py-4 rounded-xl font-bold transition-all shadow-lg text-lg flex items-center justify-center space-x-2 mt-auto
-                ${matchFile && !isUploading ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/25" : "bg-slate-800 text-slate-500 cursor-not-allowed"}`}
-              >
-                {isUploading ? <span>AIが解析中...</span> : <span>AIで勝敗を解析する</span>}
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Results Area */}
-      <div ref={resultsRef} className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl relative overflow-hidden mt-12 scroll-mt-24">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-blue-500 opacity-50"></div>
-        <h2 className="text-xl font-bold mb-6 flex items-center space-x-2">
-          <CheckCircle2 className="text-emerald-400" />
-          <span>解析結果（プレビュー）</span>
-        </h2>
-
-        {mode === "deck" && result ? (
-          <div className="space-y-6">
-            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-4">
-              <div className="flex items-center space-x-4">
-                <div className="relative group shrink-0">
-                  <div className="w-16 h-16 rounded-full border-2 border-emerald-500/50 bg-slate-800 overflow-hidden shadow-lg">
-                    {result.player_icon_url ? (
-                      <img src={result.player_icon_url} alt="Icon" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-slate-500 bg-slate-900">
-                        <User size={32} />
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => {
-                      setCropTarget("result");
-                      const input = document.createElement("input");
-                      input.type = "file";
-                      input.accept = "image/*";
-                      input.onchange = onFileChange;
-                      input.click();
-                    }}
-                    className="absolute inset-0 bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-full transition-all text-[10px] font-bold"
-                  >
-                    変更
-                  </button>
-                </div>
-                <div className="flex-1 space-y-2">
-                  <label className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">自動登録名</label>
-                  <p className="rounded-lg border border-emerald-500/20 bg-slate-950/50 px-3 py-2 font-bold text-slate-100">
-                    Player {result.suggested_seed}
-                  </p>
-                  <p className="text-[10px] text-slate-500">シード: {result.suggested_seed}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {result.suggested_teams.map((team: any, idx: number) => (
-                <div key={idx} className="rounded-lg border border-white/10 bg-slate-900/40 p-2 sm:border-0 sm:bg-transparent sm:p-0">
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-col items-center justify-center space-y-0.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => movePreviewRound(idx, -1)}
-                        disabled={idx === 0}
-                        className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
-                        title="一つ上へ移動"
-                      >
-                        ▲
-                      </button>
-                      <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center text-xs text-slate-500 font-mono ring-1 ring-white/5">R{idx + 1}</div>
-                      <button
-                        type="button"
-                        onClick={() => movePreviewRound(idx, 1)}
-                        disabled={idx === result.suggested_teams.length - 1}
-                        className="p-1 text-slate-500 hover:text-emerald-400 disabled:opacity-20 transition-colors"
-                        title="一つ下へ移動"
-                      >
-                        ▼
-                      </button>
-                    </div>
-
-                    <button
-                      ref={(element) => {
-                        roundToggleRefs.current[idx] = element;
-                      }}
-                      type="button"
-                      onClick={() => handlePreviewRoundToggle(idx)}
-                      className="flex min-h-12 flex-1 scroll-mt-4 items-center justify-between rounded-md bg-slate-800/70 px-3 text-left sm:hidden"
-                      aria-expanded={expandedPreviewRound === idx}
-                    >
-                      <span className="font-bold text-slate-200">ラウンド {idx + 1}</span>
-                      <span className="flex items-center gap-2">
-                        {(() => {
-                          const missingCount = selectedTeams[idx]?.characters.filter((character: any) => !character.id).length ?? team.length;
-                          return missingCount > 0
-                            ? <span className="text-sm font-bold text-red-400">未確認 {missingCount}</span>
-                            : <span className="text-sm font-bold text-emerald-400">確認済み</span>;
-                        })()}
-                        <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${expandedPreviewRound === idx ? "rotate-180" : ""}`} />
-                      </span>
-                    </button>
-
-                    <div className="hidden min-w-0 flex-1 grid-cols-5 gap-2 sm:grid">
-                      {team.map((char: any, c_idx: number) => (
-                        <div key={c_idx} className="flex min-w-0 flex-col items-center gap-2">
-                          <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-800/50 ring-1 ring-white/5">
-                            {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">-</div>}
-                          </div>
-                          <CharacterSearchSelect
-                            value={selectedTeams[idx]?.characters[c_idx]?.id || null}
-                            onChange={(id) => updateSelectedCharacter(idx, c_idx, id)}
-                            characters={characters}
-                            error={!selectedTeams[idx]?.characters[c_idx]?.id}
-                            className="h-10"
-                            id={`desktop-round-${idx}-character-${c_idx}`}
-                          />
-                          <select
-                            className={`h-9 w-full min-w-0 rounded border-2 px-2 text-xs font-bold disabled:opacity-60 ${
-                              collectionSelectClass(selectedTeams[idx]?.characters[c_idx]?.collection_level)
-                            }`}
-                            value={selectedTeams[idx]?.characters[c_idx]?.collection_level || ""}
-                            disabled={selectedTeams[idx]?.characters[c_idx]?.id === 9999}
-                            onChange={(event) => updateCollectionLevel(idx, c_idx, event.target.value)}
-                            aria-label={`ラウンド${idx + 1} キャラクター${c_idx + 1} コレクション`}
-                          >
-                            {selectedTeams[idx]?.characters[c_idx]?.id === 9999
-                              ? <option value="">判定不要</option>
-                              : COLLECTION_OPTIONS.map(option => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                          </select>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {expandedPreviewRound === idx && (
-                    <div className="mt-2 space-y-2 sm:hidden">
-                      {team.map((char: any, c_idx: number) => (
-                        <div key={c_idx} className="flex min-w-0 items-center gap-3 rounded-md bg-slate-950/50 p-2">
-                          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-slate-800/50 ring-1 ring-white/5">
-                            {char?.image_url ? <img src={char.image_url} alt={`R${idx + 1}-C${c_idx + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">-</div>}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <label className="mb-1 block text-xs text-slate-500" htmlFor={`round-${idx}-character-${c_idx}`}>キャラクター {c_idx + 1}</label>
-                            <CharacterSearchSelect
-                              id={`round-${idx}-character-${c_idx}`}
-                              value={selectedTeams[idx]?.characters[c_idx]?.id || null}
-                              onChange={(id) => updateSelectedCharacter(idx, c_idx, id)}
-                              characters={characters}
-                              error={!selectedTeams[idx]?.characters[c_idx]?.id}
-                              className="min-h-11"
-                            />
-                            <label className="mb-1 mt-2 block text-xs text-slate-500" htmlFor={`round-${idx}-collection-${c_idx}`}>コレクション</label>
-                            <select
-                              id={`round-${idx}-collection-${c_idx}`}
-                              className={`min-h-11 w-full min-w-0 rounded border-2 px-3 text-base font-bold disabled:opacity-60 ${
-                                collectionSelectClass(selectedTeams[idx]?.characters[c_idx]?.collection_level)
-                              }`}
-                              value={selectedTeams[idx]?.characters[c_idx]?.collection_level || ""}
-                              disabled={selectedTeams[idx]?.characters[c_idx]?.id === 9999}
-                              onChange={(event) => updateCollectionLevel(idx, c_idx, event.target.value)}
-                            >
-                              {selectedTeams[idx]?.characters[c_idx]?.id === 9999
-                                ? <option value="">判定不要</option>
-                                : COLLECTION_OPTIONS.map(option => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
-                            </select>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <button onClick={handleSave} className="w-full py-4 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-xl font-bold transition-all shadow-lg">
-              この内容で編成を登録
-            </button>
-          </div>
-        ) : mode === "match" && matchResult ? (
-          <div className="space-y-6">
-            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-              <div className="flex items-center justify-between font-bold mb-4">
-                <div className="text-blue-400 text-lg">シード {matchResult.attacker_seed} (左)</div>
-                <div className="text-slate-400 text-sm">VS</div>
-                <div className="text-red-400 text-lg">シード {matchResult.defender_seed} (右)</div>
-              </div>
-
-              <div className="space-y-2">
-                {matchResult.rounds.map((r: any) => (
-                  <div key={r.round} className="flex items-center justify-between bg-slate-800/50 p-3 rounded-lg ring-1 ring-white/5">
-                    <div className="w-8 text-slate-500 font-mono text-xs">R{r.round}</div>
-                    <div className={`flex-1 text-center font-black ${r.left === 'WIN' ? 'text-blue-400' : 'text-red-400'}`}>{r.left}</div>
-                    <div className="flex-1 text-center font-black flex items-center justify-center">
-                      <select
-                        className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300"
-                        value={r.left === "WIN" ? "left" : "right"}
-                        onChange={(e) => {
-                          const newResult = { ...matchResult };
-                          const isLeftWin = e.target.value === "left";
-                          newResult.rounds[r.round - 1].left = isLeftWin ? "WIN" : "LOSE";
-                          newResult.rounds[r.round - 1].right = isLeftWin ? "LOSE" : "WIN";
-                          let lw = 0, rw = 0;
-                          newResult.rounds.forEach((rr: any) => rr.left === "WIN" ? lw++ : rw++);
-                          newResult.winner = lw > rw ? "left" : "right";
-                          setMatchResult(newResult);
-                        }}
-                      >
-                        <option value="left">左の勝利</option>
-                        <option value="right">右の勝利</option>
-                      </select>
-                    </div>
-                    <div className={`flex-1 text-center font-black ${r.right === 'WIN' ? 'text-blue-400' : 'text-red-400'}`}>{r.right}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-6 text-center">
-                <p className="text-slate-400 text-sm mb-1">最終結果</p>
-                <p className="text-2xl font-black text-emerald-400">
-                  {matchResult.winner === "left" ? "左側のプレイヤーの勝利！" : "右側のプレイヤーの勝利！"}
-                </p>
-              </div>
-            </div>
-
-            <button onClick={handleMatchSave} className="w-full py-4 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-xl font-bold transition-all shadow-lg">
-              この内容で勝敗を登録する
-            </button>
-          </div>
-        ) : (
-          <div className="h-full min-h-[100px] flex flex-col items-center justify-center text-slate-500">
-            <p>画像をアップロードすると解析結果が表示されます</p>
-          </div>
-        )}
-      </div>
-      {/* クロップモーダル */}
-      {showCropModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="bg-slate-900 ring-1 ring-white/10 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-white/5 flex items-center justify-between">
-              <h3 className="text-xl font-black text-white flex items-center space-x-2">
-                <Scissors className="text-blue-400" size={20} />
-                <span>プロフィール画像の編集</span>
-              </h3>
-              <button onClick={() => setShowCropModal(false)} className="text-slate-400 hover:text-white">
-                <X size={24} />
-              </button>
-            </div>
-
-            <div className="relative flex-1 min-h-[400px] bg-black">
-              {imageToCrop && (
-                <Cropper
-                  image={imageToCrop}
-                  crop={crop}
-                  zoom={zoom}
-                  maxZoom={10}
-                  aspect={1}
-                  onCropChange={setCrop}
-                  onCropComplete={onCropComplete}
-                  onZoomChange={setZoom}
-                  cropShape="round"
-                  showGrid={false}
+              {isLoadingRegisteredDecks ? (
+                <p className="py-4 text-center text-sm text-slate-500">編成を読み込んでいます...</p>
+              ) : registeredDecks.length > 0 && deckScreen === "view" ? (
+                <DeckRegistrationViewer
+                  playerName={`Player ${seed}`}
+                  playerDetail={`シード ${seed} / 編成登録完了`}
+                  playerIconUrl={formPlayerIcon || null}
+                  teams={selectedTeams}
+                  characters={characters}
+                  canEdit={canEdit}
+                  onEditPlayer={canEdit ? editFull64PlayerInfo : undefined}
+                  onEditTeams={canEdit ? () => setDeckScreen("edit") : undefined}
                 />
+              ) : (
+                <div className="space-y-6" data-registration-mode="edit">
+                  <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} />
+                  <DeckRegistrationEditor
+                    key={`full64-${tournamentId}-${seed}`}
+                    teams={selectedTeams}
+                    characters={characters}
+                    saved={registeredDecks.length>0}
+                    disabled={!canEdit}
+                    dirty={deckDirty}
+                    busy={isUploading?"analysis":""}
+                    onTeamsChange={next=>{setSelectedTeams(next);setDeckDirty(true);}}
+                    onAnalyze={analyzeFull64Teams}
+                    onSave={handleSave}
+                    onClose={()=>{
+                      setSelectedTeams(normalizeSavedRegistrationTeams({decks:registeredDecks}));
+                      setDeckDirty(false);
+                      if (registeredDecks.length > 0) setDeckScreen("view");
+                    }}
+                  />
+                </div>
               )}
             </div>
-
-            <div className="p-6 space-y-6 bg-slate-900">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400 flex items-center space-x-1">
-                    <ZoomIn size={14} />
-                    <span>ズーム調節</span>
-                  </span>
-                  <span className="text-blue-400 font-bold">{Math.round(zoom * 100)}%</span>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    onClick={() => setZoom(1)}
-                    className={`py-2 px-3 rounded-lg text-sm font-bold transition-all ${
-                      zoom === 1 ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                    }`}
-                  >
-                    小 (1倍)
-                  </button>
-                  <button
-                    onClick={() => setZoom(6)}
-                    className={`py-2 px-3 rounded-lg text-sm font-bold transition-all ${
-                      zoom === 6 ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                    }`}
-                  >
-                    中 (6倍)
-                  </button>
-                  <button
-                    onClick={() => setZoom(10)}
-                    className={`py-2 px-3 rounded-lg text-sm font-bold transition-all ${
-                      zoom === 10 ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                    }`}
-                  >
-                    大 (10倍)
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex space-x-4">
-                <button
-                  onClick={() => setShowCropModal(false)}
-                  className="flex-1 py-3 px-6 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-all"
-                >
-                  キャンセル
-                </button>
-                <button
-                  onClick={handleIconUpload}
-                  disabled={isUploadingIcon}
-                  className="flex-1 py-3 px-6 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg shadow-blue-900/20 transition-all flex items-center justify-center space-x-2"
-                >
-                  {isUploadingIcon ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <Check size={20} />
-                      <span>決定してアップロード</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
+          ) : <><div className="mb-5 grid grid-cols-2 gap-4"><label className="text-xs font-bold text-slate-400">攻撃側（左）<select value={attackerSeed} onChange={event=>{if(full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して対戦Playerを変更しますか？"))return;setFull64MatchDirty(false);setAttackerSeed(Number(event.target.value));}} className="mt-1 w-full rounded-xl bg-slate-800 p-3">{seeds.map(value=><option key={value} value={value}>シード {value}</option>)}</select></label><label className="text-right text-xs font-bold text-slate-400">防衛側（右）<select value={defenderSeed} onChange={event=>{if(full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して対戦Playerを変更しますか？"))return;setFull64MatchDirty(false);setDefenderSeed(Number(event.target.value));}} className="mt-1 w-full rounded-xl bg-slate-800 p-3 text-left">{seeds.map(value=><option key={value} value={value}>シード {value}</option>)}</select></label></div><MatchResultEditor
+            key={`full64-match-${attackerSeed}-${defenderSeed}-${matchStage}`}
+            attacker={{id:attackerSeed,name:`Player ${attackerSeed}`,detail:`シード ${attackerSeed}`,iconUrl:getPlayerIconUrl(getPlayerBySeed(attackerSeed))}}
+            defender={{id:defenderSeed,name:`Player ${defenderSeed}`,detail:`シード ${defenderSeed}`,iconUrl:getPlayerIconUrl(getPlayerBySeed(defenderSeed))}}
+            attackerTeams={full64MatchTeams.attacker}
+            defenderTeams={full64MatchTeams.defender}
+            characters={characters}
+            disabled={!canEdit}
+            busy={isUploading}
+            onAnalyze={analyzeFull64Match}
+            onSave={saveFull64Match}
+            onDirtyChange={setFull64MatchDirty}
+          /></>}
         </div>
-      )}
+      </div>
+
     </main>
   );
 }

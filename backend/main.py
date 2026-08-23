@@ -2,18 +2,21 @@ from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Req
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime, timedelta, timezone
 import hashlib
+import base64
 import secrets
 import asyncio
 import contextlib
 import shutil
 import os
 import time
+import re
 from pathlib import Path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -33,6 +36,13 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = "uploads"
+
+CHAMPION_TEMPLATE_SOURCE_MAX_BYTES = 1024 * 1024
+CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES = 10 * 1024 * 1024
+CHAMPION_CROP_TTL_SECONDS = int(os.environ.get("CHAMPION_CROP_TTL_SECONDS", "21600"))
+CHAMPION_CROP_NAME = re.compile(
+    r"^crop_t(?P<tournament>\d+)_p(?P<player>\d+)_(?P<token>[0-9a-f]{12})_r\d+_c\d+(?:_preview)?\.(?:png|webp)$"
+)
 
 RESULT_SCORES = {
     "優勝": 1,
@@ -187,6 +197,23 @@ from services.registration_email import (
     send_registration_approved,
     send_registration_request,
 )
+from services.champion_bracket import (
+    CHAMPION_BRACKET,
+    CHAMPION_BRACKET_BY_KEY,
+    dependent_keys,
+    get_bracket_definition,
+    match_is_complete,
+    participant_ids,
+)
+from services.champion_result import normalize_champion_result
+from services.champion_publication import validate_champion_publication
+from services.champion_snapshot import enrich_champion_snapshot_stats
+from services.tournament_results import (
+    RESULT_SCORES as TOURNAMENT_RESULT_SCORES,
+    calculate_player_results,
+    result_label,
+)
+from services.match_processor import extract_match_results
 from services.upload_cleanup import (
     cleanup_stale_uploads,
     delete_temporary_crop_urls,
@@ -194,6 +221,7 @@ from services.upload_cleanup import (
     delete_upload_file,
     path_from_upload_url,
     stale_age_hours_from_env,
+    CROPPED_DIR,
     PLAYER_ICONS_DIR,
     _is_within,
 )
@@ -206,6 +234,12 @@ def get_team_collection_levels(team: models.DeckTeam) -> list[str | None]:
 
 def automatic_player_name(seed_number: int) -> str:
     return f"Player {seed_number}"
+
+
+def automatic_champion_player_name(champion_slot: int, seed_number: int | None) -> str:
+    if seed_number is None:
+        return f"champion_slot_{champion_slot}"
+    return automatic_player_name(seed_number)
 
 
 IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
@@ -1069,6 +1103,10 @@ def create_tournament(
 ):
     # 登録データのベースを作成
     data = tournament.model_dump()
+
+    # 省略時だけプロフィール値を初期値にする。明示的な null は維持する。
+    if "provider_game_start_date" not in tournament.model_fields_set:
+        data["provider_game_start_date"] = current_user.game_start_date
     
     # ログインユーザーから提供者名を取得
     data["owner_name"] = current_user.provider_name or "不明な提供者"
@@ -1087,16 +1125,22 @@ def create_tournament(
             data["date"] = championship.date or tournament.date
 
     db_tournament = models.Tournament(**data)
-    db.add(db_tournament)
-    db.commit()
-    db.refresh(db_tournament)
+    try:
+        db.add(db_tournament)
+        db.commit()
+        db.refresh(db_tournament)
+    except Exception:
+        db.rollback()
+        raise
     return db_tournament
 
 def require_tournament_manager(
     tournament_id: int,
     db: Session,
-    current_user: models.AppUser,
+    current_user: models.AppUser | None,
 ) -> models.Tournament:
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     tournament = db.query(models.Tournament).filter(
         models.Tournament.id == tournament_id
     ).first()
@@ -1134,13 +1178,9 @@ def require_tournament_dashboard_viewer(
     db: Session,
     current_user: models.AppUser | None,
 ) -> models.Tournament:
-    tournament = require_tournament_viewer(tournament_id, db, current_user)
-    # メンバー専用ダッシュボードの閲覧権限チェック:
-    # 現時点では、ログイン・認証済みユーザーであることをチェック（管理者は常に許可）
-    if not current_user:
-        raise HTTPException(status_code=401, detail="認証が必要です。ログインしてください。")
-    # TODO: 将来的には、ここで user_id または player_id が tournament の参加メンバーかどうかの判定を追加する
-    return tournament
+    # 公開大会の集計画面はトップページと同じ公開データであるため匿名閲覧を許可する。
+    # draft は require_tournament_viewer が従来どおり所有者・管理者だけに制限する。
+    return require_tournament_viewer(tournament_id, db, current_user)
 
 
 def get_published_tournament_ids(
@@ -1164,6 +1204,8 @@ def get_published_tournament_ids(
 
 
 def get_publication_readiness(tournament: models.Tournament, db: Session):
+    if tournament.registration_scope == "champion_8":
+        return validate_champion_publication(tournament, db)
     players = db.query(models.Player).filter(
         models.Player.tournament_id == tournament.id
     ).all()
@@ -1249,11 +1291,15 @@ def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
     for team in deck_teams:
         deck_teams_by_set.setdefault(team.deck_set_id, []).append(team)
 
-    missing_seed_numbers = [
-        seed
-        for seed in range(1, 65)
-        if not any(player.seed_number == seed for player in players)
-    ]
+    missing_seed_numbers = (
+        [
+            seed
+            for seed in range(1, 65)
+            if not any(player.seed_number == seed for player in players)
+        ]
+        if tournament.registration_scope == "full_64"
+        else []
+    )
     players_without_decks = []
     players_with_incomplete_decks = []
     representative_team_count = 0
@@ -1304,12 +1350,12 @@ def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
         "is_published": tournament.publication_status == "published",
         "is_in_public_analysis": tournament.publication_status == "published",
         "registered_player_count": len(players),
-        "expected_player_count": 64,
+        "expected_player_count": 8 if tournament.registration_scope == "champion_8" else 64,
         "registered_match_count": matches_count,
-        "expected_match_count": 63,
+        "expected_match_count": 7 if tournament.registration_scope == "champion_8" else 63,
         "registered_team_count": representative_team_count,
         "registered_representative_team_count": representative_team_count,
-        "expected_team_count": 320,
+        "expected_team_count": 40 if tournament.registration_scope == "champion_8" else 320,
         "missing_seed_numbers": missing_seed_numbers,
         "players_without_decks": players_without_decks,
         "players_with_incomplete_decks": players_with_incomplete_decks,
@@ -1378,20 +1424,44 @@ def update_tournament(
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
-    
-    # championship_id が更新されたら名前などを再同期
-    if tournament.championship_id:
-        championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
-        if championship:
-            db_tournament.name = championship.name
-            db_tournament.championship_id = tournament.championship_id
-            db_tournament.date = championship.date or tournament.date
-            
-    db_tournament.season = tournament.season
-    # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
-    db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
-    db.commit()
-    db.refresh(db_tournament)
+
+    # registration_scope は作成時に固定する。Pydantic の既定値を
+    # 「クライアントが明示した値」と誤認しないよう fields_set を使う。
+    if (
+        "registration_scope" in tournament.model_fields_set
+        and tournament.registration_scope != db_tournament.registration_scope
+    ):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="registration_scope cannot be changed after tournament creation",
+        )
+
+    try:
+        db_tournament.name = tournament.name
+        db_tournament.date = tournament.date
+
+        # championship_id が更新されたら名前などを再同期
+        if tournament.championship_id:
+            championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
+            if championship:
+                db_tournament.name = championship.name
+                db_tournament.championship_id = tournament.championship_id
+                db_tournament.date = championship.date or tournament.date
+
+        db_tournament.season = tournament.season
+        # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
+        db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
+
+        # 省略時は保存値を維持し、明示 null もそのまま保存する。
+        if "provider_game_start_date" in tournament.model_fields_set:
+            db_tournament.provider_game_start_date = tournament.provider_game_start_date
+
+        db.commit()
+        db.refresh(db_tournament)
+    except Exception:
+        db.rollback()
+        raise
     invalidate_dashboard_cache(tournament_id)
     return db_tournament
 
@@ -1419,16 +1489,54 @@ def update_tournament_publication(
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
     tournament = require_tournament_manager(tournament_id, db, current_user)
+    if tournament.registration_scope == "champion_8":
+        tournament = require_locked_champion_tournament_manager(
+            tournament_id, db, current_user
+        )
     publish = body.get("published") is True
     readiness = get_publication_readiness(tournament, db)
 
     if publish and not readiness["can_publish"]:
+        if tournament.registration_scope == "champion_8":
+            raise HTTPException(status_code=409, detail=readiness)
         raise HTTPException(
             status_code=400,
             detail="未完成の編成データがあるため公開できません",
         )
 
     # ステータスが変わった場合のみ処理
+    if tournament.registration_scope == "champion_8":
+        status_changed = (tournament.publication_status == "published") != publish
+        try:
+            if publish:
+                stats = _compute_dashboard_stats(tournament_id, db, current_user)
+                stats = enrich_champion_snapshot_stats(stats, tournament_id, db)
+                apply_snapshot(tournament_id, stats, db)
+                tournament.publication_status = "published"
+                tournament.published_at = datetime.now(timezone.utc)
+                tournament.published_by = current_user.id
+            else:
+                tournament.publication_status = "draft"
+                tournament.published_at = None
+                tournament.published_by = None
+                db.query(models.TournamentSnapshot).filter(
+                    models.TournamentSnapshot.tournament_id == tournament_id
+                ).delete(synchronize_session=False)
+            db.commit()
+            db.refresh(tournament)
+        except Exception:
+            db.rollback()
+            raise
+        if status_changed:
+            invalidate_dashboard_cache_safely(tournament_id)
+        return {
+            "ok": True,
+            "publication_status": tournament.publication_status,
+            "published_at": tournament.published_at,
+            "published_by": tournament.published_by,
+            "readiness": readiness,
+        }
+
     status_changed = (tournament.publication_status == "published") != publish
 
     tournament.publication_status = "published" if publish else "draft"
@@ -1553,6 +1661,1214 @@ def get_championship_matches(
         )
     return query.order_by(models.Tournament.created_at.desc()).all()
 
+
+def require_champion_tournament_viewer(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    try:
+        tournament = require_tournament_viewer(tournament_id, db, current_user)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            exists = db.query(models.Tournament.id).filter(
+                models.Tournament.id == tournament_id
+            ).first()
+            if exists:
+                if current_user is None:
+                    raise HTTPException(status_code=401, detail="Authentication required")
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have permission to view this tournament",
+                )
+        raise
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(
+            status_code=409,
+            detail="Champion slot API is available only for champion_8 tournaments",
+        )
+    return tournament
+
+
+def require_champion_tournament_manager(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(
+            status_code=409,
+            detail="Champion slot API is available only for champion_8 tournaments",
+        )
+    return tournament
+
+
+def require_locked_champion_tournament_manager(
+    tournament_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> models.Tournament:
+    """Lock Tournament first, then recheck authorization, scope and status."""
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    tournament = (
+        db.query(models.Tournament)
+        .filter(models.Tournament.id == tournament_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if current_user.role != "admin" and tournament.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to manage this tournament")
+    if tournament.registration_scope != "champion_8":
+        raise HTTPException(status_code=409, detail="Champion API is available only for champion_8 tournaments")
+    return tournament
+
+
+def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
+    if tournament.publication_status == "published":
+        raise HTTPException(
+            status_code=409,
+            detail="Unpublish this tournament before editing it, then validate and publish it again.",
+        )
+
+
+def validate_champion_slot(champion_slot: int) -> None:
+    if not 1 <= champion_slot <= 8:
+        raise HTTPException(status_code=422, detail="champion slot must be between 1 and 8")
+
+
+def champion_seed_range(champion_slot: int) -> tuple[int, int]:
+    validate_champion_slot(champion_slot)
+    return (champion_slot - 1) * 8 + 1, champion_slot * 8
+
+
+def validate_champion_seed(champion_slot: int, seed_number: int | None) -> None:
+    if seed_number is None:
+        return
+    minimum, maximum = champion_seed_range(champion_slot)
+    if not minimum <= seed_number <= maximum:
+        raise HTTPException(
+            status_code=422,
+            detail=f"seed_number for champion slot {champion_slot} must be null or between {minimum} and {maximum}",
+        )
+
+
+def require_champion_player_manager(
+    tournament_id: int,
+    player_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> tuple[models.Tournament, models.Player]:
+    tournament = require_champion_tournament_manager(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return tournament, player
+
+
+def require_locked_champion_player_manager(
+    tournament_id: int,
+    player_id: int,
+    db: Session,
+    current_user: models.AppUser | None,
+) -> tuple[models.Tournament, models.Player]:
+    tournament = require_locked_champion_tournament_manager(
+        tournament_id, db, current_user
+    )
+    require_unpublished_champion_edit(tournament)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return tournament, player
+
+
+def champion_teams_response(player: models.Player, deck_set: models.DeckSet | None):
+    if deck_set is None:
+        return {
+            "player_id": player.id,
+            "tournament_id": player.tournament_id,
+            "champion_slot": player.champion_slot,
+            "deck_set_id": None,
+            "status": "not_saved",
+            "teams": [],
+        }
+    teams = sorted(deck_set.teams, key=lambda team: team.team_number)
+    response_teams = []
+    complete = len(teams) == 5
+    for team in teams:
+        character_ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
+        complete = complete and team.team_number in range(1, 6) and all(
+            character_id is not None for character_id in character_ids
+        )
+        response_teams.append({
+            "team_number": team.team_number,
+            "character_ids": character_ids,
+            "collection_levels": get_team_collection_levels(team),
+        })
+    return {
+        "player_id": player.id,
+        "tournament_id": player.tournament_id,
+        "champion_slot": player.champion_slot,
+        "deck_set_id": deck_set.id,
+        "status": "complete" if complete else "incomplete",
+        "teams": response_teams,
+    }
+
+
+def validate_champion_teams_payload(data: schemas.ChampionTeamsUpsert) -> list[tuple[int, list[int], list[str | None], list[schemas.ChampionTeamCharacterInput]]]:
+    if len(data.teams) != 5:
+        raise HTTPException(status_code=422, detail="Exactly five teams are required")
+    team_numbers = [team.team_number for team in data.teams]
+    if sorted(team_numbers) != [1, 2, 3, 4, 5]:
+        raise HTTPException(status_code=422, detail="team_number must contain each value from 1 to 5 exactly once")
+    normalized = []
+    all_character_ids = []
+    for team in data.teams:
+        if len(team.characters) != 5:
+            raise HTTPException(status_code=422, detail="Each team must contain exactly five characters")
+        character_ids = [character.id for character in team.characters]
+        if any(character_id <= 0 for character_id in character_ids):
+            raise HTTPException(status_code=422, detail="All character slots must contain a resolved character or the empty-slot marker")
+        real_character_ids = [character_id for character_id in character_ids if character_id != EMPTY_SLOT_CHARACTER_ID]
+        if len(set(real_character_ids)) != len(real_character_ids):
+            raise HTTPException(status_code=422, detail="Characters must not be duplicated within a team")
+        all_character_ids.extend(real_character_ids)
+        normalized.append((
+            team.team_number,
+            character_ids,
+            [
+                None if character.id == EMPTY_SLOT_CHARACTER_ID
+                else character.collection_level if character.collection_level in COLLECTION_VALUES else None
+                for character in team.characters
+            ],
+            team.characters,
+        ))
+    if len(set(all_character_ids)) != len(all_character_ids):
+        raise HTTPException(status_code=422, detail="Characters must not be duplicated across teams")
+    return sorted(normalized, key=lambda item: item[0])
+
+
+def decode_champion_template_source(data_url: str):
+    if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
+        raise HTTPException(status_code=422, detail="Template source must be a PNG data URL")
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[1], validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Template source is not valid base64") from exc
+    if not raw or len(raw) > CHAMPION_TEMPLATE_SOURCE_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="Template source exceeds the size limit")
+    import cv2 as _cv2
+    import numpy as _np
+    image = _cv2.imdecode(_np.frombuffer(raw, dtype=_np.uint8), _cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(status_code=422, detail="Template source is not a decodable image")
+    height, width = image.shape[:2]
+    if width > CHAMPION_ICON_MAX_WIDTH or height > CHAMPION_ICON_MAX_HEIGHT or width * height > CHAMPION_ICON_MAX_PIXELS:
+        raise HTTPException(status_code=422, detail="Template source dimensions exceed the limit")
+    return image, len(raw)
+
+
+def validate_owned_champion_crop_url(
+    url: str,
+    tournament_id: int,
+    player_id: int,
+    *,
+    require_lossless: bool = False,
+) -> Path:
+    source_path = path_from_upload_url(url)
+    match = CHAMPION_CROP_NAME.fullmatch(source_path.name) if source_path else None
+    if (
+        source_path is None
+        or not _is_within(source_path, CROPPED_DIR)
+        or match is None
+        or int(match.group("tournament")) != tournament_id
+        or int(match.group("player")) != player_id
+        or (require_lossless and source_path.suffix.lower() != ".png")
+        or not source_path.is_file()
+    ):
+        raise HTTPException(status_code=422, detail="The analysis crop does not belong to this tournament and Player")
+    age = time.time() - source_path.stat().st_mtime
+    if age < 0 or age > CHAMPION_CROP_TTL_SECONDS:
+        raise HTTPException(status_code=422, detail="The analysis crop has expired")
+    return source_path
+
+
+def load_champion_template_source(
+    character: schemas.ChampionTeamCharacterInput,
+    tournament_id: int,
+    player_id: int,
+):
+    """Load only a live crop issued for the current tournament and Player."""
+    if character.template_source_url:
+        source_path = validate_owned_champion_crop_url(
+            character.template_source_url,
+            tournament_id,
+            player_id,
+            require_lossless=True,
+        )
+        source_size = source_path.stat().st_size
+        if not 0 < source_size <= CHAMPION_TEMPLATE_SOURCE_MAX_BYTES:
+            raise HTTPException(status_code=422, detail="Template source exceeds the size limit")
+        import cv2 as _cv2
+        source_image = _cv2.imread(str(source_path), _cv2.IMREAD_COLOR)
+        if source_image is None:
+            raise HTTPException(status_code=422, detail="Template source is not a decodable image")
+        height, width = source_image.shape[:2]
+        if width > CHAMPION_ICON_MAX_WIDTH or height > CHAMPION_ICON_MAX_HEIGHT or width * height > CHAMPION_ICON_MAX_PIXELS:
+            raise HTTPException(status_code=422, detail="Template source dimensions exceed the limit")
+        return source_image, source_size
+    if character.template_source_data_url:
+        raise HTTPException(status_code=422, detail="Inline template sources are no longer accepted; analyze the image again")
+    raise HTTPException(status_code=422, detail="A corrected Character requires its source crop")
+
+
+def install_champion_character_template(character_id: int, source_image, db: Session):
+    """Install one corrected crop using the legacy full_64 naming/dedup rules."""
+    import cv2 as _cv2
+
+    template_dir = Path(UPLOAD_DIR) / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    existing = sorted(
+        path for path in template_dir.iterdir()
+        if path.is_file() and (path.name.startswith(f"char_{character_id}_") or path.name == f"char_{character_id}.png")
+    )
+    prepared_source = prepare_character_image(source_image)
+    representative = existing[0].name if existing else None
+    for path in existing:
+        existing_image = _cv2.imread(str(path))
+        if existing_image is None:
+            continue
+        try:
+            prepared_existing = prepare_character_image(existing_image)
+            height, width = prepared_source.shape[:2]
+            resized = _cv2.resize(prepared_existing, (width, height))
+            similarity = 1.0 - (_cv2.absdiff(prepared_source, resized).mean() / 255.0)
+            if similarity > 0.92:
+                character = db.get(models.Character, character_id)
+                character.is_template_available = True
+                if not character.template_filename:
+                    character.template_filename = path.name
+                return None
+        except Exception:
+            continue
+    used_numbers = []
+    for path in existing:
+        stem_suffix = path.stem.removeprefix(f"char_{character_id}_")
+        if stem_suffix.isdigit():
+            used_numbers.append(int(stem_suffix))
+    next_number = max(used_numbers, default=0) + 1
+    destination = template_dir / f"char_{character_id}_{next_number:03d}.png"
+    if not write_lossless_png(str(destination), source_image):
+        raise OSError(f"Failed to save template: {destination}")
+    character = db.get(models.Character, character_id)
+    character.is_template_available = True
+    if not character.template_filename:
+        character.template_filename = destination.name
+    return destination
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/champion-slots",
+    response_model=schemas.ChampionSlotsResponse,
+)
+def get_champion_slots(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    tournament = require_champion_tournament_viewer(tournament_id, db, current_user)
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).order_by(models.Player.champion_slot).all()
+    player_by_slot = {player.champion_slot: player for player in players}
+    return {
+        "tournament_id": tournament.id,
+        "registration_scope": tournament.registration_scope,
+        "slots": [
+            {
+                "champion_slot": champion_slot,
+                "player": player_by_slot.get(champion_slot),
+            }
+            for champion_slot in range(1, 9)
+        ],
+    }
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/champion-slots/{champion_slot}",
+    response_model=schemas.ChampionPlayerResponse,
+)
+def upsert_champion_slot(
+    tournament_id: int,
+    champion_slot: int,
+    body: schemas.ChampionSlotUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    validate_champion_slot(champion_slot)
+    validate_champion_seed(champion_slot, body.seed_number)
+    tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+
+    player = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot == champion_slot,
+    ).first()
+
+    if body.seed_number is not None:
+        duplicate_query = db.query(models.Player).filter(
+            models.Player.tournament_id == tournament_id,
+            models.Player.seed_number == body.seed_number,
+        )
+        if player is not None:
+            duplicate_query = duplicate_query.filter(models.Player.id != player.id)
+        if duplicate_query.first():
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="seed_number is already registered in this tournament",
+            )
+
+    generated_name = automatic_champion_player_name(champion_slot, body.seed_number)
+    if player is None:
+        player = models.Player(
+            tournament_id=tournament_id,
+            champion_slot=champion_slot,
+            seed_number=body.seed_number,
+            name=generated_name,
+        )
+        db.add(player)
+    else:
+        player.seed_number = body.seed_number
+        player.name = generated_name
+
+    try:
+        db.commit()
+        db.refresh(player)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="champion slot or seed_number conflicts with another player",
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    # DB commit後に無効化する。失敗しても確定済みDB更新と正常レスポンスを維持する。
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(
+            f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}"
+        )
+    return player
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}",
+    response_model=schemas.ChampionPlayerResponse,
+)
+def get_champion_player_by_id(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return player
+
+
+CHAMPION_DECK_MAX_IMAGES = 5
+CHAMPION_DECK_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+CHAMPION_DECK_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+CHAMPION_ICON_MAX_BYTES = 10 * 1024 * 1024
+CHAMPION_ICON_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+CHAMPION_ICON_MAX_WIDTH = 10_000
+CHAMPION_ICON_MAX_HEIGHT = 10_000
+CHAMPION_ICON_MAX_PIXELS = 25_000_000
+CHAMPION_RESULT_MAX_BYTES = 20 * 1024 * 1024
+
+
+def champion_player_icon_location(tournament_id: int, player_id: int) -> tuple[Path, str]:
+    icon_dir = (PLAYER_ICONS_DIR / f"tournament_{tournament_id}").resolve()
+    if not _is_within(icon_dir, PLAYER_ICONS_DIR):
+        raise HTTPException(status_code=500, detail="Unsafe player icon path")
+    path = (icon_dir / f"player_{player_id}.png").resolve()
+    if not _is_within(path, icon_dir):
+        raise HTTPException(status_code=500, detail="Unsafe player icon path")
+    return path, f"/api/uploads/player_icons/tournament_{tournament_id}/player_{player_id}.png"
+
+
+def champion_icon_temporary_paths(final_path: Path, token: str) -> tuple[Path, Path, Path]:
+    return (
+        final_path.parent / f".{final_path.name}.{token}.upload",
+        final_path.parent / f".{final_path.name}.{token}.png",
+        final_path.parent / f".{final_path.name}.{token}.backup",
+    )
+
+
+def invalidate_dashboard_cache_safely(tournament_id: int) -> None:
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/icon",
+    response_model=schemas.ChampionPlayerIconResponse,
+)
+async def upload_champion_player_icon(
+    tournament_id: int,
+    player_id: int,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+
+    final_path, icon_url = champion_player_icon_location(tournament_id, player.id)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
+    upload_path, normalized_path, backup_path = champion_icon_temporary_paths(
+        final_path, token
+    )
+    replaced_existing = False
+    try:
+        total = 0
+        with open(upload_path, "wb") as output:
+            while chunk := await image.read(1024 * 1024):
+                total += len(chunk)
+                if total > CHAMPION_ICON_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
+                output.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+
+        import cv2
+        decoded = cv2.imread(str(upload_path), cv2.IMREAD_UNCHANGED)
+        if decoded is None or decoded.size == 0:
+            raise HTTPException(status_code=422, detail="File is not a decodable image")
+        height, width = decoded.shape[:2]
+        if (
+            width > CHAMPION_ICON_MAX_WIDTH
+            or height > CHAMPION_ICON_MAX_HEIGHT
+            or width * height > CHAMPION_ICON_MAX_PIXELS
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail="Decoded image dimensions exceed the allowed limit",
+            )
+        if not write_lossless_png(normalized_path, decoded):
+            raise HTTPException(status_code=422, detail="Image normalization failed")
+
+        if final_path.exists():
+            os.replace(final_path, backup_path)
+            replaced_existing = True
+        os.replace(normalized_path, final_path)
+        player.icon_url = icon_url
+        try:
+            db.flush()
+            db.commit()
+            db.refresh(player)
+        except Exception:
+            db.rollback()
+            if final_path.exists():
+                final_path.unlink()
+            if replaced_existing and backup_path.exists():
+                os.replace(backup_path, final_path)
+            raise
+        if backup_path.exists():
+            try:
+                backup_path.unlink()
+            except OSError as exc:
+                print(f"[player-icon] backup cleanup failed tournament={tournament_id} player={player.id}: {exc}")
+    except Exception:
+        if replaced_existing and backup_path.exists() and not final_path.exists():
+            os.replace(backup_path, final_path)
+        raise
+    finally:
+        for temporary_path in (upload_path, normalized_path):
+            if temporary_path.exists():
+                try:
+                    temporary_path.unlink()
+                except OSError as exc:
+                    print(f"[player-icon] temporary cleanup failed path={temporary_path}: {exc}")
+    invalidate_dashboard_cache_safely(tournament_id)
+    return {
+        "player_id": player.id,
+        "tournament_id": tournament_id,
+        "champion_slot": player.champion_slot,
+        "icon_url": player.icon_url,
+    }
+
+
+@app.delete(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/icon",
+    response_model=schemas.ChampionPlayerIconResponse,
+)
+def delete_champion_player_icon(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    final_path, _ = champion_player_icon_location(tournament_id, player.id)
+    backup_path = final_path.parent / f".{final_path.name}.{secrets.token_hex(8)}.delete"
+    moved_file = False
+    commit_succeeded = False
+    try:
+        if final_path.exists():
+            os.replace(final_path, backup_path)
+            moved_file = True
+        player.icon_url = None
+        try:
+            db.commit()
+            db.refresh(player)
+            commit_succeeded = True
+        except Exception:
+            db.rollback()
+            if moved_file and backup_path.exists():
+                os.replace(backup_path, final_path)
+            raise
+    finally:
+        # A successful DB commit may still be followed by an unlink failure. Do
+        # not expose the backup as a public icon; leave a clear operational log.
+        if backup_path.exists() and commit_succeeded:
+            try:
+                backup_path.unlink()
+            except OSError as exc:
+                print(f"[player-icon] cleanup failed tournament={tournament_id} player={player.id}: {exc}")
+    invalidate_dashboard_cache_safely(tournament_id)
+    return {
+        "player_id": player.id,
+        "tournament_id": tournament_id,
+        "champion_slot": player.champion_slot,
+        "icon_url": None,
+    }
+
+
+@app.post("/api/tournaments/{tournament_id}/players/by-id/{player_id}/analyze-deck")
+async def analyze_champion_deck(
+    tournament_id: int,
+    player_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    # Authorization and ownership checks deliberately precede multipart parsing/decoding.
+    _, player = require_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    form = await request.form(
+        max_files=CHAMPION_DECK_MAX_IMAGES,
+        max_fields=CHAMPION_DECK_MAX_IMAGES,
+        max_part_size=CHAMPION_DECK_MAX_IMAGE_BYTES,
+    )
+    images = form.getlist("images")
+    if not 1 <= len(images) <= CHAMPION_DECK_MAX_IMAGES:
+        raise HTTPException(status_code=422, detail="Provide between one and five images")
+    pre_cropped_flags = [
+        str(value).strip().lower() in {"1", "true", "yes", "on"}
+        for value in form.getlist("image_pre_cropped")
+    ]
+    saved_paths: list[str] = []
+    analysis_output_paths: list[str] = []
+    keep_analysis_outputs = False
+    try:
+        for index, image in enumerate(images):
+            if getattr(image, "content_type", None) not in CHAMPION_DECK_IMAGE_TYPES:
+                raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+            suffix = Path(image.filename or "deck.png").suffix.lower() or ".png"
+            file_path = os.path.join(
+                UPLOAD_DIR,
+                f"champion_t{tournament_id}_p{player.id}_{secrets.token_hex(6)}_{index}{suffix}",
+            )
+            saved_paths.append(file_path)
+            total = 0
+            with open(file_path, "wb") as output:
+                while chunk := await image.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > CHAMPION_DECK_MAX_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail="Image exceeds 20 MB")
+                    output.write(chunk)
+            if total == 0:
+                raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+        try:
+            result = process_images(
+                saved_paths,
+                tournament_id,
+                player.id,
+                pre_cropped_flags=pre_cropped_flags,
+                include_source_metadata=True,
+                created_output_paths=analysis_output_paths,
+                crop_owner_player_id=player.id,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[champion-deck] analysis failed tournament={tournament_id} player={player.id}: {exc}")
+            raise HTTPException(status_code=500, detail="Deck analysis failed") from exc
+        # The legacy analyzer uses its third argument only for result/file labels.
+        result["suggested_player_name"] = player.name
+        result["suggested_seed"] = player.seed_number
+        result["teams"] = [
+            {
+                "team_number": team_number,
+                "source_image_index": next(
+                    (
+                        character.get("source_image_index")
+                        for character in characters
+                        if character.get("source_image_index") is not None
+                    ),
+                    None,
+                ),
+                "characters": [
+                    {
+                        **character,
+                        "character_id": character.get("predicted_character_id"),
+                        "unresolved": character.get("predicted_character_id") is None,
+                    }
+                    for character in characters
+                ],
+            }
+            for team_number, characters in enumerate(
+                result.get("suggested_teams", []), start=1
+            )
+        ]
+        # The structured response retains the same temporary crop URLs as the
+        # existing full_64 flow. They remain available while the user reviews
+        # and corrects the result, and are deleted only after a successful save.
+        for characters in result.get("suggested_teams", []):
+            for character in characters:
+                character.pop("image_url", None)
+                character.pop("template_source_url", None)
+        keep_analysis_outputs = True
+        return result
+    finally:
+        cleanup_paths = saved_paths + ([] if keep_analysis_outputs else analysis_output_paths)
+        for path in cleanup_paths:
+            delete_upload_file(path)
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/teams",
+    response_model=schemas.ChampionTeamsResponse,
+)
+def save_champion_teams(
+    tournament_id: int,
+    player_id: int,
+    data: schemas.ChampionTeamsUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    tournament, player = require_locked_champion_player_manager(
+        tournament_id, player_id, db, current_user
+    )
+    normalized = validate_champion_teams_payload(data)
+    temporary_crop_urls = [
+        url
+        for _, _, _, characters in normalized
+        for character in characters
+        for url in (character.image_url, character.template_source_url)
+        if url
+    ]
+    owned_crop_paths = {
+        validate_owned_champion_crop_url(url, tournament_id, player_id)
+        for url in temporary_crop_urls
+    }
+    character_ids = {
+        character_id
+        for _, ids, _, _ in normalized
+        for character_id in ids
+        if character_id != EMPTY_SLOT_CHARACTER_ID
+    }
+    existing_character_ids = {
+        row[0]
+        for row in db.query(models.Character.id).filter(
+            models.Character.id.in_(character_ids)
+        ).all()
+    }
+    missing = sorted(character_ids - existing_character_ids)
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Unknown character IDs: {missing}")
+
+    template_sources = []
+    total_template_bytes = 0
+    for _, _, _, characters in normalized:
+        for character in characters:
+            if not character.add_to_templates:
+                continue
+            if character.id == EMPTY_SLOT_CHARACTER_ID:
+                raise HTTPException(status_code=422, detail="The empty slot cannot be added as a Character template")
+            if not (
+                character.was_unrecognized
+                or character.original_predicted_id != character.id
+            ):
+                raise HTTPException(status_code=422, detail="Templates may only be added for manually corrected analysis results")
+            source_image, source_bytes = load_champion_template_source(
+                character, tournament_id, player_id
+            )
+            total_template_bytes += source_bytes
+            if total_template_bytes > CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES:
+                raise HTTPException(status_code=422, detail="Corrected template sources exceed the total size limit")
+            template_sources.append((character.id, source_image))
+
+    existing_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player.id
+    ).order_by(models.DeckSet.id).all()
+    deck_set = existing_sets[0] if existing_sets else models.DeckSet(player_id=player.id)
+    if not existing_sets:
+        db.add(deck_set)
+    created_template_paths: list[Path] = []
+    committed = False
+    response_data = None
+    try:
+        for extra_set in existing_sets[1:]:
+            db.delete(extra_set)
+        for old_team in list(deck_set.teams):
+            db.delete(old_team)
+        db.flush()
+        for team_number, ids, collections, _ in normalized:
+            db.add(models.DeckTeam(
+                deck_set=deck_set,
+                team_number=team_number,
+                char1_id=ids[0], char2_id=ids[1], char3_id=ids[2],
+                char4_id=ids[3], char5_id=ids[4],
+                collection1=collections[0], collection2=collections[1],
+                collection3=collections[2], collection4=collections[3],
+                collection5=collections[4],
+            ))
+        for character_id, source_image in template_sources:
+            created_path = install_champion_character_template(character_id, source_image, db)
+            if created_path is not None:
+                created_template_paths.append(created_path)
+        db.flush()
+        db.commit()
+        committed = True
+        response_data = champion_teams_response(player, deck_set)
+    except IntegrityError as exc:
+        db.rollback()
+        for path in created_template_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
+        raise HTTPException(status_code=409, detail="Deck data conflicts with existing data") from exc
+    except Exception:
+        if not committed:
+            db.rollback()
+        for path in ([] if committed else created_template_paths):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
+        raise
+    for path in owned_crop_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            print(f"[champion-crop] committed crop cleanup failed file={path.name}: {cleanup_error}")
+    try:
+        invalidate_dashboard_cache(tournament_id)
+    except Exception as exc:
+        print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
+    return response_data
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/players/by-id/{player_id}/teams",
+    response_model=schemas.ChampionTeamsResponse,
+)
+def get_champion_teams(
+    tournament_id: int,
+    player_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    player = db.query(models.Player).filter(
+        models.Player.id == player_id,
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    deck_set = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player.id
+    ).order_by(models.DeckSet.id).first()
+    return champion_teams_response(player, deck_set)
+
+
+def champion_player_has_complete_deck(player_id: int, db: Session) -> bool:
+    deck_sets = db.query(models.DeckSet).filter(
+        models.DeckSet.player_id == player_id
+    ).all()
+    if len(deck_sets) != 1:
+        return False
+    teams = list(deck_sets[0].teams)
+    if sorted(team.team_number for team in teams) != [1, 2, 3, 4, 5]:
+        return False
+    character_ids = []
+    for team in teams:
+        ids = [getattr(team, f"char{slot}_id") for slot in range(1, 6)]
+        if any(character_id is None for character_id in ids):
+            return False
+        character_ids.extend(
+            character_id for character_id in ids
+            if character_id != EMPTY_SLOT_CHARACTER_ID
+        )
+    return len(set(character_ids)) == len(character_ids)
+
+
+def champion_match_is_complete(
+    match: models.Match | None,
+    expected_participants: tuple[int | None, int | None] | None = None,
+) -> bool:
+    return match_is_complete(match, expected_participants)
+
+
+def champion_bracket_context(tournament_id: int, db: Session):
+    players = db.query(models.Player).filter(
+        models.Player.tournament_id == tournament_id,
+        models.Player.champion_slot.isnot(None),
+    ).all()
+    players_by_id = {player.id: player for player in players}
+    player_ids_by_slot = {player.champion_slot: player.id for player in players}
+    stored_matches = db.query(models.Match).filter(
+        models.Match.tournament_id == tournament_id,
+        models.Match.bracket_stage.isnot(None),
+    ).all()
+    matches_by_key = {
+        (match.bracket_stage, match.bracket_slot): match for match in stored_matches
+    }
+    winners: dict[tuple[str, int], int] = {}
+    expected_by_key = {}
+    for definition in CHAMPION_BRACKET:
+        expected = participant_ids(definition, player_ids_by_slot, winners)
+        expected_by_key[definition.key] = expected
+        match = matches_by_key.get(definition.key)
+        if champion_match_is_complete(match, expected):
+            winners[definition.key] = match.winner_id
+    return players_by_id, player_ids_by_slot, matches_by_key, winners, expected_by_key
+
+
+def champion_bracket_match_data(
+    definition,
+    players_by_id,
+    matches_by_key,
+    expected_by_key,
+    db: Session,
+):
+    expected = expected_by_key[definition.key]
+    attacker = players_by_id.get(expected[0])
+    defender = players_by_id.get(expected[1])
+    match = matches_by_key.get(definition.key)
+    complete = champion_match_is_complete(match, expected)
+    participants_ready = (
+        attacker is not None
+        and defender is not None
+        and attacker.id != defender.id
+        and champion_player_has_complete_deck(attacker.id, db)
+        and champion_player_has_complete_deck(defender.id, db)
+    )
+    status = "complete" if complete else ("ready" if participants_ready else "locked")
+    winner = players_by_id.get(match.winner_id) if complete else None
+    return {
+        "bracket_stage": definition.key[0],
+        "bracket_slot": definition.key[1],
+        "name": definition.name,
+        "status": status,
+        "attacker": attacker,
+        "defender": defender,
+        "match_id": match.id if match else None,
+        "winner": winner,
+        "round_results": [
+            {"round_number": result.round_number, "winner_id": result.winner_id}
+            for result in sorted(match.round_results, key=lambda item: item.round_number)
+        ] if match else [],
+        "upstream": [CHAMPION_BRACKET_BY_KEY[key].name for key in definition.upstream],
+    }
+
+
+@app.get(
+    "/api/tournaments/{tournament_id}/champion-bracket",
+    response_model=schemas.ChampionBracketResponse,
+)
+def get_champion_bracket(
+    tournament_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    require_champion_tournament_viewer(tournament_id, db, current_user)
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    return {
+        "tournament_id": tournament_id,
+        "matches": [
+            champion_bracket_match_data(
+                definition, players_by_id, matches_by_key, expected_by_key, db
+            )
+            for definition in CHAMPION_BRACKET
+        ],
+    }
+
+
+def validate_champion_match_result(
+    data: schemas.ChampionMatchUpsert,
+    participants: tuple[int, int],
+) -> None:
+    if len(data.round_results) != 5:
+        raise HTTPException(status_code=422, detail="Exactly five round results are required")
+    round_numbers = [result.round_number for result in data.round_results]
+    if sorted(round_numbers) != [1, 2, 3, 4, 5]:
+        raise HTTPException(status_code=422, detail="round_number must contain each value from 1 to 5 exactly once")
+    if data.winner_id not in participants:
+        raise HTTPException(status_code=422, detail="Match winner must be a participant")
+    if any(result.winner_id not in participants for result in data.round_results):
+        raise HTTPException(status_code=422, detail="Round winner must be a participant")
+    attacker_wins = sum(result.winner_id == participants[0] for result in data.round_results)
+    calculated_winner = participants[0] if attacker_wins >= 3 else participants[1]
+    if data.winner_id != calculated_winner:
+        raise HTTPException(status_code=422, detail="Match winner does not match the five-round majority")
+
+
+def delete_champion_match_branch(key, matches_by_key, db: Session) -> None:
+    for dependent in dependent_keys(key):
+        delete_champion_match_branch(dependent, matches_by_key, db)
+    match = matches_by_key.pop(key, None)
+    if match is not None:
+        db.delete(match)
+
+
+def reconcile_champion_dependents(key, tournament_id: int, matches_by_key, db: Session) -> None:
+    _, _, current_matches, _, expected_by_key = champion_bracket_context(tournament_id, db)
+    matches_by_key.update(current_matches)
+    for dependent in dependent_keys(key):
+        dependent_match = matches_by_key.get(dependent)
+        if dependent_match is None:
+            for descendant in dependent_keys(dependent):
+                delete_champion_match_branch(descendant, matches_by_key, db)
+            continue
+        if not champion_match_is_complete(dependent_match, expected_by_key[dependent]):
+            delete_champion_match_branch(dependent, matches_by_key, db)
+        else:
+            reconcile_champion_dependents(dependent, tournament_id, matches_by_key, db)
+
+
+@app.put(
+    "/api/tournaments/{tournament_id}/matches/{bracket_stage}/{bracket_slot}",
+    response_model=schemas.ChampionBracketMatchResponse,
+)
+def save_champion_match(
+    tournament_id: int,
+    bracket_stage: str,
+    bracket_slot: int,
+    data: schemas.ChampionMatchUpsert,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    definition = get_bracket_definition(bracket_stage, bracket_slot)
+    if definition is None:
+        raise HTTPException(status_code=422, detail="Invalid champion bracket slot")
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    expected = expected_by_key[definition.key]
+    if expected[0] is None or expected[1] is None:
+        raise HTTPException(status_code=409, detail="Upstream participants are not complete")
+    participants = (expected[0], expected[1])
+    if participants[0] == participants[1]:
+        raise HTTPException(status_code=409, detail="Attacker and defender must differ")
+    if any(player_id not in players_by_id for player_id in participants):
+        raise HTTPException(status_code=409, detail="Participant does not belong to tournament")
+    if not all(champion_player_has_complete_deck(player_id, db) for player_id in participants):
+        raise HTTPException(status_code=409, detail="Both participants must have complete decks")
+    validate_champion_match_result(data, participants)
+
+    match = matches_by_key.get(definition.key)
+    old_winner_id = match.winner_id if match and champion_match_is_complete(match, expected) else None
+    if match is None:
+        match = models.Match(
+            tournament_id=tournament_id,
+            stage=definition.name,
+            bracket_stage=definition.key[0],
+            bracket_slot=definition.key[1],
+            attacker_id=participants[0],
+            defender_id=participants[1],
+        )
+        db.add(match)
+        matches_by_key[definition.key] = match
+    else:
+        match.stage = definition.name
+        match.attacker_id = participants[0]
+        match.defender_id = participants[1]
+    match.winner_id = data.winner_id
+    match.round_results.clear()
+    for result in sorted(data.round_results, key=lambda item: item.round_number):
+        match.round_results.append(models.RoundResult(
+            round_number=result.round_number,
+            winner_id=result.winner_id,
+        ))
+    try:
+        db.flush()
+        if old_winner_id != data.winner_id:
+            for dependent in dependent_keys(definition.key):
+                delete_champion_match_branch(dependent, matches_by_key, db)
+        else:
+            reconcile_champion_dependents(definition.key, tournament_id, matches_by_key, db)
+        db.commit()
+        db.refresh(match)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Champion match conflicts with existing data") from exc
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_dashboard_cache_safely(tournament_id)
+    players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    return champion_bracket_match_data(
+        definition, players_by_id, matches_by_key, expected_by_key, db
+    )
+
+
+@app.post(
+    "/api/tournaments/{tournament_id}/matches/{bracket_stage}/{bracket_slot}/analyze",
+    response_model=schemas.ChampionMatchAnalysisResponse,
+)
+async def analyze_champion_match_result(
+    tournament_id: int,
+    bracket_stage: str,
+    bracket_slot: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
+    # Authorization, scope, fixed participants and deck readiness must precede
+    # multipart parsing and all image/OCR work.
+    require_champion_tournament_manager(tournament_id, db, current_user)
+    definition = get_bracket_definition(bracket_stage, bracket_slot)
+    if definition is None:
+        raise HTTPException(status_code=422, detail="Invalid champion bracket slot")
+    players_by_id, _, _, _, expected_by_key = champion_bracket_context(
+        tournament_id, db
+    )
+    expected = expected_by_key[definition.key]
+    if expected[0] is None or expected[1] is None:
+        raise HTTPException(status_code=409, detail="Upstream participants are not complete")
+    attacker = players_by_id.get(expected[0])
+    defender = players_by_id.get(expected[1])
+    if attacker is None or defender is None or attacker.id == defender.id:
+        raise HTTPException(status_code=409, detail="Fixed match participants are invalid")
+    if not (
+        champion_player_has_complete_deck(attacker.id, db)
+        and champion_player_has_complete_deck(defender.id, db)
+    ):
+        raise HTTPException(status_code=409, detail="Both participants must have complete decks")
+
+    try:
+        # Parse once, then enforce the exact multipart contract below. Limits
+        # remain finite for resource safety; parser-limit errors are normalized
+        # to this endpoint's 422 input-error contract.
+        form = await request.form(
+            max_files=20,
+            max_fields=20,
+            max_part_size=CHAMPION_RESULT_MAX_BYTES,
+        )
+    except StarletteHTTPException as exc:
+        if exc.status_code == 400:
+            raise HTTPException(status_code=422, detail="Invalid multipart form data") from exc
+        raise
+    if hasattr(form, "multi_items"):
+        unexpected = {key for key, _ in form.multi_items()} - {"image"}
+        if unexpected:
+            raise HTTPException(status_code=422, detail="Unexpected multipart fields")
+    images = form.getlist("image")
+    if len(images) != 1:
+        raise HTTPException(status_code=422, detail="Exactly one result image is required")
+    image = images[0]
+    if getattr(image, "content_type", None) not in CHAMPION_ICON_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+
+    temporary_path = os.path.join(
+        UPLOAD_DIR,
+        f"champion_result_t{tournament_id}_{secrets.token_hex(8)}.upload",
+    )
+    try:
+        total = 0
+        with open(temporary_path, "wb") as output:
+            while chunk := await image.read(1024 * 1024):
+                total += len(chunk)
+                if total > CHAMPION_RESULT_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Image exceeds 20 MB")
+                output.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=422, detail="Empty image files are not allowed")
+
+        import cv2
+        decoded = cv2.imread(temporary_path, cv2.IMREAD_UNCHANGED)
+        if decoded is None or decoded.size == 0:
+            raise HTTPException(status_code=422, detail="File is not a decodable image")
+        height, width = decoded.shape[:2]
+        if (
+            width > CHAMPION_ICON_MAX_WIDTH
+            or height > CHAMPION_ICON_MAX_HEIGHT
+            or width * height > CHAMPION_ICON_MAX_PIXELS
+        ):
+            raise HTTPException(status_code=413, detail="Decoded image dimensions exceed the allowed limit")
+        try:
+            raw_result = extract_match_results(temporary_path)
+        except Exception as exc:
+            print(
+                f"[champion-result] analysis failed tournament={tournament_id} "
+                f"stage={bracket_stage} slot={bracket_slot}: {exc}"
+            )
+            raise HTTPException(status_code=500, detail="Match result analysis failed") from exc
+        converted = normalize_champion_result(raw_result, attacker.id, defender.id)
+        return {
+            "tournament_id": tournament_id,
+            "bracket_stage": definition.key[0],
+            "bracket_slot": definition.key[1],
+            "attacker": attacker,
+            "defender": defender,
+            **converted,
+        }
+    finally:
+        delete_upload_file(temporary_path)
+
 @app.get("/api/tournaments/{tournament_id}/players", response_model=List[schemas.Player])
 def get_players(
     tournament_id: int,
@@ -1578,7 +2894,11 @@ def _get_player_details_data(tournament_id: int, seed_number: int, db: Session):
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
     ).first()
-    
+
+    return _get_player_details_by_player(tournament_id, player, db)
+
+
+def _get_player_details_by_player(tournament_id: int, player: models.Player | None, db: Session):
     if not player:
         return {"player": None, "decks": []}
         
@@ -2345,6 +3665,22 @@ def get_dashboard_stats(
 
 # ===== スナップショット管理 =====
 
+def apply_snapshot(tournament_id: int, stats: dict, db: Session):
+    """Apply snapshot values without committing the current Session."""
+    snap = db.query(models.TournamentSnapshot).filter(
+        models.TournamentSnapshot.tournament_id == tournament_id
+    ).first()
+    if snap is None:
+        snap = models.TournamentSnapshot(tournament_id=tournament_id)
+        db.add(snap)
+    snap.team_usage = stats.get("team_usage", [])
+    snap.char_stats = stats.get("character_stats", [])
+    snap.matchups = stats.get("matchups", [])
+    snap.total_players = stats.get("total_players")
+    snap.total_matches = stats.get("total_matches")
+    return snap
+
+
 def save_snapshot(tournament_id: int, stats: dict, db: Session):
     """_compute_dashboard_stats の結果を tournament_snapshots テーブルに保存する"""
     snap = db.query(models.TournamentSnapshot).filter(
@@ -2680,6 +4016,14 @@ def _compute_dashboard_stats(
     player_result_cache = {}
     for pid in set(p for pids in char_to_players.values() for p in pids):
         player_result_cache[pid] = calc_player_result(pid)
+    player_result_cache = {
+        player_id: result_label(code)
+        for player_id, code in calculate_player_results(
+            require_tournament_viewer(tournament_id, db, current_user),
+            all_players,
+            all_matches,
+        ).items()
+    }
 
     def get_best_result_for_char(c_id):
         """そのキャラを使ったプレイヤーの中で最も良い成績を返す"""
@@ -2745,11 +4089,14 @@ def _compute_dashboard_stats(
                     "best_result": best_res
                 })
                 
+            user_ids = char_to_players.get(c_id, set())
             char_list.append({
                 "id": char.id,
                 "name": char.name,
                 "rarity": char.rarity,
                 "count": count,
+                "player_count": len(user_ids),
+                "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
                 "win_rate": round(win_rate, 1),
@@ -2832,6 +4179,8 @@ def _compute_dashboard_stats(
             "character_ids": original_order,
             "characters": team_chars,
             "count": count,
+            "player_count": len(team_player_ids),
+            "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
             "win_rate": round(win_rate, 1),
@@ -2919,6 +4268,13 @@ def get_dashboard_matchups(
                     matchup_results.append({
                         "match_id": match.id,
                         "round_number": rn,
+                        "attacker_player_id": match.attacker_id,
+                        "defender_player_id": match.defender_id,
+                        "winner_player_id": round_res.winner_id,
+                        "attacker_team_id": attacker_teams[rn].id,
+                        "defender_team_id": defender_teams[rn].id,
+                        "attacker_team_number": rn,
+                        "defender_team_number": rn,
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),
@@ -2948,6 +4304,31 @@ def get_best8_decks(
     cached = get_private_dashboard_cache(tournament, "best8-decks")
     if cached is not None:
         return cached
+    all_players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
+    all_matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
+    if tournament.registration_scope == "champion_8":
+        result_codes = calculate_player_results(tournament, all_players, all_matches)
+        results = []
+        for player in sorted(all_players, key=lambda item: item.champion_slot or 999):
+            result_code = result_codes.get(player.id, "best8")
+            details = _get_player_details_by_player(tournament_id, player, db)
+            results.append({
+                "player": {
+                    "id": player.id,
+                    "seed": player.seed_number,
+                    "original_seed": player.seed_number,
+                    "champion_slot": player.champion_slot,
+                    "name": player.name,
+                    "icon_url": player.icon_url,
+                    "has_deck": bool(details["decks"]),
+                },
+                "result": result_label(result_code),
+                "sort_score": TOURNAMENT_RESULT_SCORES[result_code],
+                "decks": details["decks"],
+            })
+        results.sort(key=lambda item: (item["sort_score"], item["player"]["champion_slot"]))
+        return set_private_dashboard_cache(tournament, "best8-decks", results)
+
     bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
     champ_finals = bracket["champion_finals"]
@@ -2955,29 +4336,26 @@ def get_best8_decks(
     qf_winners = set(champ_finals["qf_winners"]) # ベスト4進出者
     sf_winners = set(champ_finals["sf_winners"]) # 決勝進出者
     winner_id = champ_finals["winner"]           # 優勝者
+    result_codes = calculate_player_results(
+        tournament,
+        all_players,
+        all_matches,
+    )
     
     results = []
     for p_info in best8_players:
         pid = p_info["id"]
         if pid:
             # 成績の判定
-            result_label = "ベスト8"
-            sort_score = 4
-            if pid == winner_id:
-                result_label = "優勝"
-                sort_score = 1
-            elif pid in sf_winners:
-                result_label = "準優勝"
-                sort_score = 2
-            elif pid in qf_winners:
-                result_label = "ベスト4"
-                sort_score = 3
+            result_code = result_codes.get(pid, "best8")
+            result_label_value = result_label(result_code)
+            sort_score = TOURNAMENT_RESULT_SCORES[result_code]
                 
             # 認証済みの内部処理としてプレイヤー詳細データを取得
             details = _get_player_details_data(tournament_id, p_info["original_seed"], db)
             results.append({
                 "player": p_info,
-                "result": result_label,
+                "result": result_label_value,
                 "sort_score": sort_score,
                 "decks": details["decks"]
             })
@@ -3026,6 +4404,7 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
         merged_teams[cid] = {
             **team,
             "count": 0,
+            "player_count": 0,
             "win_count": 0,
             "total_matches": 0,
             "adopted_players": [],
@@ -3037,6 +4416,7 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
         }
     target = merged_teams[cid]
     target["count"] += team.get("count", 0)
+    target["player_count"] += team.get("player_count", 0)
     target["win_count"] += team.get("win_count", 0)
     target["total_matches"] += team.get("total_matches", 0)
     
@@ -3191,6 +4571,24 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
                         score = 1
             result_score_by_player[player.id] = score
 
+    tournaments_by_id = {
+        tournament.id: tournament
+        for tournament in db.query(models.Tournament).filter(
+            models.Tournament.id.in_(list(players_by_tournament))
+        ).all()
+    }
+    result_score_by_player = {}
+    for tournament_id, tournament_players in players_by_tournament.items():
+        codes = calculate_player_results(
+            tournaments_by_id[tournament_id],
+            tournament_players,
+            matches_by_tournament.get(tournament_id, []),
+        )
+        result_score_by_player.update({
+            player_id: TOURNAMENT_RESULT_SCORES[code]
+            for player_id, code in codes.items()
+        })
+
     deck_set_to_player = {
         deck_set.id: deck_set.player_id for deck_set in deck_sets
     }
@@ -3277,6 +4675,7 @@ class CrossTournamentRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
 
 
 class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
@@ -3284,6 +4683,82 @@ class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
+
+
+def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope="all"):
+    query = db.query(models.Tournament).filter(
+        models.Tournament.publication_status == "published"
+    )
+    if tournament_ids:
+        query = query.filter(models.Tournament.id.in_(tournament_ids))
+    if registration_scope != "all":
+        query = query.filter(models.Tournament.registration_scope == registration_scope)
+    allowed = {tournament.id for tournament in query.all()}
+    if tournament_ids:
+        return [tournament_id for tournament_id in tournament_ids if tournament_id in allowed]
+    return sorted(allowed)
+
+
+def cross_registration_breakdown(tournament_ids, db: Session):
+    if not tournament_ids:
+        return {
+            "total_tournaments": 0, "full_64_tournaments": 0, "champion_8_tournaments": 0,
+            "total_registered_players": 0, "full_64_registered_players": 0,
+            "champion_8_registered_players": 0, "total_teams": 0,
+            "total_matches": 0, "total_round_results": 0,
+        }
+    tournaments = db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all()
+    players = db.query(models.Player).filter(models.Player.tournament_id.in_(tournament_ids)).all()
+    player_ids = [player.id for player in players]
+    deck_set_ids = [row[0] for row in db.query(models.DeckSet.id).filter(models.DeckSet.player_id.in_(player_ids)).all()] if player_ids else []
+    matches = db.query(models.Match).filter(models.Match.tournament_id.in_(tournament_ids)).all()
+    match_ids = [match.id for match in matches]
+    scope_by_tournament = {tournament.id: tournament.registration_scope for tournament in tournaments}
+    return {
+        "total_tournaments": len(tournaments),
+        "full_64_tournaments": sum(t.registration_scope == "full_64" for t in tournaments),
+        "champion_8_tournaments": sum(t.registration_scope == "champion_8" for t in tournaments),
+        "total_registered_players": len(players),
+        "full_64_registered_players": sum(scope_by_tournament[p.tournament_id] == "full_64" for p in players),
+        "champion_8_registered_players": sum(scope_by_tournament[p.tournament_id] == "champion_8" for p in players),
+        "total_teams": db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id.in_(deck_set_ids)).count() if deck_set_ids else 0,
+        "total_matches": len(matches),
+        "total_round_results": db.query(models.RoundResult).filter(models.RoundResult.match_id.in_(match_ids)).count() if match_ids else 0,
+    }
+
+
+def empty_cross_tournament_stats(db: Session):
+    return {
+        "total_players": 0, "total_matches": 0, "character_usage": [],
+        "character_stats": [], "character_usage_by_result": _compute_character_usage_by_result([], db),
+        "team_usage": [], "matchups": [],
+        "registration_breakdown": cross_registration_breakdown([], db),
+    }
+
+
+def cross_snapshot_has_distinct_counts(snapshot, db: Session):
+    """Accept only structurally complete v2-style aggregation JSON.
+
+    Legacy/corrupt JSON falls back as a whole tournament.  Empty arrays are
+    valid only when the tournament genuinely has no registered players.
+    """
+    char_stats = snapshot.char_stats
+    team_usage = snapshot.team_usage
+    if not isinstance(char_stats, list) or not isinstance(team_usage, list):
+        return False
+    registered_players = db.query(models.Player.id).filter(
+        models.Player.tournament_id == snapshot.tournament_id
+    ).count()
+    if registered_players == 0:
+        return not char_stats and not team_usage
+    if not char_stats or not team_usage:
+        return False
+    return all(
+        isinstance(item, dict) and isinstance(item.get("player_count"), int)
+        and item["player_count"] >= 0
+        for item in char_stats + team_usage
+    )
 
 
 @app.post("/api/dashboard/cross-tournament/stats")
@@ -3297,24 +4772,40 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             body.play_server,
             body.championship_id
         )
+    target_ids = filter_cross_tournament_ids(
+        db, target_ids, body.registration_scope
+    )
 
     print("[cross stats] body.tournament_ids:", body.tournament_ids)
     print("[cross stats] target_ids:", target_ids)
+
+    if not target_ids:
+        return empty_cross_tournament_stats(db)
 
     snaps = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id.in_(target_ids)
     ).all() if target_ids else []
 
-    if target_ids and len(snaps) == len(target_ids):
-        print(f"[cross stats] using snapshots: {len(snaps)} / {len(target_ids)}")
+    usable_snaps = [
+        snapshot for snapshot in snaps
+        if cross_snapshot_has_distinct_counts(snapshot, db)
+    ]
+    snapshot_ids = {snapshot.tournament_id for snapshot in usable_snaps}
+    raw_ids = [tournament_id for tournament_id in target_ids if tournament_id not in snapshot_ids]
+    if usable_snaps:
+        print(f"[cross stats] using snapshots: {len(usable_snaps)} / {len(target_ids)}")
+        raw_stats = _compute_cross_tournament_stats(raw_ids, db) if raw_ids else None
 
-        total_players = sum(s.total_players for s in snaps if s.total_players)
-        total_matches = sum(s.total_matches for s in snaps if s.total_matches)
+        total_players = sum(s.total_players for s in usable_snaps if s.total_players)
+        total_matches = sum(s.total_matches for s in usable_snaps if s.total_matches)
+        if raw_stats:
+            total_players += raw_stats.get("total_players", 0)
+            total_matches += raw_stats.get("total_matches", 0)
         
         merged_chars = {}
         merged_teams = {}
         
-        for snap in snaps:
+        for snap in usable_snaps:
             print("[cross stats] snap total_players:", snap.total_players)
             print("[cross stats] snap total_matches:", snap.total_matches)
             print("[cross stats] snap char_stats len:", len(snap.char_stats or []))
@@ -3330,6 +4821,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                         "name": char_stat.get("name"),
                         "rarity": char_stat.get("rarity"),
                         "count": 0,
+                        "player_count": 0,
                         "win_count": 0,
                         "total_matches": 0,
                         "best_result": char_stat.get("best_result", "不明"),
@@ -3342,6 +4834,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                         "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
                     }
                 merged_chars[cid]["count"] += char_stat.get("count", 0)
+                merged_chars[cid]["player_count"] += char_stat["player_count"]
                 merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
                 merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
                 
@@ -3357,12 +4850,45 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
                 if not cid: continue
                 _merge_team_position_and_adopted(merged_teams, team, cid)
 
+        # Old/missing snapshots are replaced at the tournament boundary by one
+        # raw aggregate.  Usable snapshot tournament IDs are excluded from this
+        # query, preventing both source-level and field-level double counting.
+        if raw_stats:
+            for char_stat in raw_stats.get("character_stats", []):
+                cid = char_stat.get("id")
+                if not cid:
+                    continue
+                if cid not in merged_chars:
+                    merged_chars[cid] = {
+                        "id": cid, "name": char_stat.get("name"),
+                        "rarity": char_stat.get("rarity"), "count": 0,
+                        "player_count": 0, "win_count": 0, "total_matches": 0,
+                        "best_result": char_stat.get("best_result", "不明"),
+                        "position_stats": [], "team_position_stats": [],
+                        "_pos_map": {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)},
+                        "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)},
+                    }
+                merged_chars[cid]["count"] += char_stat.get("count", 0)
+                merged_chars[cid]["player_count"] += char_stat.get("player_count", 0)
+                merged_chars[cid]["win_count"] += char_stat.get("win_count", 0)
+                merged_chars[cid]["total_matches"] += char_stat.get("total_matches", 0)
+                current_score = RESULT_SCORES.get(merged_chars[cid]["best_result"], 999)
+                new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
+                if new_score < current_score:
+                    merged_chars[cid]["best_result"] = char_stat.get("best_result")
+                _merge_char_position_stats(merged_chars, char_stat, cid)
+            for team in raw_stats.get("team_usage", []):
+                canonical_id = team.get("canonical_id")
+                if canonical_id:
+                    _merge_team_position_and_adopted(merged_teams, team, canonical_id)
+
         # Recalculate rates for chars
         char_list = []
         for char in merged_chars.values():
             t = char["total_matches"]
             w = char["win_count"]
             char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            char["adoption_rate"] = round(char["player_count"] / total_players * 100, 1) if total_players else 0.0
             _finalize_char_position_stats(char)
             char_list.append(char)
         char_list.sort(key=lambda x: x["count"], reverse=True)
@@ -3373,6 +4899,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             t = team["total_matches"]
             w = team["win_count"]
             team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
+            team["adoption_rate"] = round(team.get("player_count", 0) / total_players * 100, 1) if total_players else 0.0
             _finalize_team_position_and_adopted(team)
             team_list.append(team)
         team_list.sort(key=lambda x: x["count"], reverse=True)
@@ -3386,6 +4913,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
             "team_usage": team_list[:50],
             "matchups": [] # Usually cross matchups are fetched via their own endpoint
         }
+        stats["registration_breakdown"] = cross_registration_breakdown(target_ids, db)
         return stats
     else:
         print("[cross stats] fallback raw compute")
@@ -3399,7 +4927,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     """複数大会を横断したキャラ採用率・編成使用率・勝率を集計する"""
     tournament_ids = get_published_tournament_ids(tournament_ids_input, db)
     if not tournament_ids:
-        raise HTTPException(status_code=400, detail="tournament_ids が必要です")
+        return empty_cross_tournament_stats(db)
 
     # 対象大会の全プレイヤーを取得
     all_players = db.query(models.Player).filter(
@@ -3650,6 +5178,23 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             t_result_cache[p.id] = calc_result_t(p.id)
         per_tournament_results[tid] = t_result_cache
 
+    tournaments_by_id = {
+        tournament.id: tournament
+        for tournament in db.query(models.Tournament).filter(
+            models.Tournament.id.in_(tournament_ids)
+        ).all()
+    }
+    per_tournament_results = {}
+    for tournament_id in tournament_ids:
+        codes = calculate_player_results(
+            tournaments_by_id[tournament_id],
+            [player for player in all_players if player.tournament_id == tournament_id],
+            [match for match in all_matches if match.tournament_id == tournament_id],
+        )
+        per_tournament_results[tournament_id] = {
+            player_id: result_label(code) for player_id, code in codes.items()
+        }
+
     # キャラ→使用プレイヤーのマッピング
     char_to_players = {}
     for ds in deck_sets:
@@ -3736,6 +5281,8 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                 "name": char.name,
                 "rarity": char.rarity,
                 "count": count,
+                "player_count": len(user_ids),
+                "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
                 "win_rate": round(win_rate, 1),
@@ -3814,6 +5361,8 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             "character_ids": original_order,
             "characters": team_chars,
             "count": count,
+            "player_count": len(team_player_ids),
+            "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
             "win_rate": round(win_rate, 1),
@@ -3829,14 +5378,19 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
         "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db),
         "team_usage": team_list,
         "total_players": len(player_ids),
-        "total_matches": len(matches)
+        "total_matches": len(all_matches),
+        "registration_breakdown": cross_registration_breakdown(tournament_ids, db),
     }
 
 
 @app.post("/api/dashboard/cross-tournament/matchups")
 def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     """複数大会を横断した対戦データを集計する"""
-    tournament_ids = get_published_tournament_ids(body.tournament_ids, db)
+    tournament_ids = filter_cross_tournament_ids(
+        db, body.tournament_ids, body.registration_scope
+    )
+    if not tournament_ids:
+        return {"matchups": []}
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 
@@ -3894,6 +5448,13 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
                     matchup_results.append({
                         "match_id": match.id,
                         "round_number": rn,
+                        "attacker_player_id": match.attacker_id,
+                        "defender_player_id": match.defender_id,
+                        "winner_player_id": round_res.winner_id,
+                        "attacker_team_id": attacker_teams[rn].id,
+                        "defender_team_id": defender_teams[rn].id,
+                        "attacker_team_number": rn,
+                        "defender_team_number": rn,
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),
@@ -3918,6 +5479,7 @@ class CrossTournamentTeamsRequest(PydanticBaseModel):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
+    registration_scope: Literal["all", "full_64", "champion_8"] = "all"
     seed: Optional[int] = None
     character_ids: Optional[List[int]] = None
     limit: Optional[int] = 10
@@ -4011,6 +5573,9 @@ def get_cross_dashboard_teams(
     else:
         tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
 
+    tournament_ids = filter_cross_tournament_ids(
+        db, tournament_ids, req.registration_scope
+    )
     print("[cross teams] req.tournament_ids:", req.tournament_ids)
     print("[cross teams] target_ids:", tournament_ids)
     # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
@@ -4083,7 +5648,9 @@ def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailReq
             req.play_server,
             req.championship_id
         )
-    target_ids = get_published_tournament_ids(target_ids, db)
+    target_ids = filter_cross_tournament_ids(
+        db, target_ids, req.registration_scope
+    )
     if not target_ids:
         return {"character_usage": [], "team_usage": []}
 
@@ -4329,5 +5896,13 @@ def get_dashboard_player_stats(
         value = get_player_details(tournament_id, seed, db, current_user)
         return set_private_dashboard_cache(tournament, "player-stats", value, params)
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).order_by(models.Player.seed_number).all()
-    value = {"players": [schemas.Player.from_orm(p) for p in players]}
+    result_codes = calculate_player_results(
+        tournament,
+        players,
+        db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all(),
+    )
+    for player in players:
+        player.result_code = result_codes[player.id]
+        player.result = result_label(result_codes[player.id])
+    value = {"players": players}
     return set_private_dashboard_cache(tournament, "player-stats", value, params)

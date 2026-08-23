@@ -105,7 +105,7 @@ export default function CharacterSearchSelect({
     >
       <span className="block truncate pr-2">
         {selectedChar ? (
-          selectedChar.id === 9999 ? '空枠' : `[${selectedChar.rarity}] ${selectedChar.name}`
+          selectedChar.id === 9999 ? '空き枠' : `[${selectedChar.rarity}] ${selectedChar.name}`
         ) : (
           "(不明)"
         )}
@@ -154,11 +154,11 @@ export default function CharacterSearchSelect({
         
         <Command.Item
           key="9999"
-          value="空枠 empty 9999"
+          value="空き枠 empty 9999"
           onSelect={() => handleSelect(9999)}
           className="relative flex cursor-pointer select-none items-center rounded-md sm:rounded-sm px-3 py-3 sm:py-2 text-base sm:text-sm outline-none aria-selected:bg-slate-700/80 aria-selected:text-white data-[selected=true]:bg-slate-700/80 data-[selected=true]:text-white data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 mb-2 min-h-[48px] sm:min-h-0"
         >
-          <span className="flex-1">空枠</span>
+          <span className="flex-1">空き枠</span>
           {value === 9999 && <Check className="h-5 w-5 sm:h-4 sm:w-4 text-indigo-400" />}
         </Command.Item>
 

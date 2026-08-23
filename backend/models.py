@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, DateTime, UniqueConstraint, JSON
+from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, UniqueConstraint, CheckConstraint, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -65,6 +65,12 @@ class Championship(Base):
 
 class Tournament(Base):
     __tablename__ = "tournaments"
+    __table_args__ = (
+        CheckConstraint(
+            "registration_scope IN ('full_64', 'champion_8')",
+            name="ck_tournament_registration_scope",
+        ),
+    )
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     date = Column(Date, nullable=False)
@@ -75,6 +81,13 @@ class Tournament(Base):
     publication_status = Column(String, nullable=False, default="draft", server_default="draft")
     published_at = Column(DateTime(timezone=True), nullable=True)
     published_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
+    registration_scope = Column(
+        String,
+        nullable=False,
+        default="full_64",
+        server_default="full_64",
+    )
+    provider_game_start_date = Column(Date, nullable=True)
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
@@ -92,18 +105,20 @@ class Tournament(Base):
     def play_server(self):
         return self.creator.play_server if self.creator else None
 
-    @property
-    def provider_game_start_date(self):
-        return self.creator.game_start_date if self.creator else None
-
 class Player(Base):
     __tablename__ = "players"
     __table_args__ = (
         UniqueConstraint('tournament_id', 'seed_number', name='uq_player_tournament_seed'),
+        UniqueConstraint('tournament_id', 'champion_slot', name='uq_player_tournament_champion_slot'),
+        CheckConstraint(
+            "champion_slot IS NULL OR (champion_slot >= 1 AND champion_slot <= 8)",
+            name="ck_player_champion_slot_range",
+        ),
     )
     id = Column(Integer, primary_key=True, index=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"))
     seed_number = Column(Integer, nullable=True) # 1 to 64
+    champion_slot = Column(SmallInteger, nullable=True)
     name = Column(String, nullable=False)
     icon_url = Column(String, nullable=True) # 追加: プレイヤーアイコンのURL
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -142,9 +157,21 @@ class DeckTeam(Base):
 
 class Match(Base):
     __tablename__ = "matches"
+    __table_args__ = (
+        UniqueConstraint(
+            'tournament_id', 'bracket_stage', 'bracket_slot',
+            name='uq_match_tournament_bracket_slot',
+        ),
+        CheckConstraint(
+            "bracket_stage IS NULL OR bracket_stage IN ('quarterfinal', 'semifinal', 'final')",
+            name="ck_match_bracket_stage",
+        ),
+    )
     id = Column(Integer, primary_key=True, index=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"))
     stage = Column(String, nullable=False) # "Best 64", "Final" etc.
+    bracket_stage = Column(String, nullable=True)
+    bracket_slot = Column(SmallInteger, nullable=True)
     attacker_id = Column(Integer, ForeignKey("players.id"))
     defender_id = Column(Integer, ForeignKey("players.id"))
     winner_id = Column(Integer, ForeignKey("players.id"), nullable=True)

@@ -56,6 +56,9 @@ def process_images(
     seed_number,
     debug=False,
     pre_cropped_flags=None,
+    include_source_metadata=False,
+    created_output_paths=None,
+    crop_owner_player_id=None,
 ):
     analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
@@ -118,6 +121,7 @@ def process_images(
             "path": path, 
             "img": img_res, 
             "y_tab": y_anchor_tab,
+            "source_image_index": image_index,
             "x_anchor": x_anchor_tab  # ラウンド判定用X座標
         })
         
@@ -179,16 +183,22 @@ def process_images(
                 })
                 continue
             
-            crop_stem = (
-                f"crop_t{tournament_id}_s{seed_number}_{analysis_id}"
-                f"_r{r_idx+1}_c{c_idx+1}"
+            owner_label = (
+                f"p{int(crop_owner_player_id)}"
+                if crop_owner_player_id is not None
+                else f"s{seed_number}"
             )
+            crop_stem = f"crop_t{tournament_id}_{owner_label}_{analysis_id}_r{r_idx+1}_c{c_idx+1}"
             crop_filename = f"{crop_stem}.png"
             crop_path = os.path.join(cropped_dir, crop_filename)
             cv2.imwrite(crop_path, face)
+            if created_output_paths is not None:
+                created_output_paths.append(crop_path)
             preview_filename = f"{crop_stem}_preview.webp"
             preview_path = os.path.join(cropped_dir, preview_filename)
             preview_written = _write_preview_image(preview_path, face)
+            if preview_written and created_output_paths is not None:
+                created_output_paths.append(preview_path)
             
             # AI推論
             pred_id, conf = predict_character(face, templates, threshold=0.65)
@@ -224,6 +234,9 @@ def process_images(
                 "collection_analysis": collection_analysis,
             })
             
+        if include_source_metadata:
+            for character in team:
+                character["source_image_index"] = r_data["source_image_index"]
         teams.append(team)
         
     # 不足しているラウンドを補完

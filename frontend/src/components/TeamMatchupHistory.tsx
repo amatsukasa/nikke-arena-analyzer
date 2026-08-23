@@ -105,7 +105,7 @@ export default function TeamMatchupHistory({
         <div className="space-y-2">
           {filteredMatchups.map((match, index) => (
             <div
-              key={`${match.tournamentName ?? ""}-${match.stage ?? ""}-${index}`}
+              key={match.participationKey || `${match.tournamentName ?? ""}-${match.stage ?? ""}-${index}`}
               onClick={() => onSelectOpponent(match.opponentCanonical, {
                 character_ids: match.opponent,
                 canonical_id: match.opponentCanonical,

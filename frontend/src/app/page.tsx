@@ -10,6 +10,8 @@ import CharacterUsageByResultRanking from "../components/CharacterUsageByResultR
 import TeamMatchupHistory from "../components/TeamMatchupHistory";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { adoptionDisplay } from "@/lib/adoptionRate";
+import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 
 const SERVER_LABELS: Record<string, string> = {
   KR: "韓国（KR）",
@@ -70,6 +72,7 @@ function DashboardContent() {
 
   const [tournament, setTournament] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
+  const [statsError, setStatsError] = useState("");
   const [matchups, setMatchups] = useState<any[]>([]);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -330,6 +333,7 @@ function DashboardContent() {
 
     const fetchData = async () => {
       setLoading(true);
+      setStatsError("");
       try {
         const timestamp = Date.now();
         
@@ -380,9 +384,12 @@ function DashboardContent() {
             const firstKey = makeTeamKey(firstTeam.character_ids || firstTeam.characters?.map((c: any) => c.id) || firstTeam.canonical_id);
             setSelectedTeam(firstKey || firstTeam.canonical_id);
           }
+        } else {
+          throw new Error(`集計データを取得できませんでした（HTTP ${statsRes.status}）`);
         }
       } catch (e) {
         console.error(e);
+        setStatsError(e instanceof Error ? e.message : "集計データを取得できませんでした。");
       } finally {
         setLoading(false);
       }
@@ -560,35 +567,10 @@ function DashboardContent() {
 
   // --- Matchups logic ---
   const targetMatchupKey = makeTeamKey(selectedTeam || searchParams.get("teamKey") || searchParams.get("team"));
-  const teamMatchups = matchups.filter(m => {
-    return makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey || makeTeamKey(m.canonical_defender || m.defender_team) === targetMatchupKey;
-  });
-  let totalWins = 0, totalLosses = 0;
-  let attackWins = 0, attackLosses = 0;
-  let defenseWins = 0, defenseLosses = 0;
-  const matchupDetails: any[] = [];
-
-  teamMatchups.forEach(m => {
-    const isAttacker = makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey;
-    const isWin = m.winner_is_attacker ? isAttacker : !isAttacker;
-    if (isWin) totalWins++; else totalLosses++;
-    if (isAttacker) { if (isWin) attackWins++; else attackLosses++; }
-    else { if (isWin) defenseWins++; else defenseLosses++; }
-    matchupDetails.push({ 
-      opponent: isAttacker ? m.defender_team : m.attacker_team, 
-      opponentCanonical: isAttacker ? m.canonical_defender : m.canonical_attacker,
-      attackerTeam: m.attacker_team,
-      defenderTeam: m.defender_team,
-      attackerCollections: m.attacker_collections,
-      defenderCollections: m.defender_collections,
-      isAttacker, 
-      isWin, 
-      stage: m.stage,
-      tournamentName: m.tournament_name,
-      attackerName: m.attacker_name,
-      defenderName: m.defender_name
-    });
-  });
+  const {
+    details: matchupDetails, totalWins, totalLosses,
+    attackWins, attackLosses, defenseWins, defenseLosses,
+  } = teamMatchupPerspective(matchups, targetMatchupKey, makeTeamKey);
 
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
@@ -789,11 +771,22 @@ function DashboardContent() {
 
           {/* Content */}
           <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
+        {statsError && (
+          <div role="alert" className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-200">
+            {statsError}
+          </div>
+        )}
         
 
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
+            {stats?.registration_breakdown && (
+              <div className="rounded-xl bg-slate-800/50 p-4 text-sm text-slate-300 ring-1 ring-white/10">
+                集計対象 {stats.registration_breakdown.total_registered_players}人
+                （64人モード {stats.registration_breakdown.full_64_registered_players}人／8人モード {stats.registration_breakdown.champion_8_registered_players}人）
+              </div>
+            )}
             <CharacterUsageByResultRanking
               stats={stats}
               allCharacters={allCharacters}
@@ -895,7 +888,7 @@ function DashboardContent() {
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-emerald-400" />
-                <span>編成（5名組み合わせ）使用率ランキング</span>
+                <span>編成（5名組み合わせ）登録データ内採用率ランキング</span>
               </h2>
               {/* レスポンシブ統合リスト: PCでは行、スマホではカード（画像DOMは1つのみ） */}
               <div className="space-y-3">
@@ -919,8 +912,8 @@ function DashboardContent() {
                     "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
                   };
                   const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                  const totalPlayers = 64;
-                  const adoptionPct = Math.round((team.count / totalPlayers) * 100);
+                  const totalPlayers = Number(stats?.registration_breakdown?.total_registered_players ?? stats?.total_players ?? 0);
+                  const adoption = adoptionDisplay(team, totalPlayers);
                   return (
                     <div
                       key={idx}
@@ -988,18 +981,16 @@ function DashboardContent() {
 
                       {/* PC用: 採用数＆率 */}
                       <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        <span className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                          {team.count}
-                        </span>
+                        <span className="text-sm font-black text-slate-100">{adoption.occurrenceCount}回 / {adoption.playerCount}人</span>
                         <span className="text-[10px] text-slate-500 font-bold">
-                          {totalPlayers}人中 ({adoptionPct}%)
+                          {adoption.totalRegisteredPlayers}人中 ({adoption.adoptionRate.toFixed(1)}%)
                         </span>
                       </div>
 
                       {/* スマホ用フッター: 採用数＆勝敗詳細 */}
                       <div className="flex md:hidden items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
                         <div>
-                          採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
+                          部隊出現: <span className="font-bold text-slate-100">{adoption.occurrenceCount}</span>回・採用Player: <span className="font-bold text-slate-100">{adoption.playerCount}</span>人 ({adoption.adoptionRate.toFixed(1)}%)
                         </div>
                         {team.total_matches > 0 && (
                           <>
