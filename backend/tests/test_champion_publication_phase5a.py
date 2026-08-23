@@ -111,6 +111,29 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertEqual(result["invalid_slots"], [])
         self.assertEqual(result["invalid_match_slots"], [])
 
+    def test_published_champion_dashboard_is_anonymous_and_scope_aware(self):
+        self.tournament.publication_status = "published"
+        self.db.commit()
+
+        summary = main.get_dashboard_summary(self.tournament.id, self.db, None)
+        self.assertEqual(
+            (summary["registered_player_count"], summary["expected_player_count"],
+             summary["registered_team_count"], summary["expected_team_count"],
+             summary["registered_match_count"], summary["expected_match_count"]),
+            (8, 8, 40, 40, 7, 7),
+        )
+        self.assertEqual(summary["missing_seed_numbers"], [])
+
+        stats = main.get_dashboard_stats(self.tournament.id, None, self.db, None)
+        matchups = main.get_dashboard_matchups(self.tournament.id, None, self.db, None)
+        best8 = main.get_best8_decks(self.tournament.id, self.db, None)
+        players = main.get_dashboard_player_stats(self.tournament.id, None, self.db, None)
+        self.assertEqual((stats["total_players"], stats["total_matches"]), (8, 7))
+        self.assertEqual(len(matchups["matchups"]), 35)
+        self.assertEqual((len(best8), len(players["players"])), (8, 8))
+        self.assertTrue(all(item["player"]["id"] for item in best8))
+        self.assertTrue(all(len(item["decks"]) == 5 for item in best8))
+
     def test_seed_must_belong_to_the_players_champion_slot(self):
         self.players[1].seed_number = 8
         self.players[1].name = "Player 8"
@@ -160,6 +183,64 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertEqual(snapshot.team_usage, stats["team_usage"])
         self.assertEqual(snapshot.char_stats, stats["character_stats"])
         self.assertEqual(snapshot.matchups, stats["matchups"])
+
+    def test_identical_team_matchups_preserve_both_player_participations(self):
+        """A canonical mirror keeps distinct attacker/defender identities and a 50% aggregate."""
+        for player in self.players:
+            for team in player.deck_sets[0].teams:
+                first = (team.team_number - 1) * 5 + 1
+                team.char1_id, team.char2_id, team.char3_id = first, first + 1, first + 2
+                team.char4_id, team.char5_id = first + 3, first + 4
+        self.db.commit()
+
+        raw = main._compute_dashboard_stats(self.tournament.id, self.db, self.owner)
+        raw_matchups = main.get_dashboard_matchups(
+            self.tournament.id, None, self.db, self.owner
+        )["matchups"]
+        snapshot = enrich_champion_snapshot_stats(deepcopy(raw), self.tournament.id, self.db)
+
+        first_team = next(item for item in snapshot["team_usage"] if item["canonical_id"] == "1,2,3,4,5")
+        self.assertEqual((first_team["count"], first_team["win_count"], first_team["total_matches"]), (8, 7, 14))
+        self.assertEqual(first_team["win_rate"], 50.0)
+
+        mirrored_rounds = [
+            item for item in raw_matchups
+            if item["canonical_attacker"] == "1,2,3,4,5"
+            and item["canonical_defender"] == "1,2,3,4,5"
+        ]
+        self.assertEqual(len(mirrored_rounds), 7)
+        for item in mirrored_rounds:
+            self.assertNotEqual(item["attacker_player_id"], item["defender_player_id"])
+            self.assertNotEqual(item["attacker_team_id"], item["defender_team_id"])
+            self.assertIn(item["winner_player_id"], (item["attacker_player_id"], item["defender_player_id"]))
+            self.assertEqual(item["attacker_team_number"], 1)
+            self.assertEqual(item["defender_team_number"], 1)
+
+        identity = lambda item: (
+            item["match_id"], item["round_number"], item["attacker_player_id"],
+            item["defender_player_id"], item["attacker_team_id"], item["defender_team_id"],
+            item["winner_player_id"], item["winner_is_attacker"],
+        )
+        self.assertEqual([identity(item) for item in snapshot["matchups"]], [identity(item) for item in raw_matchups])
+
+    def test_identical_teams_with_empty_slot_keep_matchup_identities(self):
+        for player in self.players[:2]:
+            team = player.deck_sets[0].teams[0]
+            team.char1_id = 9999
+            team.char2_id, team.char3_id, team.char4_id, team.char5_id = 2, 3, 4, 5
+        self.db.commit()
+
+        matchups = main.get_dashboard_matchups(
+            self.tournament.id, None, self.db, self.owner
+        )["matchups"]
+        qf1 = self.db.query(models.Match).filter_by(
+            tournament_id=self.tournament.id, bracket_stage="quarterfinal", bracket_slot=1,
+        ).one()
+        qf1_round1 = next(item for item in matchups if item["match_id"] == qf1.id and item["round_number"] == 1)
+        self.assertEqual(qf1_round1["canonical_attacker"], qf1_round1["canonical_defender"])
+        self.assertIn("9999", qf1_round1["canonical_attacker"])
+        self.assertNotEqual(qf1_round1["attacker_player_id"], qf1_round1["defender_player_id"])
+        self.assertNotEqual(qf1_round1["attacker_team_id"], qf1_round1["defender_team_id"])
 
     def test_player_slot_count_extra_player_seed_name_and_deck_errors(self):
         ninth = models.Player(tournament_id=self.tournament.id, champion_slot=None, seed_number=None, name="extra")

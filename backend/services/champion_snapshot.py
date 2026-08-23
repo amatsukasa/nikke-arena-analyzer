@@ -86,6 +86,13 @@ def enrich_champion_snapshot_stats(stats, tournament_id, db):
             matchups.append({
                 "match_id": match.id,
                 "round_number": round_result.round_number,
+                "attacker_player_id": match.attacker_id,
+                "defender_player_id": match.defender_id,
+                "winner_player_id": round_result.winner_id,
+                "attacker_team_id": attacker_team.id,
+                "defender_team_id": defender_team.id,
+                "attacker_team_number": round_result.round_number,
+                "defender_team_number": round_result.round_number,
                 "stage": match.stage,
                 "attacker_team": left,
                 "defender_team": right,

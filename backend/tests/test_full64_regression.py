@@ -229,6 +229,22 @@ class Full64RegressionTest(unittest.TestCase):
         ]
         self.assertEqual(stored_pairs, [(*pair, pair[1]) for pair in _match_pairs()])
 
+    def test_full64_identical_team_matchups_keep_both_participant_identities(self):
+        stats = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
+        team = next(item for item in stats["team_usage"] if item["canonical_id"] == "1,2,3,4,5")
+        self.assertEqual((team["win_count"], team["total_matches"], team["win_rate"]), (63, 126, 50.0))
+
+        matchups = main.get_dashboard_matchups(
+            self.tournament.id, None, self.db, self.user
+        )["matchups"]
+        self.assertEqual(len(matchups), 63)
+        for item in matchups:
+            self.assertEqual(item["canonical_attacker"], item["canonical_defender"])
+            self.assertNotEqual(item["attacker_player_id"], item["defender_player_id"])
+            self.assertNotEqual(item["attacker_team_id"], item["defender_team_id"])
+            self.assertEqual(item["winner_player_id"], item["attacker_player_id"])
+            self.assertTrue(item["winner_is_attacker"])
+
     def test_all_current_result_calculations_agree_on_fixed_outcomes(self):
         expected_distribution = Counter({
             "ベスト64": 32,
@@ -365,12 +381,14 @@ class Full64RegressionTest(unittest.TestCase):
 class FrontendFull64ContractTest(unittest.TestCase):
     """Static source-contract checks; these do not execute React components."""
 
-    def test_static_source_contract_uses_fixed_denominator_64(self):
+    def test_static_source_contract_uses_backend_player_adoption_metrics(self):
         frontend = BACKEND_DIR.parent / "frontend" / "src" / "app"
         for relative_path in (Path("page.tsx"), Path("tournament/[id]/dashboard/page.tsx")):
             source = (frontend / relative_path).read_text(encoding="utf-8")
-            self.assertRegex(source, r"const\s+totalPlayers\s*=\s*64\s*;")
-            self.assertRegex(source, r"team\.count\s*/\s*totalPlayers")
+            self.assertNotRegex(source, r"const\s+totalPlayers\s*=\s*64\s*;")
+            self.assertIn("adoptionDisplay(team, totalPlayers)", source)
+            self.assertIn("adoption.playerCount", source)
+            self.assertIn("adoption.adoptionRate", source)
 
     def test_static_source_contract_keeps_first_player_as_attacker_left_side(self):
         source = (BACKEND_DIR.parent / "frontend/src/app/tournament/[id]/page.tsx").read_text(encoding="utf-8")

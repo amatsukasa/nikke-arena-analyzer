@@ -2,17 +2,19 @@
 export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Upload, ChevronLeft, User, ShieldAlert, CheckCircle2, Trophy, Swords, BarChart3 } from "lucide-react";
+import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
 import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
 import DeckRegistrationViewer from "../../../components/DeckRegistrationViewer";
 import PlayerIconEditor from "../../../components/PlayerIconEditor";
 import TournamentPlayerPill from "../../../components/TournamentPlayerPill";
+import MatchResultEditor from "../../../components/MatchResultEditor";
 import { useAuth } from "../../../context/AuthContext";
 import { apiErrorMessage, normalizeTournament, TournamentSummary } from "../../../lib/tournaments";
 import { prepareAnalysisImage } from "../../../lib/deckImagePreparation";
 import { hasCompleteRegistrationStructure, normalizeAnalyzedRegistrationTeams, normalizeSavedRegistrationTeams, registrationSaveConfirmation, registrationTeamsPayload, validateRegistrationTeams } from "../../../lib/deckRegistration";
+import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } from "../../../lib/matchRegistration";
 
 export default function TournamentDetailRouter() {
   const params = useParams();
@@ -84,10 +86,9 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const [mode, setMode] = useState<"deck" | "match">("deck");
   const [attackerSeed, setAttackerSeed] = useState(1);
   const [defenderSeed, setDefenderSeed] = useState(2);
-  const [matchFile, setMatchFile] = useState<File | null>(null);
-  const [matchPreview, setMatchPreview] = useState<string | null>(null);
-  const [matchResult, setMatchResult] = useState<any>(null);
   const [matchStage, setMatchStage] = useState("Groups");
+  const [full64MatchTeams,setFull64MatchTeams]=useState<{attacker:any[];defender:any[]}>({attacker:[],defender:[]});
+  const [full64MatchDirty,setFull64MatchDirty]=useState(false);
 
   // フォーム用プレイヤー情報
   const [formPlayerIcon, setFormPlayerIcon] = useState("");
@@ -157,11 +158,13 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       loadPlayerDetails(seed);
     }
   }, [seed, mode, tournamentId]);
+  useEffect(()=>{if(mode!=="match"||!tournamentId)return;const controller=new AbortController();Promise.all([attackerSeed,defenderSeed].map(async playerSeed=>{const response=await fetch(`/api/tournaments/${tournamentId}/players/${playerSeed}/details`,{cache:"no-store",signal:controller.signal});if(!response.ok)return [];return normalizeSavedRegistrationTeams(await response.json());})).then(([attacker,defender])=>setFull64MatchTeams({attacker,defender})).catch(error=>{if(!(error instanceof DOMException&&error.name==="AbortError"))setFull64MatchTeams({attacker:[],defender:[]});});return()=>controller.abort();},[mode,tournamentId,attackerSeed,defenderSeed]);
 
   const seeds = Array.from({ length: 64 }, (_, i) => i + 1);
-  const resultsRef = useRef<HTMLDivElement>(null);
 
   const handlePlayerClick = (s: number) => {
+    if (mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄してPlayer登録へ移動しますか？")) return;
+    setFull64MatchDirty(false);
     setMode("deck");
     setSeed(s);
     if (s === seed) void loadPlayerDetails(s);
@@ -174,6 +177,8 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   };
 
   const handlePairClick = (s1: number, s2: number, stage: string) => {
+    if (mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して別の試合へ移動しますか？")) return;
+    setFull64MatchDirty(false);
     setMode("match");
     setAttackerSeed(s1);
     setDefenderSeed(s2);
@@ -263,87 +268,6 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     }
   };
 
-  const handleMatchFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      setMatchFile(file);
-      setMatchPreview(URL.createObjectURL(file));
-    }
-  };
-
-  const handleMatchUpload = async () => {
-    if (!matchFile || !tournamentId) return;
-    setIsUploading(true);
-
-    try {
-      const preparedMatchImage = await prepareAnalysisImage(matchFile, {
-        maxOutputWidth: 1080,
-        filenameSuffix: ".match-modal.png",
-      });
-      const preparedSizeRatio = matchFile.size > 0
-        ? preparedMatchImage.file.size / matchFile.size
-        : 1;
-      const uploadFile = preparedMatchImage.preCropped && preparedSizeRatio <= 1.2
-        ? preparedMatchImage.file
-        : matchFile;
-      console.info("[match-image-preparation]", {
-        originalName: matchFile.name,
-        originalBytes: matchFile.size,
-        preparedName: preparedMatchImage.file.name,
-        preparedBytes: preparedMatchImage.file.size,
-        uploadName: uploadFile.name,
-        uploadBytes: uploadFile.size,
-        reductionPercent: matchFile.size > 0
-          ? Math.round((1 - preparedSizeRatio) * 100)
-          : 0,
-        preparedSizeRatio,
-        preCropped: preparedMatchImage.preCropped,
-        usedPreparedImage: uploadFile === preparedMatchImage.file,
-      });
-
-      const formData = new FormData();
-      formData.append("tournament_id", tournamentId.toString());
-      formData.append("attacker_seed", attackerSeed.toString());
-      formData.append("defender_seed", defenderSeed.toString());
-      formData.append("stage", matchStage);
-      formData.append("image", uploadFile);
-
-      const res = await fetch("/api/analyze/match_result", { method: "POST", body: formData });
-      const data = await res.json();
-      setMatchResult(data);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
-    } catch (err) {
-      console.error("Failed to prepare or upload match image:", err);
-      alert("解析エラーが発生しました。");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleMatchSave = async () => {
-    if (!tournamentId) return;
-    try {
-      const res = await fetch(`/api/tournaments/${tournamentId}/matches`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(matchResult)
-      });
-      if (res.ok) {
-        alert("勝敗データを保存しました！");
-        setMatchFile(null);
-        setMatchPreview(null);
-        setMatchResult(null);
-        fetchBracket();
-        // トーナメント表に自動スクロール
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      } else {
-        alert("保存に失敗しました。両プレイヤーの編成が登録されている必要があります。");
-      }
-    } catch (err) {
-      alert("エラーが発生しました。");
-    }
-  };
-
   // ------------------
   // Bracket UI Components
   // ------------------
@@ -370,6 +294,28 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     const iconUrl = getPlayerIconUrl(player);
     const isUnknown = !player.id && player.name === "未確定";
     return <TournamentPlayerPill name={player.name} eyebrow={`SEED ${player.seed}`} iconUrl={iconUrl} align={align} scale={scale} winner={isWinner} selected={mode==="deck"&&(player.original_seed||player.seed)===seed} disabled={isUnknown} onClick={()=>handlePlayerClick(player.original_seed||player.seed)}/>;
+  };
+
+  const analyzeFull64Match = async (file: File): Promise<MatchEditorResult> => {
+    if (!tournamentId) throw new Error("大会IDが確定していません。");
+    setIsUploading(true);
+    try {
+      const prepared = await prepareAnalysisImage(file, { maxOutputWidth: 1080, filenameSuffix: ".match-modal.png" });
+      const ratio = file.size > 0 ? prepared.file.size / file.size : 1;
+      const upload = prepared.preCropped && ratio <= 1.2 ? prepared.file : file;
+      const body = new FormData(); body.append("tournament_id",String(tournamentId)); body.append("attacker_seed",String(attackerSeed)); body.append("defender_seed",String(defenderSeed)); body.append("stage",matchStage); body.append("image",upload);
+      const response = await fetch("/api/analyze/match_result",{method:"POST",body}); const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data?.detail||"解析エラーが発生しました。");
+      return normalizeFull64MatchAnalysis(data);
+    } finally { setIsUploading(false); }
+  };
+
+  const saveFull64Match = async (result: MatchEditorResult) => {
+    if (!tournamentId) return;
+    const payload=full64MatchPayload(result,tournamentId,matchStage,attackerSeed,defenderSeed);
+    const response=await fetch(`/api/tournaments/${tournamentId}/matches`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(!response.ok)throw new Error("保存に失敗しました。両プレイヤーの編成が登録されている必要があります。");
+    window.alert("勝敗データを保存しました！"); await fetchBracket(); window.scrollTo({top:0,behavior:"smooth"});
   };
 
   const MatchCard = ({ p1, p2, winner, label, scale = 1, align = "left" }: { p1: any, p2: any, winner: any, label: string, scale?: number, align?: "left" | "right" | "center" }) => {
@@ -561,7 +507,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
         {/* Mode Switcher */}
         <div className="flex bg-slate-800 p-1 rounded-xl mb-6 ring-1 ring-white/5 max-w-md mx-auto w-full">
           <button
-            onClick={() => setMode("deck")}
+            onClick={() => {if(mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して編成登録へ移動しますか？"))return;setFull64MatchDirty(false);setMode("deck");}}
             className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all ${mode === "deck" ? "bg-blue-500 text-white shadow" : "text-slate-400 hover:text-slate-300"}`}
           >
             編成の登録
@@ -626,136 +572,22 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
                 </div>
               )}
             </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">攻撃側 (左)</label>
-                  <div className="flex items-center space-x-2">
-                    <div className="w-10 h-10 rounded-full border border-slate-600 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center">
-                      {getPlayerIconUrl(getPlayerBySeed(attackerSeed)) ? (
-                        <img src={getPlayerIconUrl(getPlayerBySeed(attackerSeed))} className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={16} className="text-slate-500" />
-                      )}
-                    </div>
-                    <select value={attackerSeed} onChange={(e) => setAttackerSeed(parseInt(e.target.value))} className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-3 py-2 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                      {seeds.map(s => <option key={s} value={s}>シード {s}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1 text-right">防衛側 (右)</label>
-                  <div className="flex items-center space-x-2 flex-row-reverse">
-                    <div className="w-10 h-10 rounded-full border border-slate-600 bg-slate-800 overflow-hidden shrink-0 flex items-center justify-center ml-2">
-                      {getPlayerIconUrl(getPlayerBySeed(defenderSeed)) ? (
-                        <img src={getPlayerIconUrl(getPlayerBySeed(defenderSeed))} className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={16} className="text-slate-500" />
-                      )}
-                    </div>
-                    <select value={defenderSeed} onChange={(e) => setDefenderSeed(parseInt(e.target.value))} className="w-full bg-slate-800/50 border border-white/10 rounded-xl px-3 py-2 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                      {seeds.map(s => <option key={s} value={s}>シード {s}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-400 mb-2">リザルト画面 (1枚)</label>
-                <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4">
-                  {matchPreview ? (
-                    <div className="relative aspect-[9/16] max-w-[200px] mx-auto">
-                      <img src={matchPreview} className="w-full h-full object-cover rounded-lg shadow-lg border border-white/10" />
-                      <button onClick={() => { setMatchFile(null); setMatchPreview(null); }} className="absolute -top-3 -right-3 bg-red-500 text-white w-8 h-8 rounded-full font-bold shadow-lg flex items-center justify-center">×</button>
-                    </div>
-                  ) : (
-                    <label className="w-full py-12 border-2 border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-xl flex flex-col items-center justify-center transition-colors text-emerald-400 cursor-pointer">
-                      <Upload size={24} className="mb-2" />
-                      <span className="font-bold">画像を選択</span>
-                      <input type="file" onChange={handleMatchFileChange} accept="image/*" className="hidden" />
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              <button
-                onClick={handleMatchUpload}
-                disabled={!matchFile || isUploading}
-                className={`w-full py-4 rounded-xl font-bold transition-all shadow-lg text-lg flex items-center justify-center space-x-2 mt-auto
-                ${matchFile && !isUploading ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/25" : "bg-slate-800 text-slate-500 cursor-not-allowed"}`}
-              >
-                {isUploading ? <span>AIが解析中...</span> : <span>AIで勝敗を解析する</span>}
-              </button>
-            </div>
-          )}
+          ) : <><div className="mb-5 grid grid-cols-2 gap-4"><label className="text-xs font-bold text-slate-400">攻撃側（左）<select value={attackerSeed} onChange={event=>{if(full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して対戦Playerを変更しますか？"))return;setFull64MatchDirty(false);setAttackerSeed(Number(event.target.value));}} className="mt-1 w-full rounded-xl bg-slate-800 p-3">{seeds.map(value=><option key={value} value={value}>シード {value}</option>)}</select></label><label className="text-right text-xs font-bold text-slate-400">防衛側（右）<select value={defenderSeed} onChange={event=>{if(full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄して対戦Playerを変更しますか？"))return;setFull64MatchDirty(false);setDefenderSeed(Number(event.target.value));}} className="mt-1 w-full rounded-xl bg-slate-800 p-3 text-left">{seeds.map(value=><option key={value} value={value}>シード {value}</option>)}</select></label></div><MatchResultEditor
+            key={`full64-match-${attackerSeed}-${defenderSeed}-${matchStage}`}
+            attacker={{id:attackerSeed,name:`Player ${attackerSeed}`,detail:`シード ${attackerSeed}`,iconUrl:getPlayerIconUrl(getPlayerBySeed(attackerSeed))}}
+            defender={{id:defenderSeed,name:`Player ${defenderSeed}`,detail:`シード ${defenderSeed}`,iconUrl:getPlayerIconUrl(getPlayerBySeed(defenderSeed))}}
+            attackerTeams={full64MatchTeams.attacker}
+            defenderTeams={full64MatchTeams.defender}
+            characters={characters}
+            disabled={!canEdit}
+            busy={isUploading}
+            onAnalyze={analyzeFull64Match}
+            onSave={saveFull64Match}
+            onDirtyChange={setFull64MatchDirty}
+          /></>}
         </div>
       </div>
 
-      {/* Results Area */}
-      <div ref={resultsRef} className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl relative overflow-hidden mt-12 scroll-mt-24">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-blue-500 opacity-50"></div>
-        <h2 className="text-xl font-bold mb-6 flex items-center space-x-2">
-          <CheckCircle2 className="text-emerald-400" />
-          <span>解析結果（プレビュー）</span>
-        </h2>
-
-        {mode === "match" && matchResult ? (
-          <div className="space-y-6">
-            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-              <div className="flex items-center justify-between font-bold mb-4">
-                <div className="text-blue-400 text-lg">シード {matchResult.attacker_seed} (左)</div>
-                <div className="text-slate-400 text-sm">VS</div>
-                <div className="text-red-400 text-lg">シード {matchResult.defender_seed} (右)</div>
-              </div>
-
-              <div className="space-y-2">
-                {matchResult.rounds.map((r: any) => (
-                  <div key={r.round} className="flex items-center justify-between bg-slate-800/50 p-3 rounded-lg ring-1 ring-white/5">
-                    <div className="w-8 text-slate-500 font-mono text-xs">R{r.round}</div>
-                    <div className={`flex-1 text-center font-black ${r.left === 'WIN' ? 'text-blue-400' : 'text-red-400'}`}>{r.left}</div>
-                    <div className="flex-1 text-center font-black flex items-center justify-center">
-                      <select
-                        className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300"
-                        value={r.left === "WIN" ? "left" : "right"}
-                        onChange={(e) => {
-                          const newResult = { ...matchResult };
-                          const isLeftWin = e.target.value === "left";
-                          newResult.rounds[r.round - 1].left = isLeftWin ? "WIN" : "LOSE";
-                          newResult.rounds[r.round - 1].right = isLeftWin ? "LOSE" : "WIN";
-                          let lw = 0, rw = 0;
-                          newResult.rounds.forEach((rr: any) => rr.left === "WIN" ? lw++ : rw++);
-                          newResult.winner = lw > rw ? "left" : "right";
-                          setMatchResult(newResult);
-                        }}
-                      >
-                        <option value="left">左の勝利</option>
-                        <option value="right">右の勝利</option>
-                      </select>
-                    </div>
-                    <div className={`flex-1 text-center font-black ${r.right === 'WIN' ? 'text-blue-400' : 'text-red-400'}`}>{r.right}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-6 text-center">
-                <p className="text-slate-400 text-sm mb-1">最終結果</p>
-                <p className="text-2xl font-black text-emerald-400">
-                  {matchResult.winner === "left" ? "左側のプレイヤーの勝利！" : "右側のプレイヤーの勝利！"}
-                </p>
-              </div>
-            </div>
-
-            <button onClick={handleMatchSave} className="w-full py-4 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-xl font-bold transition-all shadow-lg">
-              この内容で勝敗を登録する
-            </button>
-          </div>
-        ) : (
-          <div className="h-full min-h-[100px] flex flex-col items-center justify-center text-slate-500">
-            <p>画像をアップロードすると解析結果が表示されます</p>
-          </div>
-        )}
-      </div>
     </main>
   );
 }

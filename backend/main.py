@@ -1178,13 +1178,9 @@ def require_tournament_dashboard_viewer(
     db: Session,
     current_user: models.AppUser | None,
 ) -> models.Tournament:
-    tournament = require_tournament_viewer(tournament_id, db, current_user)
-    # メンバー専用ダッシュボードの閲覧権限チェック:
-    # 現時点では、ログイン・認証済みユーザーであることをチェック（管理者は常に許可）
-    if not current_user:
-        raise HTTPException(status_code=401, detail="認証が必要です。ログインしてください。")
-    # TODO: 将来的には、ここで user_id または player_id が tournament の参加メンバーかどうかの判定を追加する
-    return tournament
+    # 公開大会の集計画面はトップページと同じ公開データであるため匿名閲覧を許可する。
+    # draft は require_tournament_viewer が従来どおり所有者・管理者だけに制限する。
+    return require_tournament_viewer(tournament_id, db, current_user)
 
 
 def get_published_tournament_ids(
@@ -1295,11 +1291,15 @@ def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
     for team in deck_teams:
         deck_teams_by_set.setdefault(team.deck_set_id, []).append(team)
 
-    missing_seed_numbers = [
-        seed
-        for seed in range(1, 65)
-        if not any(player.seed_number == seed for player in players)
-    ]
+    missing_seed_numbers = (
+        [
+            seed
+            for seed in range(1, 65)
+            if not any(player.seed_number == seed for player in players)
+        ]
+        if tournament.registration_scope == "full_64"
+        else []
+    )
     players_without_decks = []
     players_with_incomplete_decks = []
     representative_team_count = 0
@@ -1350,12 +1350,12 @@ def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
         "is_published": tournament.publication_status == "published",
         "is_in_public_analysis": tournament.publication_status == "published",
         "registered_player_count": len(players),
-        "expected_player_count": 64,
+        "expected_player_count": 8 if tournament.registration_scope == "champion_8" else 64,
         "registered_match_count": matches_count,
-        "expected_match_count": 63,
+        "expected_match_count": 7 if tournament.registration_scope == "champion_8" else 63,
         "registered_team_count": representative_team_count,
         "registered_representative_team_count": representative_team_count,
-        "expected_team_count": 320,
+        "expected_team_count": 40 if tournament.registration_scope == "champion_8" else 320,
         "missing_seed_numbers": missing_seed_numbers,
         "players_without_decks": players_without_decks,
         "players_with_incomplete_decks": players_with_incomplete_decks,
@@ -2894,7 +2894,11 @@ def _get_player_details_data(tournament_id: int, seed_number: int, db: Session):
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
     ).first()
-    
+
+    return _get_player_details_by_player(tournament_id, player, db)
+
+
+def _get_player_details_by_player(tournament_id: int, player: models.Player | None, db: Session):
     if not player:
         return {"player": None, "decks": []}
         
@@ -4264,6 +4268,13 @@ def get_dashboard_matchups(
                     matchup_results.append({
                         "match_id": match.id,
                         "round_number": rn,
+                        "attacker_player_id": match.attacker_id,
+                        "defender_player_id": match.defender_id,
+                        "winner_player_id": round_res.winner_id,
+                        "attacker_team_id": attacker_teams[rn].id,
+                        "defender_team_id": defender_teams[rn].id,
+                        "attacker_team_number": rn,
+                        "defender_team_number": rn,
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),
@@ -4293,6 +4304,31 @@ def get_best8_decks(
     cached = get_private_dashboard_cache(tournament, "best8-decks")
     if cached is not None:
         return cached
+    all_players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
+    all_matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
+    if tournament.registration_scope == "champion_8":
+        result_codes = calculate_player_results(tournament, all_players, all_matches)
+        results = []
+        for player in sorted(all_players, key=lambda item: item.champion_slot or 999):
+            result_code = result_codes.get(player.id, "best8")
+            details = _get_player_details_by_player(tournament_id, player, db)
+            results.append({
+                "player": {
+                    "id": player.id,
+                    "seed": player.seed_number,
+                    "original_seed": player.seed_number,
+                    "champion_slot": player.champion_slot,
+                    "name": player.name,
+                    "icon_url": player.icon_url,
+                    "has_deck": bool(details["decks"]),
+                },
+                "result": result_label(result_code),
+                "sort_score": TOURNAMENT_RESULT_SCORES[result_code],
+                "decks": details["decks"],
+            })
+        results.sort(key=lambda item: (item["sort_score"], item["player"]["champion_slot"]))
+        return set_private_dashboard_cache(tournament, "best8-decks", results)
+
     bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
     champ_finals = bracket["champion_finals"]
@@ -4302,8 +4338,8 @@ def get_best8_decks(
     winner_id = champ_finals["winner"]           # 優勝者
     result_codes = calculate_player_results(
         tournament,
-        db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all(),
-        db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all(),
+        all_players,
+        all_matches,
     )
     
     results = []
@@ -5412,6 +5448,13 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
                     matchup_results.append({
                         "match_id": match.id,
                         "round_number": rn,
+                        "attacker_player_id": match.attacker_id,
+                        "defender_player_id": match.defender_id,
+                        "winner_player_id": round_res.winner_id,
+                        "attacker_team_id": attacker_teams[rn].id,
+                        "defender_team_id": defender_teams[rn].id,
+                        "attacker_team_number": rn,
+                        "defender_team_number": rn,
                         "stage": match.stage,
                         "attacker_team": list(a_chars),
                         "defender_team": list(d_chars),

@@ -16,16 +16,7 @@ import {
   RegistrationScope,
   TournamentSummary as Tournament,
 } from "../../../lib/tournaments";
-
-interface PublicationReadiness {
-  player_count: number;
-  complete_player_count: number;
-  incomplete_player_count: number;
-  unresolved_slot_count: number;
-  match_count: number;
-  can_publish: boolean;
-  warnings: string[];
-}
+import { PublicationReadiness, publicationErrorLines, publicationSummary } from "../../../lib/publication";
 
 export default function Home() {
   const { user, logout } = useAuth();
@@ -249,18 +240,13 @@ export default function Home() {
         }
 
         const readiness = publication.readiness as PublicationReadiness;
-        const summary = [
-          `登録プレイヤー: ${readiness.player_count}人`,
-          `編成登録完了: ${readiness.complete_player_count}人`,
-          `編成未完了: ${readiness.incomplete_player_count}人`,
-          `未確定のキャラクター枠: ${readiness.unresolved_slot_count}件`,
-          `対戦結果: ${readiness.match_count}件`,
-        ];
+        const summary = publicationSummary(readiness);
+        const errorLines = publicationErrorLines(readiness);
         if (readiness.warnings?.length) {
           summary.push("", "確認事項:", ...readiness.warnings.map(warning => `・${warning}`));
         }
         if (!readiness.can_publish) {
-          window.alert(`まだ公開できません。\n\n${summary.join("\n")}\n\n未完了の編成を確認してください。`);
+          window.alert(`まだ公開できません。\n\n${summary.join("\n")}${errorLines.length ? `\n\n公開できない理由:\n${errorLines.join("\n")}` : ""}`);
           return;
         }
         if (!window.confirm(`この大会をトップページに公開しますか？\n\n${summary.join("\n")}`)) {
@@ -279,15 +265,7 @@ export default function Home() {
       if (!response.ok) {
         throw new Error(data.detail || data.message || "公開状態を変更できませんでした。");
       }
-      setTournaments(previous => previous.map(item => (
-        item.id === tournament.id
-          ? {
-              ...item,
-              publication_status: data.publication_status,
-              published_at: data.published_at,
-            }
-          : item
-      )));
+      await loadTournaments();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "公開状態を変更できませんでした。");
     } finally {

@@ -9,6 +9,8 @@ import SharedTeamDisplay from "../../../../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { adoptionDisplay } from "@/lib/adoptionRate";
+import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 
 type DashboardTab = "review" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
 const TOURNAMENT_TABS = new Set<DashboardTab>([
@@ -45,6 +47,7 @@ export default function Dashboard() {
   const [isPrivateTournament, setIsPrivateTournament] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState("");
 
   const [authError, setAuthError] = useState(false);
   
@@ -132,6 +135,7 @@ export default function Dashboard() {
 
     const fetchData = async () => {
       setLoading(true);
+      setDataError("");
       try {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
@@ -212,6 +216,7 @@ export default function Dashboard() {
         }
 
         if (responses.some(res => !res.ok)) {
+          setDataError("大会ダッシュボードのデータを取得できませんでした。");
           setLoading(false);
           return;
         }
@@ -235,6 +240,7 @@ export default function Dashboard() {
         }
       } catch (e) {
         console.error(e);
+        setDataError(e instanceof Error ? e.message : "大会ダッシュボードのデータを取得できませんでした。");
       } finally {
         setLoading(false);
       }
@@ -525,35 +531,10 @@ export default function Dashboard() {
   };
 
   // --- Matchups logic ---
-  const teamMatchups = matchups.filter(m => m.canonical_attacker === selectedTeam || m.canonical_defender === selectedTeam);
-  let totalWins = 0, totalLosses = 0;
-  let attackWins = 0, attackLosses = 0;
-  let defenseWins = 0, defenseLosses = 0;
-  const matchupDetails: any[] = [];
-
-  teamMatchups.forEach(m => {
-    const isAttacker = m.canonical_attacker === selectedTeam;
-    const isWin = m.winner_is_attacker ? isAttacker : !isAttacker;
-    if (isWin) totalWins++; else totalLosses++;
-    if (isAttacker) { if (isWin) attackWins++; else attackLosses++; }
-    else { if (isWin) defenseWins++; else defenseLosses++; }
-    matchupDetails.push({ 
-      opponent: isAttacker ? m.defender_team : m.attacker_team, 
-      opponentCanonical: isAttacker ? m.canonical_defender : m.canonical_attacker,
-      attackerTeam: m.attacker_team,
-      defenderTeam: m.defender_team,
-      attackerCollections: m.attacker_collections,
-      defenderCollections: m.defender_collections,
-      canonicalAttacker: m.canonical_attacker,
-      canonicalDefender: m.canonical_defender,
-      isAttacker, 
-      isWin, 
-      stage: m.stage,
-      tournamentName: m.tournament_name,
-      attackerName: m.attacker_name,
-      defenderName: m.defender_name
-    });
-  });
+  const {
+    details: matchupDetails, totalWins, totalLosses,
+    attackWins, attackLosses, defenseWins, defenseLosses,
+  } = teamMatchupPerspective(matchups, selectedTeam, (value) => typeof value === "string" ? value : "");
 
   // --- My Dashboard logic ---
   const mySeed = selectedSeed;
@@ -729,6 +710,11 @@ export default function Dashboard() {
 
       {/* Content */}
       <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 md:p-8 rounded-3xl shadow-2xl min-h-[500px]">
+        {dataError && (
+          <div role="alert" className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-200">
+            {dataError}
+          </div>
+        )}
         {activeTab === "review" && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -747,12 +733,19 @@ export default function Dashboard() {
 
             {dashboardSummary ? (
               <>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
                   <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
                     <p className="text-xs font-bold text-slate-500">登録済みプレイヤー</p>
                     <p className="mt-2 text-3xl font-black text-white">
                       {dashboardSummary.registered_player_count}
                       <span className="text-lg text-slate-500">/{dashboardSummary.expected_player_count ?? 64}</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
+                    <p className="text-xs font-bold text-slate-500">登録済みラウンド</p>
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {dashboardSummary.readiness?.counts?.round_results ?? "-"}
+                      <span className="text-lg text-slate-500">/{tournament?.registration_scope === "champion_8" ? 35 : "-"}</span>
                     </p>
                   </div>
                   <div className="rounded-2xl bg-slate-800/50 p-5 ring-1 ring-white/10">
@@ -1027,7 +1020,7 @@ export default function Dashboard() {
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-emerald-400" />
-                <span>編成（5名組み合わせ）使用率ランキング</span>
+                <span>編成（5名組み合わせ）登録データ内採用率ランキング</span>
               </h2>
               {/* レスポンシブ統合リスト: PCでは行、スマホではカード（画像DOMは1つのみ） */}
               <div className="space-y-3">
@@ -1051,8 +1044,8 @@ export default function Dashboard() {
                     "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
                   };
                   const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                  const totalPlayers = 64;
-                  const adoptionPct = Math.round((team.count / totalPlayers) * 100);
+                  const totalPlayers = Number(stats?.total_players ?? stats?.registration_breakdown?.total_registered_players ?? 0);
+                  const adoption = adoptionDisplay(team, totalPlayers);
                   return (
                     <div
                       key={idx}
@@ -1120,18 +1113,16 @@ export default function Dashboard() {
 
                       {/* PC用: 採用数＆率 */}
                       <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        <span className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                          {team.count}
-                        </span>
+                        <span className="text-sm font-black text-slate-100">{adoption.occurrenceCount}回 / {adoption.playerCount}人</span>
                         <span className="text-[10px] text-slate-500 font-bold">
-                          {totalPlayers}人中 ({adoptionPct}%)
+                          {adoption.totalRegisteredPlayers}人中 ({adoption.adoptionRate.toFixed(1)}%)
                         </span>
                       </div>
 
                       {/* スマホ用フッター: 採用数＆勝敗詳細 */}
                       <div className="flex md:hidden items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
                         <div>
-                          採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
+                          部隊出現: <span className="font-bold text-slate-100">{adoption.occurrenceCount}</span>回・採用Player: <span className="font-bold text-slate-100">{adoption.playerCount}</span>人 ({adoption.adoptionRate.toFixed(1)}%)
                         </div>
                         {team.total_matches > 0 && (
                           <>
