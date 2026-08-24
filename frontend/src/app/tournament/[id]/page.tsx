@@ -6,6 +6,7 @@ import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-reac
 import Link from "next/link";
 import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
 import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
+import DeckRegistrationViewport from "../../../components/DeckRegistrationViewport";
 import DeckRegistrationViewer from "../../../components/DeckRegistrationViewer";
 import PlayerIconEditor from "../../../components/PlayerIconEditor";
 import TournamentPlayerPill from "../../../components/TournamentPlayerPill";
@@ -520,7 +521,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
           </button>
         </div>
 
-        <div className="max-w-2xl mx-auto w-full">
+        <DeckRegistrationViewport>
           {mode === "deck" ? (
             <div className="space-y-6">
               <div ref={seedFieldRef} className="scroll-mt-24">
@@ -585,7 +586,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
             onSave={saveFull64Match}
             onDirtyChange={setFull64MatchDirty}
           /></>}
-        </div>
+        </DeckRegistrationViewport>
       </div>
 
     </main>
