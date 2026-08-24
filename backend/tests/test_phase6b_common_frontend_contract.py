@@ -25,6 +25,28 @@ class Phase6BCommonFrontendContractTest(unittest.TestCase):
         self.assertNotIn('from "react-easy-crop"', full)
         self.assertNotIn("legacyPrepareAnalysisImageReference", full)
 
+    def test_both_modes_share_the_same_responsive_editor_width_contract(self):
+        full = self._read("frontend/src/app/tournament/[id]/page.tsx")
+        champion = self._read("frontend/src/components/ChampionTournamentRegistrationShell.tsx")
+        viewport = self._read("frontend/src/components/DeckRegistrationViewport.tsx")
+
+        for source in (full, champion):
+            self.assertIn('import DeckRegistrationViewport from', source)
+            self.assertIn("<DeckRegistrationViewport", source)
+            self.assertIn("<DeckRegistrationEditor", source)
+            self.assertRegex(
+                source,
+                r"<DeckRegistrationViewport(?:\s[^>]*)?>[\s\S]*?"
+                r"<DeckRegistrationEditor[\s\S]*?</DeckRegistrationViewport>",
+            )
+
+        self.assertIn('"mx-auto w-full min-w-0 max-w-7xl"', viewport)
+        self.assertIn("data-deck-registration-viewport", viewport)
+        self.assertNotIn("max-w-2xl", full)
+        self.assertNotRegex(viewport, r"max-w-(?:sm|md|lg|xl|2xl|3xl|4xl|5xl|6xl)\b")
+        self.assertIn("sm:grid", self._read("frontend/src/components/DeckRegistrationEditor.tsx"))
+        self.assertIn("sm:hidden", self._read("frontend/src/components/DeckRegistrationEditor.tsx"))
+
     def test_shared_editor_uses_common_search_preparation_validation_and_mobile_hook(self):
         editor = self._read("frontend/src/components/DeckRegistrationEditor.tsx")
         for contract in (
