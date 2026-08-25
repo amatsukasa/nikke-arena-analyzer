@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query, BackgroundTasks
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
@@ -4737,7 +4737,7 @@ def empty_cross_tournament_stats(db: Session):
     }
 
 
-def cross_snapshot_has_distinct_counts(snapshot, db: Session):
+def cross_snapshot_has_distinct_counts(snapshot, db: Session, registered_players=None):
     """Accept only structurally complete v2-style aggregation JSON.
 
     Legacy/corrupt JSON falls back as a whole tournament.  Empty arrays are
@@ -4747,9 +4747,10 @@ def cross_snapshot_has_distinct_counts(snapshot, db: Session):
     team_usage = snapshot.team_usage
     if not isinstance(char_stats, list) or not isinstance(team_usage, list):
         return False
-    registered_players = db.query(models.Player.id).filter(
-        models.Player.tournament_id == snapshot.tournament_id
-    ).count()
+    if registered_players is None:
+        registered_players = db.query(models.Player.id).filter(
+            models.Player.tournament_id == snapshot.tournament_id
+        ).count()
     if registered_players == 0:
         return not char_stats and not team_usage
     if not char_stats or not team_usage:
@@ -4786,9 +4787,17 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
         models.TournamentSnapshot.tournament_id.in_(target_ids)
     ).all() if target_ids else []
 
+    player_counts = dict(db.query(
+        models.Player.tournament_id, func.count(models.Player.id)
+    ).filter(
+        models.Player.tournament_id.in_(target_ids)
+    ).group_by(models.Player.tournament_id).all()) if target_ids else {}
+
     usable_snaps = [
         snapshot for snapshot in snaps
-        if cross_snapshot_has_distinct_counts(snapshot, db)
+        if cross_snapshot_has_distinct_counts(
+            snapshot, db, player_counts.get(snapshot.tournament_id, 0)
+        )
     ]
     snapshot_ids = {snapshot.tournament_id for snapshot in usable_snaps}
     raw_ids = [tournament_id for tournament_id in target_ids if tournament_id not in snapshot_ids]
@@ -4929,6 +4938,13 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     if not tournament_ids:
         return empty_cross_tournament_stats(db)
 
+    tournaments_by_id = {
+        tournament.id: tournament
+        for tournament in db.query(models.Tournament).filter(
+            models.Tournament.id.in_(tournament_ids)
+        ).all()
+    }
+
     # 対象大会の全プレイヤーを取得
     all_players = db.query(models.Player).filter(
         models.Player.tournament_id.in_(tournament_ids)
@@ -4944,11 +4960,16 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     deck_teams = db.query(models.DeckTeam).filter(
         models.DeckTeam.deck_set_id.in_(deck_set_ids)
     ).all()
+    deck_sets_by_player = {deck_set.player_id: deck_set for deck_set in deck_sets}
+    teams_by_deck_set = {}
+    for team in deck_teams:
+        teams_by_deck_set.setdefault(team.deck_set_id, []).append(team)
 
     char_usage = {}
     char_position = {}
     char_team_position = {}
     team_usage = {}
+    team_players = {}
 
     for team in deck_teams:
         chars = [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id]
@@ -4975,6 +4996,9 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
 
         if len(chars_valid) == 5:
             sorted_chars = tuple(sorted(chars_valid))
+            player_id = ds_to_player.get(team.deck_set_id)
+            if player_id:
+                team_players.setdefault(sorted_chars, set()).add(player_id)
             if sorted_chars not in team_usage:
                 team_usage[sorted_chars] = {
                     "count": 0,
@@ -4993,26 +5017,29 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     all_matches = db.query(models.Match).filter(
         models.Match.tournament_id.in_(tournament_ids)
     ).all()
+    match_ids = [match.id for match in all_matches]
+    round_results = db.query(models.RoundResult).filter(
+        models.RoundResult.match_id.in_(match_ids)
+    ).all() if match_ids else []
+    rounds_by_match = {}
+    for round_result in round_results:
+        rounds_by_match.setdefault(round_result.match_id, []).append(round_result)
 
     char_match_stats = {}
     team_match_stats = {}
     char_position_match_stats = {}
 
     for match in all_matches:
-        attacker_ds = db.query(models.DeckSet).filter(
-            models.DeckSet.player_id == match.attacker_id
-        ).first()
-        defender_ds = db.query(models.DeckSet).filter(
-            models.DeckSet.player_id == match.defender_id
-        ).first()
+        attacker_ds = deck_sets_by_player.get(match.attacker_id)
+        defender_ds = deck_sets_by_player.get(match.defender_id)
 
         if not attacker_ds or not defender_ds:
             continue
 
-        a_teams = {t.team_number: t for t in attacker_ds.teams}
-        d_teams = {t.team_number: t for t in defender_ds.teams}
+        a_teams = {t.team_number: t for t in teams_by_deck_set.get(attacker_ds.id, [])}
+        d_teams = {t.team_number: t for t in teams_by_deck_set.get(defender_ds.id, [])}
 
-        for rr in match.round_results:
+        for rr in rounds_by_match.get(match.id, []):
             rn = rr.round_number
             winner_id = rr.winner_id
             a_team = a_teams.get(rn)
@@ -5093,97 +5120,6 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                         team_usage[d_tup]["position_stats"][d_team.team_number]["total"] += 1
                         if is_d_win: team_usage[d_tup]["position_stats"][d_team.team_number]["wins"] += 1
 
-    # 各大会ごとの最終成績を計算するためのキャッシュ
-    # {tournament_id: {player_id: result_string}}
-
-
-    # 大会ごとにプレイヤー成績を計算
-    per_tournament_results = {}
-    for tid in tournament_ids:
-        t_players = [p for p in all_players if p.tournament_id == tid]
-        t_matches = [m for m in all_matches if m.tournament_id == tid]
-        player_by_id_t = {p.id: p for p in t_players}
-
-        def get_winner_between_t(pid1, pid2):
-            for m in t_matches:
-                if m.winner_id and (
-                    (m.attacker_id == pid1 and m.defender_id == pid2) or
-                    (m.attacker_id == pid2 and m.defender_id == pid1)
-                ):
-                    return m.winner_id
-            return None
-
-        def calc_result_t(player_id):
-            p = player_by_id_t.get(player_id)
-            if not p or p.seed_number is None:
-                return "ベスト64"
-            g_idx = (p.seed_number - 1) // 8
-            base_seed = g_idx * 8
-            qf_winners = []
-            for i in range(4):
-                s1 = base_seed + i * 2 + 1
-                s2 = base_seed + i * 2 + 2
-                p1 = next((x for x in t_players if x.seed_number == s1), None)
-                p2 = next((x for x in t_players if x.seed_number == s2), None)
-                w = get_winner_between_t(p1.id if p1 else None, p2.id if p2 else None)
-                qf_winners.append(w)
-            if player_id not in qf_winners:
-                return "ベスト64"
-            sf_winners = []
-            for i in range(2):
-                w = get_winner_between_t(qf_winners[i*2], qf_winners[i*2+1])
-                sf_winners.append(w)
-            if player_id not in sf_winners:
-                return "ベスト32"
-            group_winner = get_winner_between_t(sf_winners[0], sf_winners[1])
-            if player_id != group_winner:
-                return "ベスト16"
-            # チャンピオン対抗戦
-            group_winners = []
-            for gi in range(8):
-                base = gi * 8
-                qf_w = []
-                for i in range(4):
-                    s1 = base + i * 2 + 1
-                    s2 = base + i * 2 + 2
-                    p1t = next((x for x in t_players if x.seed_number == s1), None)
-                    p2t = next((x for x in t_players if x.seed_number == s2), None)
-                    w = get_winner_between_t(p1t.id if p1t else None, p2t.id if p2t else None)
-                    qf_w.append(w)
-                sf_w = []
-                for i in range(2):
-                    w = get_winner_between_t(qf_w[i*2], qf_w[i*2+1])
-                    sf_w.append(w)
-                gw = get_winner_between_t(sf_w[0], sf_w[1])
-                group_winners.append(gw)
-            champ_qf_w = []
-            for i in range(4):
-                w = get_winner_between_t(group_winners[i*2], group_winners[i*2+1])
-                champ_qf_w.append(w)
-            if player_id not in champ_qf_w:
-                return "ベスト8"
-            champ_sf_w = []
-            for i in range(2):
-                w = get_winner_between_t(champ_qf_w[i*2], champ_qf_w[i*2+1])
-                champ_sf_w.append(w)
-            if player_id not in champ_sf_w:
-                return "ベスト4"
-            champ_winner = get_winner_between_t(champ_sf_w[0], champ_sf_w[1])
-            if player_id != champ_winner:
-                return "準優勝"
-            return "優勝"
-
-        t_result_cache = {}
-        for p in t_players:
-            t_result_cache[p.id] = calc_result_t(p.id)
-        per_tournament_results[tid] = t_result_cache
-
-    tournaments_by_id = {
-        tournament.id: tournament
-        for tournament in db.query(models.Tournament).filter(
-            models.Tournament.id.in_(tournament_ids)
-        ).all()
-    }
     per_tournament_results = {}
     for tournament_id in tournament_ids:
         codes = calculate_player_results(
@@ -5197,13 +5133,19 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
 
     # キャラ→使用プレイヤーのマッピング
     char_to_players = {}
-    for ds in deck_sets:
-        for team in ds.teams:
-            for c_id in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id]:
-                if c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
-                    if c_id not in char_to_players:
-                        char_to_players[c_id] = set()
-                    char_to_players[c_id].add(ds.player_id)
+    for team in deck_teams:
+        player_id = ds_to_player.get(team.deck_set_id)
+        for c_id in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id]:
+            if player_id and c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
+                char_to_players.setdefault(c_id, set()).add(player_id)
+
+    character_ids = set(char_usage)
+    characters_by_id = {
+        character.id: character
+        for character in db.query(models.Character).filter(
+            models.Character.id.in_(character_ids)
+        ).all()
+    } if character_ids else {}
 
     # 全大会横断での最良成績を返す
     player_by_id = {p.id: p for p in all_players}
@@ -5226,7 +5168,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     # キャラクターリスト構築
     char_list = []
     for c_id, count in char_usage.items():
-        char = db.query(models.Character).filter(models.Character.id == c_id).first()
+        char = characters_by_id.get(c_id)
         if char:
             m_stats = char_match_stats.get(c_id, {"wins": 0, "total": 0})
             win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else 0
@@ -5299,7 +5241,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
         original_order = data["original_order"]
         team_chars = []
         for c_id in original_order:
-            char = db.query(models.Character).filter(models.Character.id == c_id).first()
+            char = characters_by_id.get(c_id)
             if char:
                 team_chars.append({"id": char.id, "name": char.name, "rarity": char.rarity})
 
@@ -5330,22 +5272,16 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                 "best_result": best_res
             })
 
-        team_char_set = set(sorted_chars)
-        team_player_ids = set()
-        for ds in deck_sets:
-            for team in ds.teams:
-                team_ids = set(c for c in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id] if c is not None)
-                if team_ids == team_char_set:
-                    team_player_ids.add(ds.player_id)
+        team_player_ids = team_players.get(sorted_chars, set())
 
         best_team_result = get_best_result_cross(team_player_ids) if team_player_ids else None
 
         # この編成を採用したプレイヤー情報を収集
         adopted_players = []
         for pid in team_player_ids:
-            player = db.query(models.Player).filter(models.Player.id == pid).first()
+            player = player_by_id.get(pid)
             if player:
-                t = db.query(models.Tournament).filter(models.Tournament.id == player.tournament_id).first()
+                t = tournaments_by_id.get(player.tournament_id)
                 # per_tournament_results[tournament_id][player_id] で成績を取得
                 p_result = per_tournament_results.get(player.tournament_id, {}).get(pid, "ベスト64")
                 adopted_players.append({
