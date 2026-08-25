@@ -89,4 +89,16 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         history=self.read("frontend/src/components/TeamMatchupHistory.tsx")
         self.assertIn("match.participationKey",history)
 
+    def test_cross_matchups_are_lazy_abortable_and_retryable(self):
+        source=self.read("frontend/src/app/page.tsx")
+        self.assertIn('if (activeTab !== "matchups") return;',source)
+        self.assertNotIn('activeTab !== "matchups" && activeTab !== "team_winrate"',source)
+        self.assertIn("new AbortController()",source)
+        self.assertIn("signal: controller.signal",source)
+        self.assertIn("setMatchups([])",source)
+        self.assertIn("setMatchupsLoadedKey(\"\")",source)
+        self.assertIn("setMatchupsRetry(value => value + 1)",source)
+        self.assertIn('role="status"',source)
+        self.assertIn('role="alert"',source)
+
 if __name__=="__main__": unittest.main()

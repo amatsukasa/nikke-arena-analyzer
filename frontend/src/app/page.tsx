@@ -1,6 +1,6 @@
 "use client";
 export const dynamic = 'force-dynamic';
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
 import Link from "next/link";
@@ -74,6 +74,11 @@ function DashboardContent() {
   const [stats, setStats] = useState<any>(null);
   const [statsError, setStatsError] = useState("");
   const [matchups, setMatchups] = useState<any[]>([]);
+  const [matchupsLoading, setMatchupsLoading] = useState(false);
+  const [matchupsError, setMatchupsError] = useState("");
+  const [matchupsLoadedKey, setMatchupsLoadedKey] = useState("");
+  const [matchupsRetry, setMatchupsRetry] = useState(0);
+  const matchupsRequestRef = useRef<AbortController | null>(null);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -397,11 +402,31 @@ function DashboardContent() {
     fetchData();
   }, [selectedTournamentIds, isFirstLoad]);
 
+  const matchupsRequestKey = [
+    [...selectedTournamentIds].sort((a, b) => a - b).join(","),
+    filterServer,
+    selectedChampionshipId ?? "",
+  ].join("|");
+
   useEffect(() => {
-    if (activeTab !== "matchups" && activeTab !== "team_winrate") return;
-    if (matchups.length > 0 || selectedTournamentIds.length === 0) return;
+    matchupsRequestRef.current?.abort();
+    setMatchups([]);
+    setMatchupsError("");
+    setMatchupsLoadedKey("");
+    setMatchupsLoading(false);
+  }, [matchupsRequestKey]);
+
+  useEffect(() => {
+    if (activeTab !== "matchups") return;
+    if (selectedTournamentIds.length === 0 || matchupsLoadedKey === matchupsRequestKey) return;
+
+    const controller = new AbortController();
+    matchupsRequestRef.current?.abort();
+    matchupsRequestRef.current = controller;
 
     const fetchMatchups = async () => {
+      setMatchupsLoading(true);
+      setMatchupsError("");
       try {
         if (
           selectedTournamentIds.length === 0 ||
@@ -418,17 +443,28 @@ function DashboardContent() {
           championship_id: selectedChampionshipId
         };
         const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody),
+          signal: controller.signal,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new Error(`対戦履歴を取得できませんでした（HTTP ${res.status}）`);
+        }
         const data = await res.json();
         setMatchups(data.matchups || data);
+        setMatchupsLoadedKey(matchupsRequestKey);
       } catch(e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
+        setMatchupsError(e instanceof Error ? e.message : "対戦履歴を取得できませんでした。");
+      } finally {
+        if (matchupsRequestRef.current === controller) {
+          setMatchupsLoading(false);
+        }
       }
     };
     fetchMatchups();
-  }, [activeTab, selectedTournamentIds, matchups.length]);
+    return () => controller.abort();
+  }, [activeTab, matchupsRequestKey, matchupsLoadedKey, matchupsRetry]);
 
   if (loading) return (
     <div className="flex h-screen items-center justify-center">
@@ -1099,6 +1135,23 @@ function DashboardContent() {
         {/* MATCHUPS TAB */}
         {activeTab === "matchups" && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
+            {matchupsLoading && (
+              <div role="status" className="rounded-xl bg-purple-500/10 p-4 text-center text-sm font-bold text-purple-300 ring-1 ring-purple-500/20">
+                対戦履歴を読み込んでいます…
+              </div>
+            )}
+            {matchupsError && (
+              <div role="alert" className="rounded-xl bg-red-500/10 p-4 text-center text-sm text-red-300 ring-1 ring-red-500/20">
+                <p>{matchupsError}</p>
+                <button
+                  type="button"
+                  onClick={() => setMatchupsRetry(value => value + 1)}
+                  className="mt-3 rounded-lg bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-400"
+                >
+                  再試行
+                </button>
+              </div>
+            )}
             <div className="bg-purple-500/10 p-6 rounded-2xl ring-1 ring-purple-500/20">
               <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>
               <select 

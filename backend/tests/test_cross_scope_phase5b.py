@@ -15,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import create_engine, event  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from database import Base, SessionLocal, engine  # noqa: E402
@@ -183,6 +183,34 @@ class CrossScopePhase5BTest(unittest.TestCase):
         self.assertEqual(character["adoption_rate"], 100.0)
         self.assertEqual(team["player_count"], 2)
         self.assertEqual(team["adoption_rate"], 100.0)
+
+    def test_cross_stats_query_count_is_bounded_for_one_six_and_41_tournaments(self):
+        tournament_ids = [self.full.id]
+        for index in range(39):
+            tournament = self._tournament(f"query-count-{index}", "full_64")
+            self._players(tournament, 1, champion=False)
+            tournament_ids.append(tournament.id)
+        tournament_ids.append(self.champion.id)
+        self.db.commit()
+
+        counts = []
+        for size in (1, 6, 41):
+            statements = 0
+            def count_query(*_args):
+                nonlocal statements
+                statements += 1
+            event.listen(engine, "before_cursor_execute", count_query)
+            try:
+                main.get_cross_tournament_stats(
+                    main.CrossTournamentRequest(tournament_ids=tournament_ids[:size]),
+                    self.db,
+                )
+            finally:
+                event.remove(engine, "before_cursor_execute", count_query)
+            counts.append(statements)
+
+        self.assertTrue(all(count <= 30 for count in counts), counts)
+        self.assertLessEqual(max(counts) - min(counts), 10, counts)
 
     def test_mixed_adoption_rate_is_weighted_by_registered_players(self):
         for player in list(self.full_players.values())[:32]:
