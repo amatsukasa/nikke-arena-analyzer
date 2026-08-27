@@ -35,7 +35,6 @@ export default function CharacterUsageByResultRanking({
     ?? "";
   const groups: Array<{
     count: number;
-    playerCount: number;
     usageRate: number;
     rank: number;
     characters: any[];
@@ -43,16 +42,14 @@ export default function CharacterUsageByResultRanking({
 
   characters.forEach((entry: any, index: number) => {
     const count = Number(entry.count ?? 0);
-    const playerCount = Number(entry.player_count ?? entry.count ?? 0);
     const usageRate = Number(entry.usage_rate ?? 0);
     const lastGroup = groups[groups.length - 1];
-    if (lastGroup && lastGroup.count === count && lastGroup.playerCount === playerCount && lastGroup.usageRate === usageRate) {
+    if (lastGroup && lastGroup.count === count && lastGroup.usageRate === usageRate) {
       lastGroup.characters.push(entry);
       return;
     }
     groups.push({
       count,
-      playerCount,
       usageRate,
       rank: index + 1,
       characters: [entry],
@@ -86,10 +83,9 @@ export default function CharacterUsageByResultRanking({
       </div>
 
       <div className="overflow-hidden rounded-xl bg-slate-900/50 shadow-2xl ring-1 ring-white/10">
-        <div className="hidden grid-cols-[4rem_6rem_7rem_8rem_minmax(0,1fr)] border-b border-white/10 bg-slate-800/80 text-sm text-slate-400 md:grid">
+        <div className="hidden grid-cols-[4rem_7rem_8rem_minmax(0,1fr)] border-b border-white/10 bg-slate-800/80 text-sm text-slate-400 md:grid">
           <div className="p-4 text-center font-medium">順位</div>
           <div className="p-4 text-center font-medium">採用数</div>
-          <div className="p-4 text-center font-medium">採用Player数</div>
           <div className="p-4 text-center font-medium">登録データ内採用率</div>
           <div className="p-4 font-medium">キャラクター名</div>
         </div>
@@ -98,7 +94,7 @@ export default function CharacterUsageByResultRanking({
           {groups.map((group) => (
             <div
               key={`${group.rank}-${group.count}-${group.usageRate}`}
-              className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 p-3 transition-colors hover:bg-white/5 sm:p-4 md:grid-cols-[4rem_6rem_7rem_8rem_minmax(0,1fr)] md:items-start md:gap-0 md:p-0"
+              className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 p-3 transition-colors hover:bg-white/5 sm:p-4 md:grid-cols-[4rem_7rem_8rem_minmax(0,1fr)] md:items-start md:gap-0 md:p-0"
             >
               <div className="row-span-2 flex items-center justify-center md:row-span-1 md:p-4">
                 <span className={`inline-flex h-8 w-8 items-center justify-center rounded-full font-black ${
@@ -113,8 +109,6 @@ export default function CharacterUsageByResultRanking({
 
               <div className="flex items-center gap-2 text-sm md:contents">
                 <span className="font-bold text-slate-200 md:p-4 md:text-center">{group.count}回</span>
-                <span className="text-slate-600 md:hidden">・</span>
-                <span className="font-bold text-slate-300 md:p-4 md:text-center">{group.playerCount}人</span>
                 <span className="text-slate-600 md:hidden">・</span>
                 <span className="font-bold text-blue-300 md:p-4 md:text-center">{group.usageRate.toFixed(1)}%</span>
               </div>

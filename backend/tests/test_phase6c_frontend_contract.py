@@ -70,9 +70,11 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertIn("totalRegisteredPlayers",helper)
         for path in ("frontend/src/app/page.tsx", "frontend/src/app/tournament/[id]/dashboard/page.tsx"):
             source=self.read(path)
-            self.assertIn("adoptionDisplay(team, totalPlayers)",source)
             self.assertNotIn("const totalPlayers = 64",source)
-            self.assertIn("登録データ内採用率",source)
+            self.assertIn("<TeamAdoptionRanking",source)
+        ranking=self.read("frontend/src/components/TeamAdoptionRanking.tsx")
+        self.assertIn("adoptionDisplay(team, totalRegisteredPlayers)",ranking)
+        self.assertIn("登録データ内採用率",ranking)
 
     def test_mirror_matchup_history_expands_both_participation_sides(self):
         helper=self.read("frontend/src/lib/teamMatchupPerspective.ts")
@@ -100,5 +102,45 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertIn("setMatchupsRetry(value => value + 1)",source)
         self.assertIn('role="status"',source)
         self.assertIn('role="alert"',source)
+
+    def test_shared_public_analysis_components_preserve_ui_contracts(self):
+        top=self.read("frontend/src/app/page.tsx")
+        tournament=self.read("frontend/src/app/tournament/[id]/dashboard/page.tsx")
+        for source in (top,tournament):
+            self.assertIn("<TeamPositionAnalysis",source)
+            self.assertIn("<TeamAdoptionRanking",source)
+            self.assertIn("<TeamMatchupHistory",source)
+            self.assertNotIn("この編成を採用した指揮官",source)
+
+        positions=self.read("frontend/src/components/TeamPositionAnalysis.tsx")
+        self.assertIn("stat.best_result",positions)
+        self.assertIn("tournamentResultLabel",positions)
+        self.assertIn("データなし",positions)
+
+        results=self.read("frontend/src/lib/tournamentResult.ts")
+        for code,label in (("best64","ベスト64"),("best32","ベスト32"),("best16","ベスト16"),("best8","ベスト8"),("best4","ベスト4"),("runner_up","準優勝"),("champion","優勝")):
+            self.assertIn(f'{code}: "{label}"',results)
+
+    def test_trend_and_team_adoption_labels_keep_distinct_counts(self):
+        trend=self.read("frontend/src/components/CharacterUsageByResultRanking.tsx")
+        self.assertNotIn("採用Player数",trend)
+        ranking=self.read("frontend/src/components/TeamAdoptionRanking.tsx")
+        self.assertIn("adoption.adoptionRate.toFixed(1)",ranking)
+        self.assertIn("adoption.totalRegisteredPlayers",ranking)
+        self.assertIn("adoption.playerCount",ranking)
+        helper=self.read("frontend/src/lib/adoptionRate.ts")
+        self.assertIn("entry.player_count",helper)
+
+    def test_matchup_history_displays_analysis_result_below_teams_responsively(self):
+        history=self.read("frontend/src/components/TeamMatchupHistory.tsx")
+        self.assertIn("resultBadge(match.isWin)",history)
+        self.assertNotIn("resultBadge(Boolean(match.winner_is_attacker))",history)
+        self.assertNotIn("resultBadge(!Boolean(match.winner_is_attacker))",history)
+        self.assertIn("xl:grid-cols-[max-content_auto_max-content]",history)
+        self.assertIn("text-purple-300\">分析対象",history)
+        self.assertNotIn("bg-purple-500/10",history)
+        self.assertNotIn("検索対象",history)
+        self.assertEqual(history.count(">分析対象</span>"),2)
+        self.assertNotIn("overflow-x-auto",history)
 
 if __name__=="__main__": unittest.main()

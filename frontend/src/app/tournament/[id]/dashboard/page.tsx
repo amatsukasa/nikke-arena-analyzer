@@ -8,8 +8,9 @@ import PaginatedTeamList from "../../../../components/PaginatedTeamList";
 import SharedTeamDisplay from "../../../../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
+import TeamPositionAnalysis from "../../../../components/TeamPositionAnalysis";
+import TeamAdoptionRanking from "../../../../components/TeamAdoptionRanking";
 import { getCharIconUrl } from "@/utils/charIcon";
-import { adoptionDisplay } from "@/lib/adoptionRate";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 
 type DashboardTab = "review" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
@@ -56,7 +57,6 @@ export default function Dashboard() {
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
-  const [isAdoptedPlayersOpen, setIsAdoptedPlayersOpen] = useState(true);
 
   // For search
   const [searchChars, setSearchChars] = useState<number[]>([]);
@@ -614,7 +614,7 @@ export default function Dashboard() {
   const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
 
   return (
-    <main className="p-6 md:p-12 max-w-6xl mx-auto space-y-8 pb-24">
+    <main className="p-6 md:p-12 max-w-6xl mx-auto space-y-8 pb-24 overflow-x-hidden">
       {/* Header */}
       <div className="flex items-center space-x-4 mb-8">
         <Link href={`/tournament/${id}`}>
@@ -1017,141 +1017,14 @@ export default function Dashboard() {
               </div>
             </section>
             )}
-            <section>
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                <Users className="text-emerald-400" />
-                <span>編成（5名組み合わせ）登録データ内採用率ランキング</span>
-              </h2>
-              {/* レスポンシブ統合リスト: PCでは行、スマホではカード（画像DOMは1つのみ） */}
-              <div className="space-y-3">
-                {/* PC用ヘッダー行 */}
-                <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 text-xs font-bold text-slate-400 bg-slate-900/80 rounded-xl border border-white/5">
-                  <div className="col-span-1">順位</div>
-                  <div className="col-span-5">編成</div>
-                  <div className="col-span-2 text-center">最終成績</div>
-                  <div className="col-span-2 text-right">勝率</div>
-                  <div className="col-span-2 text-right">採用数</div>
-                </div>
-
-                {(stats?.team_usage ?? []).slice(0, visibleTeamCount).map((team: any, idx: number) => {
-                  const resultColors: Record<string, string> = {
-                    "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                    "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                    "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                    "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                    "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                    "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                    "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-                  };
-                  const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                  const totalPlayers = Number(stats?.total_players ?? stats?.registration_breakdown?.total_registered_players ?? 0);
-                  const adoption = adoptionDisplay(team, totalPlayers);
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => handleTeamClick(team.canonical_id)}
-                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 flex flex-col md:grid md:grid-cols-12 md:items-center gap-3"
-                    >
-                      {/* 上部・左部: スマホでは順位・成績・勝率ヘッダー、PCでは順位のみ */}
-                      <div className="flex items-center justify-between md:justify-start md:col-span-1 border-b border-white/5 pb-2 md:border-b-0 md:pb-0">
-                        <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                          idx + 1 === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                          idx + 1 === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                          idx + 1 === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                          "text-slate-400"
-                        }`}>
-                          {idx + 1}
-                        </span>
-                        {/* スマホのみ表示する成績ラベル＆勝率 */}
-                        <div className="flex items-center gap-2 md:hidden">
-                          {team.best_result && (
-                            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultClass}`}>
-                              {team.best_result}
-                            </span>
-                          )}
-                          {team.total_matches > 0 && (
-                            <div className={`px-2.5 py-0.5 rounded-md font-bold text-xs ${
-                              team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
-                            }`}>
-                              勝率: {team.win_rate}%
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 編成アイコン（DOMはここ1か所のみ！） */}
-                      <div className="flex justify-center md:justify-start md:col-span-5 py-1 overflow-x-auto">
-                        <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
-                      </div>
-
-                      {/* PC用: 最終成績 */}
-                      <div className="hidden md:flex md:col-span-2 justify-center">
-                        {team.best_result ? (
-                          <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                            {team.best_result}
-                          </span>
-                        ) : (
-                          <span className="text-slate-600 text-xs">-</span>
-                        )}
-                      </div>
-
-                      {/* PC用: 勝率＆勝敗 */}
-                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        {team.total_matches > 0 ? (
-                          <>
-                            <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                              {team.win_rate}%
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-bold">
-                              {team.win_count}W {team.total_matches - team.win_count}L
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-slate-600 text-xs">対戦なし</span>
-                        )}
-                      </div>
-
-                      {/* PC用: 採用数＆率 */}
-                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        <span className="text-sm font-black text-slate-100">{adoption.occurrenceCount}回 / {adoption.playerCount}人</span>
-                        <span className="text-[10px] text-slate-500 font-bold">
-                          {adoption.totalRegisteredPlayers}人中 ({adoption.adoptionRate.toFixed(1)}%)
-                        </span>
-                      </div>
-
-                      {/* スマホ用フッター: 採用数＆勝敗詳細 */}
-                      <div className="flex md:hidden items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
-                        <div>
-                          部隊出現: <span className="font-bold text-slate-100">{adoption.occurrenceCount}</span>回・採用Player: <span className="font-bold text-slate-100">{adoption.playerCount}</span>人 ({adoption.adoptionRate.toFixed(1)}%)
-                        </div>
-                        {team.total_matches > 0 && (
-                          <>
-                            <div className="w-px h-3 bg-white/10" />
-                            <div>
-                              勝敗: <span className="font-bold text-emerald-400">{team.win_count}W</span>
-                              <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {(stats?.team_usage?.length ?? 0) === 0 && (
-                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
-                )}
-
-                {(stats?.team_usage?.length ?? 0) > visibleTeamCount && (
-                  <button
-                    onClick={() => setVisibleTeamCount(prev => prev + 15)}
-                    className="w-full py-3 mt-4 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors ring-1 ring-white/10 shadow-lg text-sm"
-                  >
-                    もっと見る (残りを表示)
-                  </button>
-                )}
-              </div>
-            </section>
+            <TeamAdoptionRanking
+              teams={stats?.team_usage ?? []}
+              totalRegisteredPlayers={Number(stats?.total_players ?? stats?.registration_breakdown?.total_registered_players ?? 0)}
+              visibleCount={visibleTeamCount}
+              onShowMore={() => setVisibleTeamCount((previous) => previous + 15)}
+              allCharacters={allCharacters}
+              onTeamClick={handleTeamClick}
+            />
           </div>
         )}
 
@@ -1532,137 +1405,7 @@ export default function Dashboard() {
               <p className="text-slate-500 text-center py-12">編成データがありません</p>
             )}
 
-            {/* 編成の配置ポジション分析セクション */}
-            {selectedTeam && (() => {
-              const selectedTeamData = stats?.team_usage?.find((t:any) => t.canonical_id === selectedTeam);
-              const positionStats = selectedTeamData?.position_stats || [];
-              if (positionStats.length === 0) return null;
-              return (
-                <div className="space-y-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsPositionStatsOpen(!isPositionStatsOpen)}
-                    className="flex w-full items-center justify-between rounded-lg p-2 font-bold text-white transition-colors hover:bg-white/5"
-                    aria-expanded={isPositionStatsOpen}
-                  >
-                    <span className="flex items-center space-x-2">
-                      <span className="text-lg">📊</span>
-                      <span>編成の配置ポジション分析</span>
-                    </span>
-                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isPositionStatsOpen ? "" : "-rotate-90"}`} />
-                  </button>
-                  {isPositionStatsOpen && (
-                    <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
-                    <table className="w-full text-center">
-                      <thead>
-                        <tr className="border-b border-white/10 bg-slate-900/50">
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">〇番目</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">採用数</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">勝率</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">最終成績</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[1, 2, 3, 4, 5].map(pos => {
-                          const ps = positionStats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
-                          return (
-                            <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                              <td className="py-3 px-2 text-white font-black text-lg">{pos}番目</td>
-                              <td className="py-3 px-2">
-                                <span className="text-white font-bold text-lg">{ps.count}</span>
-                                <span className="text-slate-500 text-xs ml-0.5">人</span>
-                                <br />
-                                <span className="text-slate-400 text-xs">({ps.pct}%)</span>
-                              </td>
-                              <td className="py-3 px-2">
-                                {ps.win_rate !== null ? (
-                                  <>
-                                    <span className={`font-black text-lg ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                      {ps.win_rate}%
-                                    </span>
-                                    <br />
-                                    <span className="text-slate-500 text-[10px]">{ps.wins}W {ps.total - ps.wins}L</span>
-                                  </>
-                                ) : (
-                                  <span className="text-slate-600 text-xs">対戦なし</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-2">
-                                {ps.best_result ? (
-                                  <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${
-                                    ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
-                                    ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
-                                    ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
-                                    ps.best_result === "ベスト8" ? "bg-blue-500/20 text-blue-400 ring-blue-500/50" :
-                                    ps.best_result === "ベスト16" ? "bg-purple-500/20 text-purple-400 ring-purple-500/50" :
-                                    ps.best_result === "ベスト32" ? "bg-slate-700/60 text-slate-400 ring-slate-600/50" :
-                                    "bg-slate-800/60 text-slate-500 ring-slate-700/50"
-                                  }`}>
-                                    {ps.best_result}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-600 text-xs">-</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* 採用した指揮官セクション */}
-            {selectedTeam && (() => {
-              const selectedTeamData = stats?.team_usage?.find((t:any) => t.canonical_id === selectedTeam);
-              const adoptedPlayers = selectedTeamData?.adopted_players || [];
-              if (adoptedPlayers.length === 0) return null;
-              const resultColors: Record<string, string> = {
-                "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-              };
-              return (
-                <div className="mt-6 bg-slate-800/30 rounded-2xl ring-1 ring-white/5 p-5">
-                  <button
-                    type="button"
-                    onClick={() => setIsAdoptedPlayersOpen(!isAdoptedPlayersOpen)}
-                    className="mb-2 flex w-full items-center justify-between rounded-lg p-2 font-bold text-white transition-colors hover:bg-white/5"
-                    aria-expanded={isAdoptedPlayersOpen}
-                  >
-                    <span className="flex items-center space-x-2">
-                      <UserIcon size={18} className="text-purple-400" />
-                      <span>この編成を採用した指揮官</span>
-                    </span>
-                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isAdoptedPlayersOpen ? "" : "-rotate-90"}`} />
-                  </button>
-                  {isAdoptedPlayersOpen && (
-                    <div className="space-y-2">
-                    {adoptedPlayers.map((ap: any, idx: number) => (
-                      <div key={idx} className="flex items-center justify-between bg-slate-900/50 px-4 py-3 rounded-xl ring-1 ring-white/5">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-xs font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
-                            {ap.tournament_name}
-                          </span>
-                          <span className="font-bold text-slate-200 text-sm">{ap.player_name}</span>
-                        </div>
-                        <span className={`inline-block px-3 py-1 text-[10px] font-black rounded-full ring-1 ${resultColors[ap.result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50"}`}>
-                          {ap.result}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  )}
-                </div>
-              );
-            })()}
+            {selectedTeam && <TeamPositionAnalysis positionStats={stats?.team_usage?.find((team: any) => team.canonical_id === selectedTeam)?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
 
             {selectedTeam && matchupDetails.length > 0 && (
               <TeamMatchupHistory

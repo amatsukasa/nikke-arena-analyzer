@@ -56,7 +56,7 @@ export default function TeamMatchupHistory({
   });
 
   const resultBadge = (isWin: boolean) => (
-    <span className={`rounded-md px-2.5 py-1 text-sm font-black tracking-wide ring-1 ${
+    <span className={`rounded-md px-5 py-2 text-lg font-black tracking-wider ring-1 ${
       isWin
         ? "bg-emerald-500/20 text-emerald-300 ring-emerald-500/40"
         : "bg-red-500/15 text-red-300 ring-red-500/30"
@@ -121,8 +121,8 @@ export default function TeamMatchupHistory({
                 </span>
               </div>
 
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className={`rounded px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ${
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
+                <div className={`self-start rounded px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ${
                   match.stage === "決勝"
                     ? "bg-amber-500/20 text-amber-400 ring-amber-500/30"
                     : match.stage?.includes("準決勝")
@@ -132,44 +132,37 @@ export default function TeamMatchupHistory({
                   {match.stage || "不明"}
                 </div>
 
-                <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:justify-center">
-                  <div className={`rounded-xl p-2 ring-1 ${
-                    !match.isAttacker
-                      ? "bg-purple-500/10 ring-purple-500/40"
-                      : "ring-white/5"
-                  }`}>
-                    <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                      <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
-                      {match.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
-                      {match.isAttacker && resultBadge(match.isWin)}
+                <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
+                  <div className="grid min-w-0 grid-cols-1 items-center justify-center gap-2 xl:grid-cols-[max-content_auto_max-content]">
+                    <div className="p-2">
+                      <div className="mb-2 flex items-center justify-center gap-2">
+                        <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
+                        {match.isAttacker && <span className="text-[10px] font-bold text-purple-300">分析対象</span>}
+                      </div>
+                      <TeamDisplay
+                        charIds={match.attackerTeam}
+                        allCharacters={allCharacters}
+                        collectionLevels={match.attackerCollections}
+                        onCharacterClick={onSelectCharacter}
+                      />
                     </div>
-                    <TeamDisplay
-                      charIds={match.attackerTeam}
-                      allCharacters={allCharacters}
-                      collectionLevels={match.attackerCollections}
-                      onCharacterClick={onSelectCharacter}
-                    />
-                  </div>
 
-                  <div className="shrink-0 text-sm font-black text-slate-500">VS</div>
+                    <div className="shrink-0 text-center text-sm font-black text-slate-500">VS</div>
 
-                  <div className={`rounded-xl p-2 ring-1 ${
-                    match.isAttacker
-                      ? "bg-purple-500/10 ring-purple-500/40"
-                      : "ring-white/5"
-                  }`}>
-                    <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                      <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
-                      {!match.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
-                      {!match.isAttacker && resultBadge(match.isWin)}
+                    <div className="p-2">
+                      <div className="mb-2 flex items-center justify-center gap-2">
+                        <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
+                        {!match.isAttacker && <span className="text-[10px] font-bold text-purple-300">分析対象</span>}
+                      </div>
+                      <TeamDisplay
+                        charIds={match.defenderTeam}
+                        allCharacters={allCharacters}
+                        collectionLevels={match.defenderCollections}
+                        onCharacterClick={onSelectCharacter}
+                      />
                     </div>
-                    <TeamDisplay
-                      charIds={match.defenderTeam}
-                      allCharacters={allCharacters}
-                      collectionLevels={match.defenderCollections}
-                      onCharacterClick={onSelectCharacter}
-                    />
                   </div>
+                  <div className="flex justify-center">{resultBadge(match.isWin)}</div>
                 </div>
               </div>
             </div>
