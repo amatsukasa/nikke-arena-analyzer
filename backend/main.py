@@ -4409,7 +4409,7 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
             "total_matches": 0,
             "adopted_players": [],
             "position_stats": [
-                {"position": p, "count": 0, "pct": 0.0, "wins": 0, "total": 0, "win_rate": None}
+                {"position": p, "count": 0, "pct": 0.0, "wins": 0, "total": 0, "win_rate": None, "best_result": None}
                 for p in range(1, 6)
             ],
             "_seen_adopted": set()
@@ -4441,6 +4441,10 @@ def _merge_team_position_and_adopted(merged_teams, team, cid):
             cur_ps["count"] += ps.get("count", 0)
             cur_ps["wins"] += ps.get("wins", 0)
             cur_ps["total"] += ps.get("total", 0)
+            current_score = RESULT_SCORES.get(cur_ps.get("best_result", "不明"), 999)
+            new_result = ps.get("best_result")
+            if new_result and RESULT_SCORES.get(new_result, 999) < current_score:
+                cur_ps["best_result"] = new_result
 
 def _finalize_team_position_and_adopted(team):
     t_count = team.get("count", 0)

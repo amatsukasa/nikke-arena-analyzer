@@ -458,6 +458,10 @@ class CrossScopePhase5BTest(unittest.TestCase):
             [(row["character_ids"], row["count"], row["player_count"], row["win_count"], row["total_matches"], row["best_result"]) for row in snapshot["team_usage"]],
             [(row["character_ids"], row["count"], row["player_count"], row["win_count"], row["total_matches"], row["best_result"]) for row in raw["team_usage"]],
         )
+        self.assertEqual(
+            [(row["canonical_id"], row["position_stats"]) for row in snapshot["team_usage"]],
+            [(row["canonical_id"], row["position_stats"]) for row in raw["team_usage"]],
+        )
         self.assertEqual(snapshot["character_usage_by_result"], raw["character_usage_by_result"])
         old = self.db.query(models.TournamentSnapshot).filter_by(tournament_id=self.full.id).one()
         old.char_stats = [{key: value for key, value in row.items() if key != "player_count"} for row in old.char_stats]

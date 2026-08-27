@@ -386,9 +386,11 @@ class FrontendFull64ContractTest(unittest.TestCase):
         for relative_path in (Path("page.tsx"), Path("tournament/[id]/dashboard/page.tsx")):
             source = (frontend / relative_path).read_text(encoding="utf-8")
             self.assertNotRegex(source, r"const\s+totalPlayers\s*=\s*64\s*;")
-            self.assertIn("adoptionDisplay(team, totalPlayers)", source)
-            self.assertIn("adoption.playerCount", source)
-            self.assertIn("adoption.adoptionRate", source)
+            self.assertIn("<TeamAdoptionRanking", source)
+        ranking = (BACKEND_DIR.parent / "frontend/src/components/TeamAdoptionRanking.tsx").read_text(encoding="utf-8")
+        self.assertIn("adoptionDisplay(team, totalRegisteredPlayers)", ranking)
+        self.assertIn("adoption.playerCount", ranking)
+        self.assertIn("adoption.adoptionRate", ranking)
 
     def test_static_source_contract_keeps_first_player_as_attacker_left_side(self):
         source = (BACKEND_DIR.parent / "frontend/src/app/tournament/[id]/page.tsx").read_text(encoding="utf-8")
