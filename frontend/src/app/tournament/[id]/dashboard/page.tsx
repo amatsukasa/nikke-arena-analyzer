@@ -10,6 +10,8 @@ import CharacterUsageByResultRanking from "../../../../components/CharacterUsage
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../../../../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../../../../components/TeamAdoptionRanking";
+import SynergyCharacterPicker, { useResetSynergyOnAnalysisChange } from "../../../../components/SynergyCharacterPicker";
+import { emptySynergySelection } from "../../../../lib/synergyCharacters";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 
@@ -59,7 +61,8 @@ export default function Dashboard() {
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
 
   // For search
-  const [searchChars, setSearchChars] = useState<number[]>([]);
+  const [includedCharacterIds, setIncludedCharacterIds] = useState<number[]>([]);
+  const [excludedCharacterIds, setExcludedCharacterIds] = useState<number[]>([]);
   const [filterRarity, setFilterRarity] = useState<string>("");
   const [filterManufacturer, setFilterManufacturer] = useState<string>("");
   const [filterBurst, setFilterBurst] = useState<string>("");
@@ -84,7 +87,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setVisibleTeamCount(10);
-  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, searchChars]);
+  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
   const handleTeamClick = (canonicalId: string) => {
     if (!canonicalId) return;
@@ -122,6 +125,11 @@ export default function Dashboard() {
   }, [selectedSeed, activeTab]);
 
   const [tournamentId, setTournamentId] = useState<number | null>(null);
+  const analysisKey = tournamentId ? `tournament|${tournamentId}` : null;
+  useResetSynergyOnAnalysisChange(analysisKey, () => {
+    setIncludedCharacterIds([]);
+    setExcludedCharacterIds([]);
+  });
 
   useEffect(() => {
     if (isFirstLoad) return;
@@ -133,6 +141,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (isFirstLoad || !tournamentId) return;
 
+    const controller = new AbortController();
+    setStats(null);
     const fetchData = async () => {
       setLoading(true);
       setDataError("");
@@ -142,7 +152,7 @@ export default function Dashboard() {
         const timestamp = Date.now();
         
         const tournUrl = `/api/tournaments/${tournamentId}?t=${timestamp}`;
-        const tournRes = await fetch(tournUrl, { cache: 'no-store', headers: authHeaders });
+        const tournRes = await fetch(tournUrl, { cache: 'no-store', headers: authHeaders, signal: controller.signal });
         if (!tournRes.ok) {
           if (tournRes.status === 401) setAuthError(true);
           else {
@@ -163,7 +173,7 @@ export default function Dashboard() {
             `/api/characters?t=${timestamp}`,
             `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`
           ];
-          const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders })));
+          const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
 
           for (let i = 0; i < responses.length; i++) {
             const res = responses[i];
@@ -200,7 +210,7 @@ export default function Dashboard() {
           `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`
         ];
-        const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders })));
+        const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
 
         for (let i = 0; i < responses.length; i++) {
           const res = responses[i];
@@ -239,27 +249,30 @@ export default function Dashboard() {
           setSelectedTeam(statsData.team_usage[0].canonical_id);
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
         setDataError(e instanceof Error ? e.message : "大会ダッシュボードのデータを取得できませんでした。");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     fetchData();
+    return () => controller.abort();
   }, [id, isFirstLoad, tournamentId, requestedTab]);
 
   useEffect(() => {
     const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
     if (!isPrivateTournament || !tournamentId || hasFullStats) return;
-    if (activeTab !== "overview" && activeTab !== "matchups") return;
+    if (activeTab !== "overview" && activeTab !== "matchups" && activeTab !== "search") return;
 
+    const controller = new AbortController();
     const fetchStats = async () => {
       setAnalysisLoading(true);
       try {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const url = `/api/tournaments/${tournamentId}/dashboard/stats?t=${Date.now()}`;
-        const res = await fetch(url, { cache: "no-store", headers: authHeaders });
+        const res = await fetch(url, { cache: "no-store", headers: authHeaders, signal: controller.signal });
         if (!res.ok) {
           if (res.status === 401) setAuthError(true);
           else console.error("API error", res.status, url, (await res.text()).slice(0, 300));
@@ -271,13 +284,15 @@ export default function Dashboard() {
           setSelectedTeam(data.team_usage[0].canonical_id);
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
       } finally {
-        setAnalysisLoading(false);
+        if (!controller.signal.aborted) setAnalysisLoading(false);
       }
     };
 
     fetchStats();
+    return () => controller.abort();
   }, [activeTab, isPrivateTournament, tournamentId, stats, selectedTeam]);
 
   useEffect(() => {
@@ -1783,35 +1798,22 @@ export default function Dashboard() {
                 </select>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {filteredCharacters.map(c => {
-                  const isSelected = searchChars.includes(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => {
-                        if (isSelected) setSearchChars(searchChars.filter(id => id !== c.id));
-                        else if (searchChars.length < 5) setSearchChars([...searchChars, c.id]);
-                      }}
-                      className={`relative w-12 h-12 rounded-lg overflow-hidden transition-all ${isSelected ? 'ring-2 ring-emerald-500 scale-110 shadow-lg' : 'ring-1 ring-white/10 opacity-70 hover:opacity-100'}`}
-                      title={c.name}
-                    >
-                      {getCharIconUrl(c) ? (
-                         <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                      ) : (
-                         <div className="w-full h-full bg-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-bold text-center leading-tight">
-                           {c.name.slice(0,4)}
-                         </div>
-                      )}
-                      {isSelected && <div className="absolute inset-0 bg-emerald-500/20" />}
-                    </button>
-                  );
-                })}
-              </div>
+              <SynergyCharacterPicker
+                key={`synergy-picker-single-${analysisKey}`}
+                characters={filteredCharacters}
+                characterUsage={stats?.character_usage ?? stats?.character_stats ?? []}
+                usageState={analysisLoading ? "loading" : dataError || !stats ? "error" : "ready"}
+                includedIds={includedCharacterIds}
+                excludedIds={excludedCharacterIds}
+                onChange={({ includedIds, excludedIds }) => {
+                  setIncludedCharacterIds(includedIds);
+                  setExcludedCharacterIds(excludedIds);
+                }}
+              />
               <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">選択中: {searchChars.length}/5</span>
-                {searchChars.length > 0 && (
-                  <button onClick={() => setSearchChars([])} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
+                <span className="text-sm text-slate-400">検索対象: {includedCharacterIds.length}/5　除外対象: {excludedCharacterIds.length}</span>
+                {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
+                  <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
                     クリア
                   </button>
                 )}
@@ -1820,16 +1822,18 @@ export default function Dashboard() {
 
             <div className="space-y-4">
               <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
-              {searchChars.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">キャラクターを選択してください</p>
+              {includedCharacterIds.length === 0 ? (
+                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
+                    key={`synergy-single-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
                     mode="single"
                     tournamentId={Number(id)}
                     tournamentIds={[Number(id)]} 
                     allCharacters={allCharacters}
-                    characterIds={searchChars} 
+                    characterIds={includedCharacterIds}
+                    excludedCharacterIds={excludedCharacterIds}
                     onTeamClick={handleTeamClick} 
                     selectedTeam={selectedTeam} 
                     sortBy="count"

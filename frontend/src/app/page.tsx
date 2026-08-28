@@ -10,6 +10,8 @@ import CharacterUsageByResultRanking from "../components/CharacterUsageByResultR
 import TeamMatchupHistory from "../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../components/TeamAdoptionRanking";
+import SynergyCharacterPicker, { useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
+import { emptySynergySelection } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
@@ -107,7 +109,8 @@ function DashboardContent() {
   const initialSynergy = searchParams.get("synergy")
     ? searchParams.get("synergy")!.split(",").map(x => parseInt(x.trim(), 10)).filter(x => !isNaN(x))
     : [];
-  const [searchChars, setSearchChars] = useState<number[]>(initialSynergy);
+  const [includedCharacterIds, setIncludedCharacterIds] = useState<number[]>(initialSynergy);
+  const [excludedCharacterIds, setExcludedCharacterIds] = useState<number[]>([]);
   const [filterRarity, setFilterRarity] = useState<string>("");
   const [filterManufacturer, setFilterManufacturer] = useState<string>("");
   const [filterBurst, setFilterBurst] = useState<string>("");
@@ -163,8 +166,8 @@ function DashboardContent() {
     if (selectedTournamentIds.length > 0) {
       params.set("tournaments", selectedTournamentIds.join(","));
     }
-    if (searchChars.length > 0) {
-      params.set("synergy", searchChars.join(","));
+    if (includedCharacterIds.length > 0) {
+      params.set("synergy", includedCharacterIds.join(","));
     }
     router.push(`/?${params.toString()}`, { scroll: false });
   };
@@ -247,6 +250,13 @@ function DashboardContent() {
   }, [isFirstLoad, user?.game_start_date]);
 
   const selectedChampionshipId = allTournaments.find(t => t.play_server === filterServer && t.season === filterSeason)?.championship_id;
+  const analysisKey = allTournaments.length > 0 && selectedChampionshipId && selectedTournamentIds.length > 0
+    ? [filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
+    : null;
+  useResetSynergyOnAnalysisChange(analysisKey, () => {
+    setIncludedCharacterIds([]);
+    setExcludedCharacterIds([]);
+  });
 
   // フィルタ状態から selectedTournamentIds を計算
   useEffect(() => {
@@ -274,7 +284,7 @@ function DashboardContent() {
 
   useEffect(() => {
     setVisibleTeamCount(10);
-  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, searchChars]);
+  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
   useEffect(() => {
     if (!selectedCharId || selectedTournamentIds.length === 0) {
@@ -336,6 +346,8 @@ function DashboardContent() {
     }
     if (selectedTournamentIds.length === 0) return;
 
+    const controller = new AbortController();
+    setStats(null);
     const fetchData = async () => {
       setLoading(true);
       setStatsError("");
@@ -343,7 +355,7 @@ function DashboardContent() {
         const timestamp = Date.now();
         
         // 1. 全キャラクター情報取得
-        const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store' });
+        const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store', signal: controller.signal });
         if (charsRes.ok) {
           setAllCharacters(await charsRes.json());
         }
@@ -365,7 +377,8 @@ function DashboardContent() {
         };
         
         const statsRes = await fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody),
+            signal: controller.signal,
           });
         
         if (statsRes.ok) {
@@ -393,14 +406,16 @@ function DashboardContent() {
           throw new Error(`集計データを取得できませんでした（HTTP ${statsRes.status}）`);
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
         setStatsError(e instanceof Error ? e.message : "集計データを取得できませんでした。");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     fetchData();
-  }, [selectedTournamentIds, isFirstLoad]);
+    return () => controller.abort();
+  }, [selectedTournamentIds, filterServer, filterSeason, selectedChampionshipId, isFirstLoad]);
 
   const matchupsRequestKey = [
     [...selectedTournamentIds].sort((a, b) => a - b).join(","),
@@ -673,6 +688,7 @@ function DashboardContent() {
                   value={filterServer}
                   onChange={(e) => {
                     const newServer = e.target.value;
+                    if (newServer === filterServer) return;
                     setFilterServer(newServer);
                     const newServerTournaments = allTournaments.filter(t => t.play_server === newServer);
                     const newServerSeasons = Array.from(new Set(newServerTournaments.map(t => t.season || "β30").filter(Boolean)));
@@ -699,7 +715,9 @@ function DashboardContent() {
                 <select
                   value={filterSeason}
                   onChange={(e) => {
-                    setFilterSeason(e.target.value);
+                    const newSeason = e.target.value;
+                    if (newSeason === filterSeason) return;
+                    setFilterSeason(newSeason);
                     setIsAllTournamentsSelected(true);
                     setSelectedSpecificTournamentIds([]);
                   }}
@@ -1302,35 +1320,22 @@ function DashboardContent() {
                 </select>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {filteredCharacters.map(c => {
-                  const isSelected = searchChars.includes(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => {
-                        if (isSelected) setSearchChars(searchChars.filter(id => id !== c.id));
-                        else if (searchChars.length < 5) setSearchChars([...searchChars, c.id]);
-                      }}
-                      className={`relative w-12 h-12 rounded-lg overflow-hidden transition-all ${isSelected ? 'ring-2 ring-emerald-500 scale-110 shadow-lg' : 'ring-1 ring-white/10 opacity-70 hover:opacity-100'}`}
-                      title={c.name}
-                    >
-                      {getCharIconUrl(c) ? (
-                         <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                      ) : (
-                         <div className="w-full h-full bg-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-bold text-center leading-tight">
-                           {c.name.slice(0,4)}
-                         </div>
-                      )}
-                      {isSelected && <div className="absolute inset-0 bg-emerald-500/20" />}
-                    </button>
-                  );
-                })}
-              </div>
+              <SynergyCharacterPicker
+                key={`synergy-picker-cross-${analysisKey}`}
+                characters={filteredCharacters}
+                characterUsage={stats?.character_usage ?? stats?.character_stats ?? []}
+                usageState={loading ? "loading" : statsError || !stats ? "error" : "ready"}
+                includedIds={includedCharacterIds}
+                excludedIds={excludedCharacterIds}
+                onChange={({ includedIds, excludedIds }) => {
+                  setIncludedCharacterIds(includedIds);
+                  setExcludedCharacterIds(excludedIds);
+                }}
+              />
               <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">選択中: {searchChars.length}/5</span>
-                {searchChars.length > 0 && (
-                  <button onClick={() => setSearchChars([])} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
+                <span className="text-sm text-slate-400">検索対象: {includedCharacterIds.length}/5　除外対象: {excludedCharacterIds.length}</span>
+                {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
+                  <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
                     クリア
                   </button>
                 )}
@@ -1339,17 +1344,19 @@ function DashboardContent() {
 
             <div className="space-y-4">
               <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
-              {searchChars.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">キャラクターを選択してください</p>
+              {includedCharacterIds.length === 0 ? (
+                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
+                    key={`synergy-cross-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
                     mode="cross"
                     tournamentIds={selectedTournamentIds} 
                     playServer={filterServer}
                     championshipId={selectedChampionshipId}
                     allCharacters={allCharacters}
-                    characterIds={searchChars} 
+                    characterIds={includedCharacterIds}
+                    excludedCharacterIds={excludedCharacterIds}
                     onTeamClick={handleTeamClick} 
                     selectedTeam={selectedTeam} 
                     sortBy="count"

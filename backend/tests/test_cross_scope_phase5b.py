@@ -28,6 +28,26 @@ from tests.test_full64_regression import _match_pairs  # noqa: E402
 
 
 class CrossScopePhase5BTest(unittest.TestCase):
+    def test_team_character_conditions_apply_include_and_exclude_before_paging(self):
+        teams = [
+            {"canonical_id": "first", "character_ids": [1, 2, 3, 4, 5]},
+            {"canonical_id": "second", "character_ids": [5, 4, 3, 2, 6]},
+            {"canonical_id": "empty-slot", "character_ids": [1, 2, 3, 4, 9999]},
+        ]
+
+        self.assertEqual(
+            [team["canonical_id"] for team in main._filter_teams_by_character_conditions(teams, [2, 3], [5])],
+            ["empty-slot"],
+        )
+        self.assertEqual(
+            main._filter_teams_by_character_conditions(teams, [1, 6], []),
+            [],
+        )
+        self.assertEqual(
+            main._filter_teams_by_character_conditions(teams, [1], []),
+            [teams[0], teams[2]],
+        )
+
     def setUp(self):
         Base.metadata.drop_all(bind=engine); Base.metadata.create_all(bind=engine)
         self.db = SessionLocal()
