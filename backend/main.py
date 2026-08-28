@@ -5422,6 +5422,7 @@ class CrossTournamentTeamsRequest(PydanticBaseModel):
     registration_scope: Literal["all", "full_64", "champion_8"] = "all"
     seed: Optional[int] = None
     character_ids: Optional[List[int]] = None
+    excluded_character_ids: Optional[List[int]] = None
     limit: Optional[int] = 10
     offset: Optional[int] = 0
     sort_by: Optional[str] = None
@@ -5431,6 +5432,29 @@ class CrossTournamentTeamsRequest(PydanticBaseModel):
     best_result: Optional[str] = None
 
 
+def _filter_teams_by_character_conditions(
+    teams: List[dict],
+    included_character_ids: Optional[List[int]] = None,
+    excluded_character_ids: Optional[List[int]] = None,
+) -> List[dict]:
+    included = {int(character_id) for character_id in (included_character_ids or []) if int(character_id) != EMPTY_SLOT_CHARACTER_ID}
+    excluded = {int(character_id) for character_id in (excluded_character_ids or []) if int(character_id) != EMPTY_SLOT_CHARACTER_ID}
+    if not included and not excluded:
+        return teams
+
+    filtered = []
+    for team in teams:
+        raw_character_ids = team.get("character_ids") or [
+            character["id"]
+            for character in team.get("characters", [])
+            if isinstance(character, dict) and "id" in character
+        ]
+        team_character_ids = {int(character_id) for character_id in raw_character_ids}
+        if included.issubset(team_character_ids) and team_character_ids.isdisjoint(excluded):
+            filtered.append(team)
+    return filtered
+
+
 @app.get("/api/tournaments/{tournament_id}/dashboard/teams")
 def get_dashboard_teams(
     tournament_id: int,
@@ -5438,6 +5462,7 @@ def get_dashboard_teams(
     limit: int = Query(10, ge=1),
     offset: int = Query(0, ge=0),
     character_ids: Optional[str] = None,
+    excluded_character_ids: Optional[str] = None,
     sort_by: Optional[str] = None,
     min_matches: int = 0,
     min_usage: int = 0,
@@ -5452,6 +5477,7 @@ def get_dashboard_teams(
         "limit": limit,
         "offset": offset,
         "character_ids": character_ids,
+        "excluded_character_ids": excluded_character_ids,
         "sort_by": sort_by,
         "min_matches": min_matches,
         "min_usage": min_usage,
@@ -5471,15 +5497,9 @@ def get_dashboard_teams(
         stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
         teams = stats.get("team_usage", [])
     
-    if character_ids:
-        c_ids = [int(x) for x in character_ids.split(",") if x.isdigit()]
-        if c_ids:
-            filtered = []
-            for t in teams:
-                t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
-                if all(cid in t_cids for cid in c_ids):
-                    filtered.append(t)
-            teams = filtered
+    included_ids = [int(value) for value in character_ids.split(",") if value.isdigit()] if character_ids else []
+    excluded_ids = [int(value) for value in excluded_character_ids.split(",") if value.isdigit()] if excluded_character_ids else []
+    teams = _filter_teams_by_character_conditions(teams, included_ids, excluded_ids)
 
     if min_matches > 0:
         teams = [t for t in teams if t.get("total_matches", 0) >= min_matches]
@@ -5544,14 +5564,11 @@ def get_cross_dashboard_teams(
         stats = _compute_cross_tournament_stats(tournament_ids, db)
         teams = stats.get("team_usage", [])
     
-    if req.character_ids:
-        c_ids = req.character_ids
-        filtered = []
-        for t in teams:
-            t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
-            if all(cid in t_cids for cid in c_ids):
-                filtered.append(t)
-        teams = filtered
+    teams = _filter_teams_by_character_conditions(
+        teams,
+        req.character_ids,
+        req.excluded_character_ids,
+    )
 
     if req.min_matches is not None and req.min_matches > 0:
         teams = [t for t in teams if t.get("total_matches", 0) >= req.min_matches]
