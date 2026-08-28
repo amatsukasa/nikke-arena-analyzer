@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
-import { CharacterUsageCount, mapAndSortSynergyCharacters, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
+import { CharacterUsageCount, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
 
 type UsageState = "loading" | "ready" | "error";
 
@@ -18,6 +18,22 @@ export function useResetSynergyOnAnalysisChange(analysisKey: string | null, rese
     }
     previousKey.current = analysisKey;
   }, [analysisKey]);
+}
+
+export function SynergyPickerInstructions() {
+  return (
+    <div className="mb-4 space-y-1">
+      <p className="text-sm font-bold leading-relaxed text-slate-100">
+        タップするたびに切り替わります
+        <span className="ml-2 inline-block text-emerald-400">✅ 検索対象</span>
+        <span className="mx-1 text-slate-400">→</span>
+        <span className="inline-block text-red-400">✖ 除外対象</span>
+        <span className="mx-1 text-slate-400">→</span>
+        <span className="inline-block">選択解除</span>
+      </p>
+      <p className="text-xs leading-relaxed text-slate-400">選択した大会で採用実績のあるキャラクターのみ表示しています</p>
+    </div>
+  );
 }
 
 export default function SynergyCharacterPicker({
@@ -36,9 +52,36 @@ export default function SynergyCharacterPicker({
   onChange: (selection: { includedIds: number[]; excludedIds: number[] }) => void;
 }) {
   const [notice, setNotice] = useState("");
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   const options = usageState === "ready"
-    ? mapAndSortSynergyCharacters(characters, characterUsage)
+    ? mapAndSortSelectableSynergyCharacters(characters, characterUsage)
     : characters.map((character) => ({ character, count: 0, unavailable: false }));
+
+  const selectableIdsKey = usageState === "ready"
+    ? options.map((option) => option.character.id).join(",")
+    : "";
+
+  useEffect(() => {
+    if (usageState !== "ready") return;
+    const { includedIds: nextIncludedIds, excludedIds: nextExcludedIds } = reconcileSynergySelection(
+      includedIds,
+      excludedIds,
+      options.map((option) => option.character.id),
+    );
+    if (nextIncludedIds.length !== includedIds.length || nextExcludedIds.length !== excludedIds.length) {
+      onChangeRef.current({ includedIds: nextIncludedIds, excludedIds: nextExcludedIds });
+      setNotice("");
+    }
+  }, [usageState, selectableIdsKey, includedIds.join(","), excludedIds.join(",")]);
+
+  if (usageState === "ready" && options.length === 0) {
+    return (
+      <p className="rounded-lg bg-slate-900/40 px-4 py-6 text-center text-sm text-slate-400">
+        選択した大会には、検索できるキャラクターの採用データがありません
+      </p>
+    );
+  }
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -102,13 +145,7 @@ export default function SynergyCharacterPicker({
           </button>
         );
       })}
-      <div className="w-full pt-1 text-xs text-slate-400">
-        <span>タップするたびに切り替わります　</span>
-        <span className="font-bold text-emerald-400">✅ 検索対象</span>
-        <span>　</span>
-        <span className="font-bold text-red-400">✖ 除外対象</span>
-        {notice && <div role="status" className="mt-1 text-amber-300">{notice}</div>}
-      </div>
+      {notice && <div role="status" className="w-full pt-1 text-xs text-amber-300">{notice}</div>}
     </div>
   );
 }

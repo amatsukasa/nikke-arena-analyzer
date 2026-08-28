@@ -27,6 +27,18 @@ export function emptySynergySelection(): SynergySelection {
   return { includedIds: [], excludedIds: [] };
 }
 
+export function reconcileSynergySelection(
+  includedIds: number[],
+  excludedIds: number[],
+  selectableIds: number[],
+): SynergySelection {
+  const selectable = new Set(selectableIds.map(Number));
+  return {
+    includedIds: includedIds.filter((id) => selectable.has(Number(id))),
+    excludedIds: excludedIds.filter((id) => selectable.has(Number(id))),
+  };
+}
+
 const japaneseCollator = new Intl.Collator("ja", {
   sensitivity: "base",
   numeric: true,
@@ -97,4 +109,14 @@ export function mapAndSortSynergyCharacters<T extends SynergyCharacter>(
       const byName = japaneseCollator.compare(left.character.name ?? "", right.character.name ?? "");
       return byName || Number(left.character.id) - Number(right.character.id);
     });
+}
+
+export function mapAndSortSelectableSynergyCharacters<T extends SynergyCharacter>(
+  characters: T[],
+  characterUsage: CharacterUsageCount[],
+): SynergyCharacterOption<T>[] {
+  return mapAndSortSynergyCharacters(
+    characters.filter((character) => Number(character.id) !== 9999),
+    characterUsage,
+  ).filter((option) => option.count > 0);
 }
