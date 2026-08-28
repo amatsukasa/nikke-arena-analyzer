@@ -10,7 +10,7 @@ import CharacterUsageByResultRanking from "../components/CharacterUsageByResultR
 import TeamMatchupHistory from "../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../components/TeamAdoptionRanking";
-import SynergyCharacterPicker, { useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
+import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
 import { emptySynergySelection } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
@@ -1277,7 +1277,7 @@ function DashboardContent() {
           return (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20">
-              <label className="block text-sm font-bold text-emerald-400 mb-3">キャラクターを選択して編成を逆引き</label>
+              <SynergyPickerInstructions />
               
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
