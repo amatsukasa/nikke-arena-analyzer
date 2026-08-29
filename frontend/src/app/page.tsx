@@ -1,15 +1,20 @@
 "use client";
 export const dynamic = 'force-dynamic';
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, User as UserIcon, Globe } from "lucide-react";
+import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, Globe } from "lucide-react";
 import Link from "next/link";
 import PaginatedTeamList from "../components/PaginatedTeamList";
 import SharedTeamDisplay from "../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../components/CharacterUsageByResultRanking";
 import TeamMatchupHistory from "../components/TeamMatchupHistory";
+import TeamPositionAnalysis from "../components/TeamPositionAnalysis";
+import TeamAdoptionRanking from "../components/TeamAdoptionRanking";
+import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
+import { emptySynergySelection } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 
 const SERVER_LABELS: Record<string, string> = {
   KR: "韓国（KR）",
@@ -70,7 +75,13 @@ function DashboardContent() {
 
   const [tournament, setTournament] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
+  const [statsError, setStatsError] = useState("");
   const [matchups, setMatchups] = useState<any[]>([]);
+  const [matchupsLoading, setMatchupsLoading] = useState(false);
+  const [matchupsError, setMatchupsError] = useState("");
+  const [matchupsLoadedKey, setMatchupsLoadedKey] = useState("");
+  const [matchupsRetry, setMatchupsRetry] = useState(0);
+  const matchupsRequestRef = useRef<AbortController | null>(null);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -90,7 +101,6 @@ function DashboardContent() {
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
   const [knownTeamsMap, setKnownTeamsMap] = useState<Record<string, any>>({});
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
-  const [isAdoptedPlayersOpen, setIsAdoptedPlayersOpen] = useState(true);
   const [matchupFilterResult, setMatchupFilterResult] = useState<"ALL" | "WIN" | "LOSE">("ALL");
   const [matchupFilterSide, setMatchupFilterSide] = useState<"ALL" | "ATTACK" | "DEFENSE">("ALL");
   const [matchupFilterStage, setMatchupFilterStage] = useState<string>("ALL");
@@ -99,7 +109,8 @@ function DashboardContent() {
   const initialSynergy = searchParams.get("synergy")
     ? searchParams.get("synergy")!.split(",").map(x => parseInt(x.trim(), 10)).filter(x => !isNaN(x))
     : [];
-  const [searchChars, setSearchChars] = useState<number[]>(initialSynergy);
+  const [includedCharacterIds, setIncludedCharacterIds] = useState<number[]>(initialSynergy);
+  const [excludedCharacterIds, setExcludedCharacterIds] = useState<number[]>([]);
   const [filterRarity, setFilterRarity] = useState<string>("");
   const [filterManufacturer, setFilterManufacturer] = useState<string>("");
   const [filterBurst, setFilterBurst] = useState<string>("");
@@ -155,8 +166,8 @@ function DashboardContent() {
     if (selectedTournamentIds.length > 0) {
       params.set("tournaments", selectedTournamentIds.join(","));
     }
-    if (searchChars.length > 0) {
-      params.set("synergy", searchChars.join(","));
+    if (includedCharacterIds.length > 0) {
+      params.set("synergy", includedCharacterIds.join(","));
     }
     router.push(`/?${params.toString()}`, { scroll: false });
   };
@@ -239,6 +250,13 @@ function DashboardContent() {
   }, [isFirstLoad, user?.game_start_date]);
 
   const selectedChampionshipId = allTournaments.find(t => t.play_server === filterServer && t.season === filterSeason)?.championship_id;
+  const analysisKey = allTournaments.length > 0 && selectedChampionshipId && selectedTournamentIds.length > 0
+    ? [filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
+    : null;
+  useResetSynergyOnAnalysisChange(analysisKey, () => {
+    setIncludedCharacterIds([]);
+    setExcludedCharacterIds([]);
+  });
 
   // フィルタ状態から selectedTournamentIds を計算
   useEffect(() => {
@@ -266,7 +284,7 @@ function DashboardContent() {
 
   useEffect(() => {
     setVisibleTeamCount(10);
-  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, searchChars]);
+  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
   useEffect(() => {
     if (!selectedCharId || selectedTournamentIds.length === 0) {
@@ -328,13 +346,16 @@ function DashboardContent() {
     }
     if (selectedTournamentIds.length === 0) return;
 
+    const controller = new AbortController();
+    setStats(null);
     const fetchData = async () => {
       setLoading(true);
+      setStatsError("");
       try {
         const timestamp = Date.now();
         
         // 1. 全キャラクター情報取得
-        const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store' });
+        const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store', signal: controller.signal });
         if (charsRes.ok) {
           setAllCharacters(await charsRes.json());
         }
@@ -356,7 +377,8 @@ function DashboardContent() {
         };
         
         const statsRes = await fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody),
+            signal: controller.signal,
           });
         
         if (statsRes.ok) {
@@ -380,21 +402,46 @@ function DashboardContent() {
             const firstKey = makeTeamKey(firstTeam.character_ids || firstTeam.characters?.map((c: any) => c.id) || firstTeam.canonical_id);
             setSelectedTeam(firstKey || firstTeam.canonical_id);
           }
+        } else {
+          throw new Error(`集計データを取得できませんでした（HTTP ${statsRes.status}）`);
         }
       } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
+        setStatsError(e instanceof Error ? e.message : "集計データを取得できませんでした。");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     fetchData();
-  }, [selectedTournamentIds, isFirstLoad]);
+    return () => controller.abort();
+  }, [selectedTournamentIds, filterServer, filterSeason, selectedChampionshipId, isFirstLoad]);
+
+  const matchupsRequestKey = [
+    [...selectedTournamentIds].sort((a, b) => a - b).join(","),
+    filterServer,
+    selectedChampionshipId ?? "",
+  ].join("|");
 
   useEffect(() => {
-    if (activeTab !== "matchups" && activeTab !== "team_winrate") return;
-    if (matchups.length > 0 || selectedTournamentIds.length === 0) return;
+    matchupsRequestRef.current?.abort();
+    setMatchups([]);
+    setMatchupsError("");
+    setMatchupsLoadedKey("");
+    setMatchupsLoading(false);
+  }, [matchupsRequestKey]);
+
+  useEffect(() => {
+    if (activeTab !== "matchups") return;
+    if (selectedTournamentIds.length === 0 || matchupsLoadedKey === matchupsRequestKey) return;
+
+    const controller = new AbortController();
+    matchupsRequestRef.current?.abort();
+    matchupsRequestRef.current = controller;
 
     const fetchMatchups = async () => {
+      setMatchupsLoading(true);
+      setMatchupsError("");
       try {
         if (
           selectedTournamentIds.length === 0 ||
@@ -411,17 +458,28 @@ function DashboardContent() {
           championship_id: selectedChampionshipId
         };
         const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody)
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody),
+          signal: controller.signal,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new Error(`対戦履歴を取得できませんでした（HTTP ${res.status}）`);
+        }
         const data = await res.json();
         setMatchups(data.matchups || data);
+        setMatchupsLoadedKey(matchupsRequestKey);
       } catch(e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
+        setMatchupsError(e instanceof Error ? e.message : "対戦履歴を取得できませんでした。");
+      } finally {
+        if (matchupsRequestRef.current === controller) {
+          setMatchupsLoading(false);
+        }
       }
     };
     fetchMatchups();
-  }, [activeTab, selectedTournamentIds, matchups.length]);
+    return () => controller.abort();
+  }, [activeTab, matchupsRequestKey, matchupsLoadedKey, matchupsRetry]);
 
   if (loading) return (
     <div className="flex h-screen items-center justify-center">
@@ -560,35 +618,13 @@ function DashboardContent() {
 
   // --- Matchups logic ---
   const targetMatchupKey = makeTeamKey(selectedTeam || searchParams.get("teamKey") || searchParams.get("team"));
-  const teamMatchups = matchups.filter(m => {
-    return makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey || makeTeamKey(m.canonical_defender || m.defender_team) === targetMatchupKey;
-  });
-  let totalWins = 0, totalLosses = 0;
-  let attackWins = 0, attackLosses = 0;
-  let defenseWins = 0, defenseLosses = 0;
-  const matchupDetails: any[] = [];
-
-  teamMatchups.forEach(m => {
-    const isAttacker = makeTeamKey(m.canonical_attacker || m.attacker_team) === targetMatchupKey;
-    const isWin = m.winner_is_attacker ? isAttacker : !isAttacker;
-    if (isWin) totalWins++; else totalLosses++;
-    if (isAttacker) { if (isWin) attackWins++; else attackLosses++; }
-    else { if (isWin) defenseWins++; else defenseLosses++; }
-    matchupDetails.push({ 
-      opponent: isAttacker ? m.defender_team : m.attacker_team, 
-      opponentCanonical: isAttacker ? m.canonical_defender : m.canonical_attacker,
-      attackerTeam: m.attacker_team,
-      defenderTeam: m.defender_team,
-      attackerCollections: m.attacker_collections,
-      defenderCollections: m.defender_collections,
-      isAttacker, 
-      isWin, 
-      stage: m.stage,
-      tournamentName: m.tournament_name,
-      attackerName: m.attacker_name,
-      defenderName: m.defender_name
-    });
-  });
+  const {
+    details: matchupDetails, totalWins, totalLosses,
+    attackWins, attackLosses, defenseWins, defenseLosses,
+  } = teamMatchupPerspective(matchups, targetMatchupKey, makeTeamKey);
+  const registrationScopeByTournamentId = Object.fromEntries(
+    allTournaments.map((item) => [Number(item.id), item.registration_scope]),
+  );
 
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
@@ -598,7 +634,7 @@ function DashboardContent() {
   )).sort() as string[];
 
   return (
-    <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24">
+    <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0 mb-2 md:mb-8 border-b border-white/10 pb-4 md:pb-6">
         <div className="flex min-w-0 items-center space-x-3 md:space-x-4">
@@ -655,6 +691,7 @@ function DashboardContent() {
                   value={filterServer}
                   onChange={(e) => {
                     const newServer = e.target.value;
+                    if (newServer === filterServer) return;
                     setFilterServer(newServer);
                     const newServerTournaments = allTournaments.filter(t => t.play_server === newServer);
                     const newServerSeasons = Array.from(new Set(newServerTournaments.map(t => t.season || "β30").filter(Boolean)));
@@ -681,7 +718,9 @@ function DashboardContent() {
                 <select
                   value={filterSeason}
                   onChange={(e) => {
-                    setFilterSeason(e.target.value);
+                    const newSeason = e.target.value;
+                    if (newSeason === filterSeason) return;
+                    setFilterSeason(newSeason);
                     setIsAllTournamentsSelected(true);
                     setSelectedSpecificTournamentIds([]);
                   }}
@@ -789,11 +828,22 @@ function DashboardContent() {
 
           {/* Content */}
           <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
+        {statsError && (
+          <div role="alert" className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-200">
+            {statsError}
+          </div>
+        )}
         
 
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
+            {stats?.registration_breakdown && (
+              <div className="rounded-xl bg-slate-800/50 p-4 text-sm text-slate-300 ring-1 ring-white/10">
+                集計対象 {stats.registration_breakdown.total_registered_players}人
+                （64人モード {stats.registration_breakdown.full_64_registered_players}人／8人モード {stats.registration_breakdown.champion_8_registered_players}人）
+              </div>
+            )}
             <CharacterUsageByResultRanking
               stats={stats}
               allCharacters={allCharacters}
@@ -892,143 +942,14 @@ function DashboardContent() {
               </div>
             </section>
             )}
-            <section>
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                <Users className="text-emerald-400" />
-                <span>編成（5名組み合わせ）使用率ランキング</span>
-              </h2>
-              {/* レスポンシブ統合リスト: PCでは行、スマホではカード（画像DOMは1つのみ） */}
-              <div className="space-y-3">
-                {/* PC用ヘッダー行 */}
-                <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 text-xs font-bold text-slate-400 bg-slate-900/80 rounded-xl border border-white/5">
-                  <div className="col-span-1">順位</div>
-                  <div className="col-span-5">編成</div>
-                  <div className="col-span-2 text-center">最終成績</div>
-                  <div className="col-span-2 text-right">勝率</div>
-                  <div className="col-span-2 text-right">採用数</div>
-                </div>
-
-                {(stats?.team_usage ?? []).slice(0, visibleTeamCount).map((team: any, idx: number) => {
-                  const resultColors: Record<string, string> = {
-                    "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                    "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                    "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                    "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                    "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                    "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                    "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-                  };
-                  const resultClass = resultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
-                  const totalPlayers = 64;
-                  const adoptionPct = Math.round((team.count / totalPlayers) * 100);
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => handleTeamClick(team.canonical_id, team)}
-                      className="bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/10 flex flex-col md:grid md:grid-cols-12 md:items-center gap-3"
-                    >
-                      {/* 上部・左部: スマホでは順位・成績・勝率ヘッダー、PCでは順位のみ */}
-                      <div className="flex items-center justify-between md:justify-start md:col-span-1 border-b border-white/5 pb-2 md:border-b-0 md:pb-0">
-                        <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                          idx + 1 === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                          idx + 1 === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                          idx + 1 === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                          "text-slate-400"
-                        }`}>
-                          {idx + 1}
-                        </span>
-                        {/* スマホのみ表示する成績ラベル＆勝率 */}
-                        <div className="flex items-center gap-2 md:hidden">
-                          {team.best_result && (
-                            <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultClass}`}>
-                              {team.best_result}
-                            </span>
-                          )}
-                          {team.total_matches > 0 && (
-                            <div className={`px-2.5 py-0.5 rounded-md font-bold text-xs ${
-                              team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
-                            }`}>
-                              勝率: {team.win_rate}%
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 編成アイコン（DOMはここ1か所のみ！） */}
-                      <div className="flex justify-center md:justify-start md:col-span-5 py-1 overflow-x-auto">
-                        <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
-                      </div>
-
-                      {/* PC用: 最終成績 */}
-                      <div className="hidden md:flex md:col-span-2 justify-center">
-                        {team.best_result ? (
-                          <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                            {team.best_result}
-                          </span>
-                        ) : (
-                          <span className="text-slate-600 text-xs">-</span>
-                        )}
-                      </div>
-
-                      {/* PC用: 勝率＆勝敗 */}
-                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        {team.total_matches > 0 ? (
-                          <>
-                            <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                              {team.win_rate}%
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-bold">
-                              {team.win_count}W {team.total_matches - team.win_count}L
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-slate-600 text-xs">対戦なし</span>
-                        )}
-                      </div>
-
-                      {/* PC用: 採用数＆率 */}
-                      <div className="hidden md:flex md:col-span-2 flex-col items-end">
-                        <span className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                          {team.count}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-bold">
-                          {totalPlayers}人中 ({adoptionPct}%)
-                        </span>
-                      </div>
-
-                      {/* スマホ用フッター: 採用数＆勝敗詳細 */}
-                      <div className="flex md:hidden items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
-                        <div>
-                          採用数: <span className="font-bold text-slate-100">{team.count}</span> 人 ({adoptionPct}%)
-                        </div>
-                        {team.total_matches > 0 && (
-                          <>
-                            <div className="w-px h-3 bg-white/10" />
-                            <div>
-                              勝敗: <span className="font-bold text-emerald-400">{team.win_count}W</span>
-                              <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {(stats?.team_usage?.length ?? 0) === 0 && (
-                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
-                )}
-
-                {(stats?.team_usage?.length ?? 0) > visibleTeamCount && (
-                  <button
-                    onClick={() => setVisibleTeamCount(prev => prev + 15)}
-                    className="w-full py-3 mt-4 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors ring-1 ring-white/10 shadow-lg text-sm"
-                  >
-                    もっと見る (残りを表示)
-                  </button>
-                )}
-              </div>
-            </section>
+            <TeamAdoptionRanking
+              teams={stats?.team_usage ?? []}
+              totalRegisteredPlayers={Number(stats?.registration_breakdown?.total_registered_players ?? stats?.total_players ?? 0)}
+              visibleCount={visibleTeamCount}
+              onShowMore={() => setVisibleTeamCount((previous) => previous + 15)}
+              allCharacters={allCharacters}
+              onTeamClick={handleTeamClick}
+            />
           </div>
         )}
 
@@ -1108,6 +1029,23 @@ function DashboardContent() {
         {/* MATCHUPS TAB */}
         {activeTab === "matchups" && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
+            {matchupsLoading && (
+              <div role="status" className="rounded-xl bg-purple-500/10 p-4 text-center text-sm font-bold text-purple-300 ring-1 ring-purple-500/20">
+                対戦履歴を読み込んでいます…
+              </div>
+            )}
+            {matchupsError && (
+              <div role="alert" className="rounded-xl bg-red-500/10 p-4 text-center text-sm text-red-300 ring-1 ring-red-500/20">
+                <p>{matchupsError}</p>
+                <button
+                  type="button"
+                  onClick={() => setMatchupsRetry(value => value + 1)}
+                  className="mt-3 rounded-lg bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-400"
+                >
+                  再試行
+                </button>
+              </div>
+            )}
             <div className="bg-purple-500/10 p-6 rounded-2xl ring-1 ring-purple-500/20">
               <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>
               <select 
@@ -1168,133 +1106,7 @@ function DashboardContent() {
               <p className="text-slate-500 text-center py-12">編成データがありません</p>
             )}
 
-            {/* 編成の配置ポジション分析セクション */}
-            {selectedTeam && (() => {
-              const selectedTeamData = currentSelectedTeamData;
-              const positionStats = selectedTeamData?.position_stats || [];
-              if (positionStats.length === 0) return null;
-              return (
-                <div className="space-y-3">
-                  <button 
-                    onClick={() => setIsPositionStatsOpen(!isPositionStatsOpen)}
-                    className="w-full font-bold text-white flex items-center justify-between hover:bg-white/5 p-2 rounded-lg transition-colors"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <span className="text-lg">📊</span>
-                      <span>編成の配置ポジション分析</span>
-                    </div>
-                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isPositionStatsOpen ? "" : "-rotate-90"}`} />
-                  </button>
-                  {isPositionStatsOpen && (
-                  <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
-                    <table className="w-full text-center">
-                      <thead>
-                        <tr className="border-b border-white/10 bg-slate-900/50">
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">〇番目</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">採用数</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">勝率</th>
-                          <th className="py-3 px-2 text-slate-400 font-bold text-sm">最終成績</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[1, 2, 3, 4, 5].map(pos => {
-                          const ps = positionStats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
-                          return (
-                            <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                              <td className="py-3 px-2 text-white font-black text-lg">{pos}番目</td>
-                              <td className="py-3 px-2">
-                                <span className="text-white font-bold text-lg">{ps.count}</span>
-                                <span className="text-slate-500 text-xs ml-0.5">人</span>
-                                <br />
-                                <span className="text-slate-400 text-xs">({ps.pct}%)</span>
-                              </td>
-                              <td className="py-3 px-2">
-                                {ps.win_rate !== null ? (
-                                  <>
-                                    <span className={`font-black text-lg ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                      {ps.win_rate}%
-                                    </span>
-                                    <br />
-                                    <span className="text-slate-500 text-[10px]">{ps.wins}W {ps.total - ps.wins}L</span>
-                                  </>
-                                ) : (
-                                  <span className="text-slate-600 text-xs">対戦なし</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-2">
-                                {ps.best_result ? (
-                                  <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${
-                                    ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
-                                    ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
-                                    ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
-                                    ps.best_result === "ベスト8" ? "bg-blue-500/20 text-blue-400 ring-blue-500/50" :
-                                    ps.best_result === "ベスト16" ? "bg-purple-500/20 text-purple-400 ring-purple-500/50" :
-                                    ps.best_result === "ベスト32" ? "bg-slate-700/60 text-slate-400 ring-slate-600/50" :
-                                    "bg-slate-800/60 text-slate-500 ring-slate-700/50"
-                                  }`}>
-                                    {ps.best_result}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-600 text-xs">-</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* 採用した指揮官セクション */}
-            {selectedTeam && (() => {
-              const selectedTeamData = currentSelectedTeamData;
-              const adoptedPlayers = selectedTeamData?.adopted_players || [];
-              if (adoptedPlayers.length === 0) return null;
-              const resultColors: Record<string, string> = {
-                "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-                "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-                "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-                "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-                "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-                "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-                "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-              };
-              return (
-                <div className="mt-6 bg-slate-800/30 rounded-2xl ring-1 ring-white/5 p-5">
-                  <button
-                    onClick={() => setIsAdoptedPlayersOpen(!isAdoptedPlayersOpen)}
-                    className="w-full font-bold text-white mb-2 flex items-center justify-between hover:bg-white/5 p-2 rounded-lg transition-colors"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <UserIcon size={18} className="text-purple-400" />
-                      <span>この編成を採用した指揮官</span>
-                    </div>
-                    <ChevronDown className={`h-5 w-5 text-slate-400 transition-transform ${isAdoptedPlayersOpen ? "" : "-rotate-90"}`} />
-                  </button>
-                  {isAdoptedPlayersOpen && (
-                  <div className="space-y-2">
-                    {adoptedPlayers.map((ap: any, idx: number) => (
-                      <div key={idx} className="flex items-center justify-between bg-slate-900/50 px-4 py-3 rounded-xl ring-1 ring-white/5">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-xs font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
-                            {ap.tournament_name}
-                          </span>
-                          <span className="font-bold text-slate-200 text-sm">{ap.player_name}</span>
-                        </div>
-                        <span className={`inline-block px-3 py-1 text-[10px] font-black rounded-full ring-1 ${resultColors[ap.result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50"}`}>
-                          {ap.result}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  )}
-                </div>
-              );
-            })()}
+            {selectedTeam && <TeamPositionAnalysis positionStats={currentSelectedTeamData?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
 
             {selectedTeam && matchupDetails.length > 0 && (
               <TeamMatchupHistory
@@ -1302,6 +1114,7 @@ function DashboardContent() {
                 allCharacters={allCharacters}
                 onSelectCharacter={setSelectedCharId}
                 onSelectOpponent={handleTeamClick}
+                registrationScopeByTournamentId={registrationScopeByTournamentId}
               />
             )}
 
@@ -1468,7 +1281,7 @@ function DashboardContent() {
           return (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20">
-              <label className="block text-sm font-bold text-emerald-400 mb-3">キャラクターを選択して編成を逆引き</label>
+              <SynergyPickerInstructions />
               
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
@@ -1511,35 +1324,22 @@ function DashboardContent() {
                 </select>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {filteredCharacters.map(c => {
-                  const isSelected = searchChars.includes(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => {
-                        if (isSelected) setSearchChars(searchChars.filter(id => id !== c.id));
-                        else if (searchChars.length < 5) setSearchChars([...searchChars, c.id]);
-                      }}
-                      className={`relative w-12 h-12 rounded-lg overflow-hidden transition-all ${isSelected ? 'ring-2 ring-emerald-500 scale-110 shadow-lg' : 'ring-1 ring-white/10 opacity-70 hover:opacity-100'}`}
-                      title={c.name}
-                    >
-                      {getCharIconUrl(c) ? (
-                         <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                      ) : (
-                         <div className="w-full h-full bg-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-bold text-center leading-tight">
-                           {c.name.slice(0,4)}
-                         </div>
-                      )}
-                      {isSelected && <div className="absolute inset-0 bg-emerald-500/20" />}
-                    </button>
-                  );
-                })}
-              </div>
+              <SynergyCharacterPicker
+                key={`synergy-picker-cross-${analysisKey}`}
+                characters={filteredCharacters}
+                characterUsage={stats?.character_usage ?? stats?.character_stats ?? []}
+                usageState={loading ? "loading" : statsError || !stats ? "error" : "ready"}
+                includedIds={includedCharacterIds}
+                excludedIds={excludedCharacterIds}
+                onChange={({ includedIds, excludedIds }) => {
+                  setIncludedCharacterIds(includedIds);
+                  setExcludedCharacterIds(excludedIds);
+                }}
+              />
               <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">選択中: {searchChars.length}/5</span>
-                {searchChars.length > 0 && (
-                  <button onClick={() => setSearchChars([])} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
+                <span className="text-sm text-slate-400">検索対象: {includedCharacterIds.length}/5　除外対象: {excludedCharacterIds.length}</span>
+                {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
+                  <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
                     クリア
                   </button>
                 )}
@@ -1548,17 +1348,19 @@ function DashboardContent() {
 
             <div className="space-y-4">
               <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
-              {searchChars.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">キャラクターを選択してください</p>
+              {includedCharacterIds.length === 0 ? (
+                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
+                    key={`synergy-cross-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
                     mode="cross"
                     tournamentIds={selectedTournamentIds} 
                     playServer={filterServer}
                     championshipId={selectedChampionshipId}
                     allCharacters={allCharacters}
-                    characterIds={searchChars} 
+                    characterIds={includedCharacterIds}
+                    excludedCharacterIds={excludedCharacterIds}
                     onTeamClick={handleTeamClick} 
                     selectedTeam={selectedTeam} 
                     sortBy="count"

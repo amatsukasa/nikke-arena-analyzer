@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import TeamDisplay from "./TeamDisplay";
 
 interface PaginatedTeamListProps {
@@ -10,6 +10,7 @@ interface PaginatedTeamListProps {
   championshipId?: number;
   allCharacters: any[];
   characterIds?: number[];
+  excludedCharacterIds?: number[];
   sortBy?: "count" | "win_rate";
   sortOrder?: "desc" | "asc";
   minMatches?: number;
@@ -28,6 +29,7 @@ export default function PaginatedTeamList({
   championshipId,
   allCharacters,
   characterIds = [],
+  excludedCharacterIds = [],
   sortBy = "count",
   sortOrder = "desc",
   minMatches = 0,
@@ -44,10 +46,15 @@ export default function PaginatedTeamList({
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestGenerationRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
   const limit = 10;
 
-  const fetchTeams = async (currentOffset: number, reset: boolean) => {
+  const fetchTeams = async (currentOffset: number, reset: boolean, generation = requestGenerationRef.current) => {
+    const controller = new AbortController();
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = controller;
     setLoading(true);
     setError(null);
     try {
@@ -62,11 +69,14 @@ export default function PaginatedTeamList({
         if (characterIds.length > 0) {
           url += `&character_ids=${characterIds.join(",")}`;
         }
+        if (excludedCharacterIds.length > 0) {
+          url += `&excluded_character_ids=${excludedCharacterIds.join(",")}`;
+        }
         if (minMatches > 0) url += `&min_matches=${minMatches}`;
         if (minUsage > 0) url += `&min_usage=${minUsage}`;
         if (minWinRate > 0) url += `&min_win_rate=${minWinRate}`;
         if (bestResult) url += `&best_result=${encodeURIComponent(bestResult)}`;
-        res = await fetch(url, { headers: authHeaders });
+        res = await fetch(url, { headers: authHeaders, signal: controller.signal });
       } else {
         res = await fetch(`/api/dashboard/cross-tournament/teams`, {
           method: "POST",
@@ -78,15 +88,18 @@ export default function PaginatedTeamList({
             limit,
             offset: currentOffset,
             character_ids: characterIds.length > 0 ? characterIds : undefined,
+            excluded_character_ids: excludedCharacterIds.length > 0 ? excludedCharacterIds : undefined,
             sort_by: sortBy,
             sort_order: sortOrder,
             min_matches: minMatches,
             min_usage: minUsage,
             min_win_rate: minWinRate,
             best_result: bestResult || undefined
-          })
+          }),
+          signal: controller.signal,
         });
       }
+      if (generation !== requestGenerationRef.current) return;
       
       if (!res.ok) {
         console.error("API error in PaginatedTeamList:", res.status);
@@ -102,6 +115,7 @@ export default function PaginatedTeamList({
       }
 
       const data = await res.json();
+      if (generation !== requestGenerationRef.current) return;
       const newTeams = Array.isArray(data.teams) ? data.teams : [];
       if (reset) {
         setTeams(newTeams);
@@ -111,21 +125,32 @@ export default function PaginatedTeamList({
       setTotal(data.total || 0);
       setHasMore(currentOffset + newTeams.length < (data.total || 0));
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (generation !== requestGenerationRef.current) return;
       console.error("Failed to fetch teams", e);
       setError("データを取得できませんでした");
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) setLoading(false);
     }
   };
 
   // Reset and fetch when dependencies change
   useEffect(() => {
-    if (tournamentIds.length === 0) return;
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
+    requestControllerRef.current?.abort();
+    if (tournamentIds.length === 0) {
+      setTeams([]);
+      setLoading(false);
+      return;
+    }
     setTeams([]);
+    setError(null);
     setOffset(0);
     setHasMore(true);
-    fetchTeams(0, true);
-  }, [tournamentIds.join(","), characterIds.join(","), sortBy, sortOrder, minMatches, minUsage, minWinRate, bestResult]);
+    fetchTeams(0, true, generation);
+    return () => requestControllerRef.current?.abort();
+  }, [mode, tournamentId, tournamentIds.join(","), playServer, championshipId, characterIds.join(","), excludedCharacterIds.join(","), sortBy, sortOrder, minMatches, minUsage, minWinRate, bestResult]);
 
   const handleLoadMore = () => {
     if (loading || !hasMore) return;
@@ -137,7 +162,7 @@ export default function PaginatedTeamList({
   if (teams.length === 0 && !loading) {
     return (
       <div className="text-center py-12 bg-slate-800/30 rounded-2xl ring-1 ring-white/5">
-        <p className="text-slate-400 text-lg">{error || "該当する編成はありません"}</p>
+        <p className="text-slate-400 text-lg">{error || (characterIds.length > 0 ? "指定した条件に一致する編成はありません" : "該当する編成はありません")}</p>
       </div>
     );
   }

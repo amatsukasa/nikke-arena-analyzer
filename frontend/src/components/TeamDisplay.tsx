@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
 
 interface Character {
@@ -65,7 +66,7 @@ export default function TeamDisplay({
               <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-slate-800/50 ring-1 ring-white/5 overflow-hidden flex items-center justify-center">
                 <div className="text-slate-600 text-xs">-</div>
               </div>
-              <span className="text-[8px] sm:text-[9px] text-slate-500 w-9 sm:w-10 truncate text-center" title="空枠">空枠</span>
+              <span className="text-[8px] sm:text-[9px] text-slate-500 w-9 sm:w-10 truncate text-center" title="空き枠">空き枠</span>
             </div>
           );
         }
@@ -80,11 +81,7 @@ export default function TeamDisplay({
             }}
           >
             <div className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
-              {getCharIconUrl(c) ? (
-                <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
-              )}
+              <CharacterIcon character={c} />
               {collectionLevels && (
                 <img
                   src={collectionBadgeUrl(collectionLevels[i])}
@@ -100,4 +97,15 @@ export default function TeamDisplay({
       })}
     </div>
   );
+}
+
+function CharacterIcon({ character }: { character: Character }) {
+  const url = getCharIconUrl(character);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  if (!url || failed) {
+    const fallback = character?.name || (character?.id ? `ID:${character.id}` : "画像なし");
+    return <span className="px-0.5 text-center text-[9px] font-bold leading-tight text-slate-400" title={fallback}>{fallback.slice(0, 6)}</span>;
+  }
+  return <img src={url} loading="lazy" decoding="async" alt={character?.name || `Character ${character.id}`} className="h-full w-full object-cover" onError={() => setFailed(true)} />;
 }
