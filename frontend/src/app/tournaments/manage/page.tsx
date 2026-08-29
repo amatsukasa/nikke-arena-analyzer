@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Trophy, PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole, RefreshCw } from "lucide-react";
+import { PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole, RefreshCw } from "lucide-react";
 import { useAuth } from "../../../context/AuthContext";
 import RegistrationScopeBadge from "../../../components/RegistrationScopeBadge";
 import {
@@ -275,20 +275,11 @@ export default function Home() {
 
   return (
     <main className="p-6 md:p-12 max-w-5xl mx-auto">
-      <div className="flex items-center space-x-4 mb-10">
-        <div className="p-3 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg shadow-purple-500/20">
-          <Trophy size={32} className="text-white" />
-        </div>
-        <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400 tracking-tight">
-          NIKKE Arena Analyzer
-        </h1>
-      </div>
-
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-purple-600 rounded-3xl blur opacity-25 group-hover:opacity-40 transition duration-1000"></div>
         <div className="relative bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-2xl shadow-2xl">
           <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 mb-6">
-            <h2 className="text-2xl font-bold text-slate-100">大会一覧</h2>
+            <h1 className="text-2xl font-bold text-slate-100">大会一覧</h1>
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 href="/account"
