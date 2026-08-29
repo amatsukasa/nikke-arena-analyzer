@@ -1428,6 +1428,7 @@ export default function Dashboard() {
                 allCharacters={allCharacters}
                 onSelectCharacter={setSelectedCharId}
                 onSelectOpponent={handleTeamClick}
+                registrationScope={tournament?.registration_scope}
               />
             )}
 

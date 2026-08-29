@@ -143,6 +143,27 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertEqual(history.count(">分析対象</span>"),2)
         self.assertNotIn("overflow-x-auto",history)
 
+    def test_matchup_history_formats_champion_stages_without_changing_match_identity(self):
+        history=self.read("frontend/src/components/TeamMatchupHistory.tsx")
+        formatter=self.read("frontend/src/lib/matchStageDisplay.ts")
+        top=self.read("frontend/src/app/page.tsx")
+        tournament=self.read("frontend/src/app/tournament/[id]/dashboard/page.tsx")
+        self.assertIn("formatMatchStageForDisplay",history)
+        self.assertIn("sortUniqueMatchStageDisplays",history)
+        self.assertIn("MatchStageBadge",history)
+        self.assertIn("tournamentResultClass",history)
+        self.assertIn("registrationScopeByTournamentId",history)
+        self.assertIn("match.participationKey",history)
+        self.assertIn("match.displayStage",history)
+        self.assertIn('registrationScope !== "champion_8"',formatter)
+        for raw,label in (("QF[1-4]","ベスト8"),("SF[1-2]","ベスト4"),("FINAL","FINAL")):
+            self.assertIn(raw,formatter)
+            self.assertIn(label,formatter)
+        self.assertIn("registrationScopeByTournamentId={registrationScopeByTournamentId}",top)
+        self.assertIn("registrationScope={tournament?.registration_scope}",tournament)
+        self.assertNotIn("formatMatchStageForDisplay",top)
+        self.assertNotIn("formatMatchStageForDisplay",tournament)
+
     def test_synergy_picker_uses_count_disables_unavailable_and_resets_by_analysis_key(self):
         picker=self.read("frontend/src/components/SynergyCharacterPicker.tsx")
         helper=self.read("frontend/src/lib/synergyCharacters.ts")

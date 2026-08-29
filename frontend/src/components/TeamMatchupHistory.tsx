@@ -2,6 +2,9 @@
 
 import { useMemo, useState } from "react";
 import TeamDisplay from "./TeamDisplay";
+import { formatMatchStageForDisplay, sortUniqueMatchStageDisplays } from "@/lib/matchStageDisplay";
+import type { RegistrationScope } from "@/lib/tournaments";
+import { tournamentResultClass } from "@/lib/tournamentResult";
 
 type MatchupFilterResult = "ALL" | "WIN" | "LOSE";
 type MatchupFilterSide = "ALL" | "ATTACK" | "DEFENSE";
@@ -11,47 +14,59 @@ type Props = {
   allCharacters: any[];
   onSelectCharacter: (characterId: number) => void;
   onSelectOpponent: (canonicalId: string, team?: any) => void;
+  registrationScope?: RegistrationScope | null;
+  registrationScopeByTournamentId?: Record<number, RegistrationScope | undefined>;
 };
 
-const STAGE_ORDER = [
-  "決勝", "FINAL",
-  "準決勝", "Best 4", "ベスト4",
-  "Best 8", "ベスト8",
-  "Best 16", "ベスト16",
-  "Best 32", "ベスト32",
-  "Best 64", "ベスト64",
-  "不明",
-];
+export function MatchStageBadge({ stage }: { stage?: string | null }) {
+  const label = stage || "不明";
+  const colorClass = label === "FINAL"
+    ? "bg-amber-400/20 text-amber-300 ring-amber-400/50"
+    : tournamentResultClass(label);
+  return (
+    <div className={`self-start rounded px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ${colorClass}`}>
+      {label}
+    </div>
+  );
+}
 
 export default function TeamMatchupHistory({
   matchupDetails,
   allCharacters,
   onSelectCharacter,
   onSelectOpponent,
+  registrationScope,
+  registrationScopeByTournamentId,
 }: Props) {
   const [resultFilter, setResultFilter] = useState<MatchupFilterResult>("ALL");
   const [sideFilter, setSideFilter] = useState<MatchupFilterSide>("ALL");
   const [stageFilter, setStageFilter] = useState("ALL");
 
-  const availableStages = useMemo(
-    () => Array.from(new Set(matchupDetails.map((match) => match.stage || "不明")))
-      .sort((a, b) => {
-        const indexA = STAGE_ORDER.indexOf(a);
-        const indexB = STAGE_ORDER.indexOf(b);
-        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-        if (indexA !== -1) return -1;
-        if (indexB !== -1) return 1;
-        return a.localeCompare(b);
+  const displayMatchups = useMemo(
+    () => matchupDetails.map((match) => ({
+      ...match,
+      displayStage: formatMatchStageForDisplay({
+        registrationScope: registrationScope
+          ?? registrationScopeByTournamentId?.[Number(match.tournament_id)],
+        rawStage: match.stage,
+        bracketStage: match.bracket_stage,
+        bracketSlot: match.bracket_slot,
       }),
-    [matchupDetails],
+    })),
+    [matchupDetails, registrationScope, registrationScopeByTournamentId],
   );
 
-  const filteredMatchups = matchupDetails.filter((match) => {
+  const availableStages = useMemo(
+    () => sortUniqueMatchStageDisplays(displayMatchups.map((match) => match.displayStage)),
+    [displayMatchups],
+  );
+
+  const filteredMatchups = displayMatchups.filter((match) => {
     if (resultFilter === "WIN" && !match.isWin) return false;
     if (resultFilter === "LOSE" && match.isWin) return false;
     if (sideFilter === "ATTACK" && !match.isAttacker) return false;
     if (sideFilter === "DEFENSE" && match.isAttacker) return false;
-    if (stageFilter !== "ALL" && (match.stage || "不明") !== stageFilter) return false;
+    if (stageFilter !== "ALL" && (match.displayStage || "不明") !== stageFilter) return false;
     return true;
   });
 
@@ -122,15 +137,7 @@ export default function TeamMatchupHistory({
               </div>
 
               <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
-                <div className={`self-start rounded px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ${
-                  match.stage === "決勝"
-                    ? "bg-amber-500/20 text-amber-400 ring-amber-500/30"
-                    : match.stage?.includes("準決勝")
-                      ? "bg-orange-500/20 text-orange-400 ring-orange-500/30"
-                      : "bg-slate-700/50 text-slate-400 ring-slate-600/50"
-                }`}>
-                  {match.stage || "不明"}
-                </div>
+                <MatchStageBadge stage={match.displayStage} />
 
                 <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
                   <div className="grid min-w-0 grid-cols-1 items-center justify-center gap-2 xl:grid-cols-[max-content_auto_max-content]">

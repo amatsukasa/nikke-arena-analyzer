@@ -622,6 +622,9 @@ function DashboardContent() {
     details: matchupDetails, totalWins, totalLosses,
     attackWins, attackLosses, defenseWins, defenseLosses,
   } = teamMatchupPerspective(matchups, targetMatchupKey, makeTeamKey);
+  const registrationScopeByTournamentId = Object.fromEntries(
+    allTournaments.map((item) => [Number(item.id), item.registration_scope]),
+  );
 
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
@@ -1111,6 +1114,7 @@ function DashboardContent() {
                 allCharacters={allCharacters}
                 onSelectCharacter={setSelectedCharId}
                 onSelectOpponent={handleTeamClick}
+                registrationScopeByTournamentId={registrationScopeByTournamentId}
               />
             )}
 
