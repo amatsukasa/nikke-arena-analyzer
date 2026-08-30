@@ -1,41 +1,42 @@
 'use client';
 
-import React from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Trophy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import DrawerMenu from './DrawerMenu';
 
-export const Navbar: React.FC = () => {
+const navigationHiddenRoutes = ['/gate', '/secret-login', '/secret-register', '/approve-registration'];
+
+export default function Navbar() {
   const { user, logout } = useAuth();
+  const pathname = usePathname();
+
+  if (navigationHiddenRoutes.some((route) => pathname.startsWith(route))) {
+    return null;
+  }
 
   return (
-    <nav className="navbar">
-      <div className="navbar-container">
-        <Link href="/" className="navbar-logo">
-          🏆 大会ダッシュボード
+    <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-slate-950/95">
+      <nav
+        aria-label="サイト共通ナビゲーション"
+        className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-3 sm:px-6"
+      >
+        <Link
+          href="/"
+          aria-label="にけあり！｜NIKKE ARENA ANALYZER トップページ"
+          className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950 sm:gap-3"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-emerald-600 shadow-lg shadow-blue-500/20 sm:h-10 sm:w-10">
+            <Trophy aria-hidden="true" className="h-5 w-5 text-white sm:h-6 sm:w-6" />
+          </span>
+          <span className="min-w-0 truncate bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-[11px] font-black tracking-tight text-transparent min-[360px]:text-xs sm:text-lg sm:tracking-wide">
+            にけあり！<span aria-hidden="true">｜</span>NIKKE ARENA ANALYZER
+          </span>
         </Link>
-        <div className="navbar-links">
-          {user ? (
-            <>
-              <Link href="/tournament/register" className="nav-link">
-                📝 データ登録
-              </Link>
-              {user.role === 'admin' && (
-                <Link href="/admin" className="nav-link admin-link">
-                  ⚙️ 管理者ページ
-                </Link>
-              )}
-              <span className="user-email">{user.email} ({user.role === 'admin' ? '管理者' : '登録スタッフ'})</span>
-              <button onClick={logout} className="logout-btn">
-                ログアウト
-              </button>
-            </>
-          ) : (
-            // 未ログイン時はナビゲーションにログイン・登録リンクを表示しない（隠しURL運用のための設計）
-            <span className="guest-badge">公開閲覧モード</span>
-          )}
-        </div>
-      </div>
-    </nav>
+
+        <DrawerMenu user={user} onLogout={logout} />
+      </nav>
+    </header>
   );
-};
-export default Navbar;
+}

@@ -490,21 +490,6 @@ function DashboardContent() {
   if (allTournaments.length === 0) {
     return (
       <div className="flex flex-col min-h-screen bg-slate-950 text-slate-100 font-sans">
-        <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-slate-900/80 backdrop-blur-md">
-          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <span className="text-xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
-                NIKKE ARENA ANALYZER
-              </span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <a href="/tournaments/manage" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-bold transition-all shadow-lg shadow-blue-500/20">
-                大会データ登録
-              </a>
-            </div>
-          </div>
-        </header>
-        
         <main className="flex-1 max-w-4xl mx-auto px-4 py-16 flex flex-col items-center justify-center text-center">
           <div className="w-24 h-24 rounded-3xl bg-slate-900 border border-white/10 flex items-center justify-center mb-8 shadow-2xl">
             <span className="text-4xl">📊</span>
@@ -635,21 +620,7 @@ function DashboardContent() {
 
   return (
     <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0 mb-2 md:mb-8 border-b border-white/10 pb-4 md:pb-6">
-        <div className="flex min-w-0 items-center space-x-3 md:space-x-4">
-          <div className="shrink-0 p-2.5 md:p-3 bg-gradient-to-br from-blue-500 to-emerald-600 rounded-xl md:rounded-2xl shadow-lg shadow-blue-500/20">
-            <Trophy className="h-6 w-6 text-white md:h-8 md:w-8" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-              NIKKE Arena Analyzer
-            </h1>
-            <p className="text-slate-400 text-xs md:text-sm mt-1 leading-relaxed">にけあり！ ～チャンアリをもっと楽しむためのファンサイト～</p>
-          </div>
-        </div>
-        
-      </div>
+      <h1 className="sr-only">アリーナ分析ダッシュボード</h1>
 
       <div className="flex flex-col xl:flex-row gap-4 xl:gap-8">
         {/* Sidebar for Filters */}
