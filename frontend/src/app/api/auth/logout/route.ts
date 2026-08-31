@@ -6,13 +6,6 @@ export async function POST(request: NextRequest) {
     const cookieStore = await cookies();
     
     // httpOnly クッキーをサーバーサイドから削除する
-    cookieStore.set('site_session', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 0,
-    });
-
     cookieStore.set('auth_token', '', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',

@@ -92,8 +92,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     document.cookie = 'auth_token=; path=/; max-age=0; path=/';
     document.cookie = 'token=; path=/; max-age=0; path=/';
     document.cookie = 'role=; path=/; max-age=0; path=/';
-    document.cookie = 'site_session=; path=/; max-age=0; path=/';
-    
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
     } catch (e) {

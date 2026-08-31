@@ -26,7 +26,6 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:password@db:5432/nikke_arena
       - SECRET_KEY=dev-secret-key-local-only
-      - SITE_PASSWORD=test2026
       - INVITE_CODE=dev-invite
       - FIRST_ADMIN_EMAIL=admin@example.com
       - FIRST_ADMIN_PASSWORD=admin123
@@ -47,7 +46,6 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - API_URL=http://backend:8000
-      - SITE_PASSWORD=test2026
     command: npm start
     restart: unless-stopped
 

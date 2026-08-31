@@ -6,7 +6,7 @@ import { Trophy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DrawerMenu from './DrawerMenu';
 
-const navigationHiddenRoutes = ['/gate', '/secret-login', '/secret-register', '/approve-registration'];
+const navigationHiddenRoutes = ['/secret-login', '/secret-register', '/approve-registration'];
 
 export default function Navbar() {
   const { user, logout } = useAuth();

@@ -22,8 +22,6 @@ import models
 SECRET_KEY   = os.environ.get("SECRET_KEY", "dev-secret-key-CHANGE-IN-PRODUCTION")
 ALGORITHM    = "HS256"
 TOKEN_EXPIRE_DAYS = 7           # ユーザーJWT有効期限
-GATE_EXPIRE_DAYS  = 7           # ゲートCookie有効期限
-SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "")
 INVITE_CODE   = os.environ.get("INVITE_CODE", "")
 
 # ---------- パスワード ----------
@@ -41,11 +39,6 @@ def create_access_token(data: dict, expires_days: int = TOKEN_EXPIRE_DAYS) -> st
     expire = datetime.utcnow() + timedelta(days=expires_days)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-def create_gate_token() -> str:
-    """ダッシュボード閲覧用ゲートトークン（ユーザー情報なし）"""
-    return create_access_token({"type": "gate"}, expires_days=GATE_EXPIRE_DAYS)
 
 
 def decode_token(token: str) -> dict:
@@ -100,16 +93,3 @@ def require_admin(
             detail="管理者権限が必要です",
         )
     return user
-
-
-def verify_gate_cookie(
-    site_session: Optional[str] = Cookie(default=None),
-) -> bool:
-    """ゲートCookieの検証（ダッシュボード閲覧チェック用）"""
-    if not site_session:
-        return False
-    try:
-        payload = decode_token(site_session)
-        return payload.get("type") == "gate"
-    except JWTError:
-        return False
