@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
+import Script from 'next/script'
 import './globals.css'
 import { AuthProvider } from '../context/AuthContext'
 import Navbar from '../components/Navbar'
@@ -8,7 +9,7 @@ const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'にけあり！ | NIKKE Arena Analyzer',
-  description: 'チャンピオンアリーナをもっと楽しむためのファンサイト',
+  description: 'チャンピオンアリーナがもっと楽しくなるファンサイト',
 }
 
 export default function RootLayout({
@@ -23,6 +24,13 @@ export default function RootLayout({
           <Navbar />
           {children}
         </AuthProvider>
+
+        <Script
+          async
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9340334743814122"
+          crossOrigin="anonymous"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   )
