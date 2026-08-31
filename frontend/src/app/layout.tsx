@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'にけあり！ | NIKKE Arena Analyzer',
-  description: 'チャンピオンアリーナをもっと楽しむためのファンサイト',
+  description: 'チャンピオンアリーナがもっと楽しくなるファンサイト',
 }
 
 export default function RootLayout({
@@ -18,6 +18,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja" className="dark">
+      <head>
+        <script
+          async
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9340334743814122"
+          crossOrigin="anonymous"
+        />
+      </head>
+
       <body className={`${inter.className} bg-slate-950 text-slate-100 min-h-screen antialiased`}>
         <AuthProvider>
           <Navbar />

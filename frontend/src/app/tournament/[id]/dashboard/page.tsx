@@ -1368,14 +1368,14 @@ export default function Dashboard() {
                   <p className="text-sm text-slate-500 mt-2">{totalWins}勝 {totalLosses}敗</p>
                 </div>
                 <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-                  <p className="text-blue-400 text-sm mb-2">攻撃側 (自分から) 勝率</p>
+                  <p className="text-blue-400 text-sm mb-2">攻撃側での勝率</p>
                   <p className="text-4xl font-black text-blue-400">
                     {attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : 0}%
                   </p>
                   <p className="text-sm text-blue-500/60 mt-2">{attackWins}勝 {attackLosses}敗</p>
                 </div>
                 <div className="bg-red-500/10 p-6 rounded-2xl ring-1 ring-red-500/20 flex flex-col items-center justify-center">
-                  <p className="text-red-400 text-sm mb-2">防衛側 (相手から) 勝率</p>
+                  <p className="text-red-400 text-sm mb-2">防衛側での勝率</p>
                   <p className="text-4xl font-black text-red-400">
                     {defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : 0}%
                   </p>

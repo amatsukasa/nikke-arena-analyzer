@@ -9,7 +9,7 @@ type FrontMatter = {
 };
 
 type MarkdownPageProps = {
-  fileName: 'about.md' | 'contact.md' | 'guide.md' | 'links.md' | 'updates.md';
+  fileName: 'about.md' | 'contact.md' | 'guide.md' | 'links.md' | 'privacy.md' | 'updates.md';
 };
 
 type Block =

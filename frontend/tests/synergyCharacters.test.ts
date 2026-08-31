@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 // Node 24 executes this TypeScript test directly via --experimental-strip-types.
 // @ts-expect-error The explicit extension is required by that runtime mode.
-import { mapAndSortSelectableSynergyCharacters, mapAndSortSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, teamMatchesSynergyConditions, transitionSynergySelection } from "../src/lib/synergyCharacters.ts";
+import { groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, mapAndSortSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, teamMatchesSynergyConditions, transitionSynergySelection } from "../src/lib/synergyCharacters.ts";
 
 test("sorts by count, then Japanese name, then character id and keeps zero-count characters last", () => {
   const characters = [
@@ -56,6 +56,31 @@ test("shows only positive count characters, excludes missing usage and 9999, and
   );
 
   assert.deepEqual(selectable.map((item) => item.character.id), [3, 4, 5]);
+});
+
+test("groups selectable characters by canonical burst order and Japanese name, not usage count", () => {
+  const selectable = mapAndSortSelectableSynergyCharacters(
+    [
+      { id: 8, name: "ラピ", burst_phase: "A" },
+      { id: 7, name: "アニス", burst_phase: "3" },
+      { id: 6, name: "アニス", burst_phase: "3" },
+      { id: 5, name: "ネオン", burst_phase: "2" },
+      { id: 4, name: "エマ", burst_phase: "1" },
+      { id: 3, name: "不明", burst_phase: "X" },
+      { id: 2, name: "欠損" },
+      { id: 1, name: "採用なし", burst_phase: "1" },
+      { id: 9999, name: "空き枠", burst_phase: "1" },
+    ],
+    [
+      { id: 8, count: 1 }, { id: 7, count: 1 }, { id: 6, count: 999 },
+      { id: 5, count: 1 }, { id: 4, count: 1 }, { id: 3, count: 1 },
+      { id: 2, count: 1 }, { id: 1, count: 0 }, { id: 9999, count: 99 },
+    ],
+  );
+  const groups = groupSynergyCharacterOptions(selectable);
+  assert.deepEqual(groups.map((group) => group.label), ["バースト1", "バースト2", "バースト3", "バーストA", "その他"]);
+  assert.deepEqual(groups.map((group) => group.options.map((option) => option.character.id)), [[4], [5], [6, 7], [8], [2, 3]]);
+  assert.equal(new Set(groups.flatMap((group) => group.options.map((option) => option.character.id))).size, 7);
 });
 
 test("removes hidden selections while preserving selectable include and exclude ids", () => {
