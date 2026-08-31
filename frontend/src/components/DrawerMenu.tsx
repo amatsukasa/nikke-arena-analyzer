@@ -22,7 +22,7 @@ const mainItems = [
   { href: '/links', label: 'LINK' },
   { href: '/updates', label: 'UPDATE' },
   { href: '/contact', label: 'CONTACT' },
-  { href: '/contact', label: 'PRIVACY' },
+  { href: '/privacy', label: 'PRIVACY' },
 ] as const;
 
 const focusableSelector = [
