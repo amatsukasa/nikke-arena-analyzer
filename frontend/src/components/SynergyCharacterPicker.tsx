@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
-import { CharacterUsageCount, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
+import { CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
 
 type UsageState = "loading" | "ready" | "error";
 
@@ -56,7 +56,10 @@ export default function SynergyCharacterPicker({
   onChangeRef.current = onChange;
   const options = usageState === "ready"
     ? mapAndSortSelectableSynergyCharacters(characters, characterUsage)
-    : characters.map((character) => ({ character, count: 0, unavailable: false }));
+    : characters
+      .filter((character) => Number(character.id) !== 9999)
+      .map((character) => ({ character, count: 0, unavailable: false }));
+  const groups = groupSynergyCharacterOptions(options);
 
   const selectableIdsKey = usageState === "ready"
     ? options.map((option) => option.character.id).join(",")
@@ -84,8 +87,11 @@ export default function SynergyCharacterPicker({
   }
 
   return (
-    <div className="flex flex-wrap gap-2">
-      {options.map(({ character, unavailable }) => {
+    <div className="min-w-0 space-y-4">
+      {groups.map(({ key, label, options: groupOptions }) => <section key={key} className="min-w-0">
+        <h3 className="mb-2 text-sm font-bold text-slate-200">{label}</h3>
+        <div className="flex min-w-0 flex-wrap gap-2">
+      {groupOptions.map(({ character, unavailable }) => {
         const isIncluded = includedIds.includes(character.id);
         const isExcluded = excludedIds.includes(character.id);
         const unavailableReason = "選択した大会では採用実績がありません";
@@ -145,7 +151,9 @@ export default function SynergyCharacterPicker({
           </button>
         );
       })}
-      {notice && <div role="status" className="w-full pt-1 text-xs text-amber-300">{notice}</div>}
+        </div>
+      </section>)}
+      {notice && <div role="status" className="pt-1 text-xs text-amber-300">{notice}</div>}
     </div>
   );
 }
