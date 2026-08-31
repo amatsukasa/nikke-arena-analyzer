@@ -143,6 +143,10 @@ export default function Dashboard() {
 
     const controller = new AbortController();
     setStats(null);
+    setTournament(null);
+    setDashboardSummary(null);
+    setBracketData(null);
+    setMyPlayerDetails(null);
     const fetchData = async () => {
       setLoading(true);
       setDataError("");
@@ -154,53 +158,15 @@ export default function Dashboard() {
         const tournUrl = `/api/tournaments/${tournamentId}?t=${timestamp}`;
         const tournRes = await fetch(tournUrl, { cache: 'no-store', headers: authHeaders, signal: controller.signal });
         if (!tournRes.ok) {
-          if (tournRes.status === 401) setAuthError(true);
-          else {
-            const text = await tournRes.text();
-            console.error("API error", tournRes.status, tournUrl, text.slice(0, 300));
-          }
+          // Tournament detail access intentionally returns 404 for anonymous
+          // and unrelated users, irrespective of publication status.
+          setDataError("大会ダッシュボードを表示できません。");
           setLoading(false);
           return;
         }
         const tournData = await tournRes.json();
         setTournament(tournData);
-        const isPrivate = tournData.publication_status !== "published";
-        setIsPrivateTournament(isPrivate);
-
-        if (isPrivate) {
-          console.info(`[private-dashboard] skipped eager fetch tournament=${tournamentId}`);
-          const urls = [
-            `/api/characters?t=${timestamp}`,
-            `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`
-          ];
-          const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
-
-          for (let i = 0; i < responses.length; i++) {
-            const res = responses[i];
-            if (!res.ok) {
-              if (res.status === 401) {
-                setAuthError(true);
-                setLoading(false);
-                return;
-              }
-              const text = await res.text();
-              console.error("API error", res.status, urls[i], text.slice(0, 300));
-            }
-          }
-
-          if (responses.some(res => !res.ok)) {
-            setLoading(false);
-            return;
-          }
-
-          const [charsData, summaryData] = await Promise.all(responses.map(res => res.json()));
-          setAllCharacters(charsData);
-          setDashboardSummary(summaryData);
-          if (!requestedTab) {
-            setActiveTab("review");
-          }
-          return;
-        }
+        setIsPrivateTournament(true);
 
         const urls = [
           `/api/characters?t=${timestamp}`,

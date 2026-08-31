@@ -298,7 +298,7 @@ class TournamentApiPhase2BTest(unittest.TestCase):
 
         created_response = schemas.Tournament.model_validate(champion)
         single_response = schemas.Tournament.model_validate(
-            main.get_tournament(champion.id, self.db, None)
+            main.get_tournament(champion.id, self.db, self.owner)
         )
         list_response = main.get_tournaments(False, self.db, None)
         updated_response = schemas.Tournament.model_validate(main.update_tournament(

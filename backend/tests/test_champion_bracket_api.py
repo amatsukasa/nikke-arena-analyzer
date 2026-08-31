@@ -219,10 +219,10 @@ class ChampionBracketApiTest(unittest.TestCase):
         self._assert_status(404, main.save_champion_match, 999999, "quarterfinal", 1, payload, self.db, self.owner)
 
     def test_bracket_view_permissions_public_and_private(self):
-        self._assert_status(401, main.get_champion_bracket, self.tournament.id, self.db, None)
-        self._assert_status(403, main.get_champion_bracket, self.tournament.id, self.db, self.other)
+        self._assert_status(404, main.get_champion_bracket, self.tournament.id, self.db, None)
+        self._assert_status(404, main.get_champion_bracket, self.tournament.id, self.db, self.other)
         self.tournament.publication_status = "published"; self.db.commit()
-        response = main.get_champion_bracket(self.tournament.id, self.db, None)
+        response = main.get_champion_bracket(self.tournament.id, self.db, self.owner)
         self.assertEqual(len(response["matches"]), 7)
 
     def test_qf1_change_deletes_sf1_final_only_and_qf3_change_deletes_sf2_final_only(self):

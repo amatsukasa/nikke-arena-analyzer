@@ -188,7 +188,6 @@ def _finalize_char_position_stats(char):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-from fastapi.staticfiles import StaticFiles
 from services.image_processor import process_images, write_lossless_png
 from services.character_templates import find_character_template
 from services.collection_classifier import COLLECTION_VALUES
@@ -246,45 +245,65 @@ IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 NO_STORE_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
 
 
-class CachedStaticFiles(StaticFiles):
-    async def get_response(self, path: str, scope):
-        try:
-            response = await super().get_response(path, scope)
-        except StarletteHTTPException as exc:
-            if exc.status_code >= 400:
-                exc.headers = {
-                    **(exc.headers or {}),
-                    "Cache-Control": NO_STORE_CACHE_CONTROL,
-                }
-            raise
-        except Exception as exc:
-            raise StarletteHTTPException(
-                status_code=500,
-                detail="Static file error",
+def _private_upload_tournament_id(asset_path: str, db: Session) -> int | None:
+    """Return the owning tournament for a private upload URL, if it is known."""
+    normalized_url = f"/api/uploads/{asset_path}"
+    player = db.query(models.Player).filter(
+        models.Player.icon_url == normalized_url
+    ).first()
+    if player is not None:
+        return player.tournament_id
+
+    crop_match = CHAMPION_CROP_NAME.fullmatch(Path(asset_path).name)
+    if crop_match is not None and asset_path.startswith("cropped/"):
+        return int(crop_match.group("tournament"))
+    return None
+
+
+@app.get("/api/uploads/{asset_path:path}")
+def get_upload(
+    asset_path: str,
+    db: Session = Depends(get_db),
+    current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+):
+    """Serve public Character templates and owner/admin-only tournament uploads."""
+    requested = Path(asset_path)
+    upload_root = Path(UPLOAD_DIR).resolve()
+    full_path = (upload_root / requested).resolve()
+    if (
+        not asset_path
+        or requested.is_absolute()
+        or ".." in requested.parts
+        or not _is_within(full_path, upload_root)
+        or not full_path.is_file()
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="File not found",
+            headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
+        )
+
+    # Character templates are the only upload assets used by the public
+    # cross-tournament analysis. Tournament-owned uploads remain private.
+    is_template = asset_path.startswith("templates/")
+    if not is_template:
+        tournament_id = _private_upload_tournament_id(asset_path, db)
+        if tournament_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found",
                 headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
-            ) from exc
+            )
+        require_tournament_viewer(tournament_id, db, current_user)
 
-        if response.status_code >= 400:
-            response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
-        return response
-
-    def file_response(self, full_path: str, stat_result, scope, status_code: int = 200):
-        response = super().file_response(full_path, stat_result, scope, status_code)
-        if response.status_code >= 400:
-            response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
-        else:
-            path_str = str(full_path)
-            if (
-                ("cropped" in path_str and "crop_" in path_str)
-                or "player_icons" in path_str
-            ):
-                response.headers["Cache-Control"] = NO_STORE_CACHE_CONTROL
-            else:
-                response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
-        return response
-
-
-app.mount("/api/uploads", CachedStaticFiles(directory="uploads"), name="uploads")
+    return FileResponse(
+        full_path,
+        headers={
+            "Cache-Control": (
+                IMMUTABLE_CACHE_CONTROL if is_template else NO_STORE_CACHE_CONTROL
+            )
+        },
+    )
 
 
 @app.get("/api/char-icon/{char_id}.png")
@@ -472,23 +491,6 @@ def serialize_app_user(user: models.AppUser):
     }
 
 
-@app.post("/api/auth/gate")
-def gate_login(body: dict, response: Response):
-    """サイトパスコード検証 → HttpOnly Cookie 発行"""
-    password = body.get("password", "")
-    site_pw = auth_module.SITE_PASSWORD
-    if not site_pw:
-        # 環境変数未設定 = 制限なし（開発用）
-        token = auth_module.create_gate_token()
-        response.set_cookie("site_session", token, httponly=True, samesite="lax", max_age=86400 * 7)
-        return {"ok": True}
-    if password != site_pw:
-        raise HTTPException(status_code=401, detail="パスコードが正しくありません")
-    token = auth_module.create_gate_token()
-    response.set_cookie("site_session", token, httponly=True, samesite="lax", max_age=86400 * 7)
-    return {"ok": True}
-
-
 @app.post("/api/auth/login")
 def user_login(body: dict, response: Response, db: Session = Depends(get_db)):
     """メール/パスワードでログイン → JWT Cookie 発行"""
@@ -513,7 +515,6 @@ def user_login(body: dict, response: Response, db: Session = Depends(get_db)):
 def user_logout(response: Response):
     """Cookie 削除"""
     response.delete_cookie("auth_token")
-    response.delete_cookie("site_session")
     return {"ok": True}
 
 
@@ -1164,8 +1165,6 @@ def require_tournament_viewer(
     ).first()
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
-    if tournament.publication_status == "published":
-        return tournament
     if current_user and (
         current_user.role == "admin" or tournament.created_by == current_user.id
     ):
@@ -1178,8 +1177,8 @@ def require_tournament_dashboard_viewer(
     db: Session,
     current_user: models.AppUser | None,
 ) -> models.Tournament:
-    # 公開大会の集計画面はトップページと同じ公開データであるため匿名閲覧を許可する。
-    # draft は require_tournament_viewer が従来どおり所有者・管理者だけに制限する。
+    # Individual dashboards are private even when their tournament contributes
+    # to public cross-tournament analysis.
     return require_tournament_viewer(tournament_id, db, current_user)
 
 
@@ -1394,8 +1393,17 @@ def get_tournaments(
     result = []
     for t in tournaments:
         t_schema = schemas.Tournament.model_validate(t)
-        if t.creator:
-            t_schema.creator_email = t.creator.email
+        if mine or current_user is not None and current_user.role == "admin":
+            if t.creator:
+                t_schema.creator_email = t.creator.email
+        else:
+            # The public selector is intentionally a minimal analysis input,
+            # not an individual tournament detail API.
+            t_schema = t_schema.model_copy(update={
+                "owner_name": None,
+                "created_by": None,
+                "creator_email": None,
+            })
         result.append(t_schema)
 
     if mine:
@@ -1593,7 +1601,7 @@ def get_championship(id: int, db: Session = Depends(get_db)):
 def create_championship(
     championship: schemas.ChampionshipCreate,
     db: Session = Depends(get_db),
-    current_user: models.AppUser = Depends(auth_module.get_current_user),
+    current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
     data = championship.model_dump()
     data["created_by"] = current_user.id
@@ -1608,9 +1616,9 @@ def update_championship(
     id: int,
     championship: schemas.ChampionshipCreate,
     db: Session = Depends(get_db),
-    current_user: models.AppUser = Depends(auth_module.get_current_user),
+    current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
-    """大会シリーズ情報更新（ログイン必須）"""
+    """大会シリーズ情報更新（管理者限定）"""
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
@@ -1633,9 +1641,9 @@ def update_championship(
 def delete_championship(
     id: int,
     db: Session = Depends(get_db),
-    current_user: models.AppUser = Depends(auth_module.get_current_user),
+    current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
-    """大会シリーズ削除（ログイン必須）"""
+    """大会シリーズ削除（管理者限定）"""
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
@@ -1659,7 +1667,24 @@ def get_championship_matches(
             (models.Tournament.publication_status == "published")
             | (models.Tournament.created_by == current_user.id)
         )
-    return query.order_by(models.Tournament.created_at.desc()).all()
+    tournaments = query.order_by(models.Tournament.created_at.desc()).all()
+    result = []
+    for tournament in tournaments:
+        item = schemas.Tournament.model_validate(tournament)
+        can_view_owner_metadata = bool(
+            current_user
+            and (current_user.role == "admin" or tournament.created_by == current_user.id)
+        )
+        if can_view_owner_metadata and tournament.creator:
+            item.creator_email = tournament.creator.email
+        elif not can_view_owner_metadata:
+            item = item.model_copy(update={
+                "owner_name": None,
+                "created_by": None,
+                "creator_email": None,
+            })
+        result.append(item)
+    return result
 
 
 def require_champion_tournament_viewer(
@@ -1667,21 +1692,7 @@ def require_champion_tournament_viewer(
     db: Session,
     current_user: models.AppUser | None,
 ) -> models.Tournament:
-    try:
-        tournament = require_tournament_viewer(tournament_id, db, current_user)
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            exists = db.query(models.Tournament.id).filter(
-                models.Tournament.id == tournament_id
-            ).first()
-            if exists:
-                if current_user is None:
-                    raise HTTPException(status_code=401, detail="Authentication required")
-                raise HTTPException(
-                    status_code=403,
-                    detail="You do not have permission to view this tournament",
-                )
-        raise
+    tournament = require_tournament_viewer(tournament_id, db, current_user)
     if tournament.registration_scope != "champion_8":
         raise HTTPException(
             status_code=409,
@@ -3629,11 +3640,9 @@ def rebuild_tournament_snapshot(
     tournament_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user: models.AppUser = Depends(auth_module.get_current_user),
+    current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
     """管理者が手動でスナップショットを再生成する"""
-    if current_user.role not in ("admin", "contributor"):
-        raise HTTPException(status_code=403, detail="管理者のみ実行できます")
     tournament = db.query(models.Tournament).filter(
         models.Tournament.id == tournament_id
     ).first()

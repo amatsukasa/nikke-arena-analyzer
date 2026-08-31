@@ -39,14 +39,17 @@ export default function PlayerStatsPage() {
       try {
         setError("");
         const timestamp = Date.now();
-        const [tournRes, detailsRes, bracketRes, charsRes] = await Promise.all([
-          fetch(`/api/tournaments/${tournamentId}?t=${timestamp}`),
+        // Verify private tournament access before asking for any individual
+        // Player or bracket data.
+        const tournRes = await fetch(`/api/tournaments/${tournamentId}?t=${timestamp}`);
+        if (!tournRes.ok) throw new Error("個人成績を表示できません。");
+        const [detailsRes, bracketRes, charsRes] = await Promise.all([
           fetch(`/api/tournaments/${tournamentId}/players/${seed}/details?t=${timestamp}`),
           fetch(`/api/tournaments/${tournamentId}/bracket?t=${timestamp}`),
           fetch(`/api/characters?t=${timestamp}`)
         ]);
 
-        const responses = [tournRes, detailsRes, bracketRes, charsRes];
+        const responses = [detailsRes, bracketRes, charsRes];
         if (responses.some(response => !response.ok)) {
           throw new Error("個人成績データを取得できませんでした。");
         }

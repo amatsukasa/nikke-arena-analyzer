@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const privateLayouts = new Map([
-  ['src/app/gate/layout.tsx', '閲覧認証'],
   ['src/app/secret-login/layout.tsx', 'スタッフログイン'],
   ['src/app/secret-register/layout.tsx', 'スタッフ登録'],
   ['src/app/approve-registration/layout.tsx', 'スタッフ登録承認'],
