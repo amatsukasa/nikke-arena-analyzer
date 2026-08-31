@@ -207,7 +207,7 @@ class Full64RegressionTest(unittest.TestCase):
 
     def test_existing_seed_layout_progression_side_order_and_champion(self):
         self.assertEqual(len(_match_pairs()), 63)
-        bracket = main.get_tournament_bracket(self.tournament.id, self.db, None)
+        bracket = main.get_tournament_bracket(self.tournament.id, self.db, self.user)
 
         self.assertEqual(len(bracket["groups"]), 8)
         for group_index, group in enumerate(bracket["groups"]):
@@ -256,7 +256,7 @@ class Full64RegressionTest(unittest.TestCase):
             "優勝": 1,
         })
 
-        dashboard = main._compute_dashboard_stats(self.tournament.id, self.db, None)
+        dashboard = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
         self.assertEqual(self._result_distribution_from_team_stats(dashboard), expected_distribution)
 
         by_result = main._compute_character_usage_by_result([self.tournament.id], self.db)
@@ -288,7 +288,7 @@ class Full64RegressionTest(unittest.TestCase):
         self.assertEqual(summary["players_without_decks"], [])
         self.assertEqual(summary["players_with_incomplete_decks"], [])
 
-        stats = main._compute_dashboard_stats(self.tournament.id, self.db, None)
+        stats = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
         self.assertEqual((stats["total_players"], stats["total_matches"]), (64, 63))
         self.assertEqual(len(stats["character_stats"]), 25)
         self.assertTrue(all(character["count"] == 64 for character in stats["character_stats"]))
@@ -341,8 +341,8 @@ class Full64RegressionTest(unittest.TestCase):
         self.assertEqual(len(readiness["warnings"]), 2)
 
     def test_snapshot_cross_stats_and_private_cache_keep_major_results_stable(self):
-        direct = main._compute_dashboard_stats(self.tournament.id, self.db, None)
-        second = main._compute_dashboard_stats(self.tournament.id, self.db, None)
+        direct = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
+        second = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
         for key in ("total_players", "total_matches", "character_stats", "team_usage", "character_usage_by_result"):
             self.assertEqual(direct[key], second[key])
 

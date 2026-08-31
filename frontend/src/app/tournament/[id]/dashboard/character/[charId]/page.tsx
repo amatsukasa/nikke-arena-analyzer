@@ -22,6 +22,7 @@ export default function SingleTournamentCharacterDetailPage() {
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (tournamentsParam) return;
@@ -32,17 +33,24 @@ export default function SingleTournamentCharacterDetailPage() {
 
     const fetchData = async () => {
       setLoading(true);
+      setTournament(null);
+      setStats(null);
+      setError("");
       try {
-        const [tRes, cRes, sRes] = await Promise.all([
-          fetch(`/api/tournaments/${tournamentId}`),
+        // Do not request individual dashboard data until the backend has
+        // confirmed owner/admin access to this tournament.
+        const tRes = await fetch(`/api/tournaments/${tournamentId}`);
+        if (!tRes.ok) {
+          setError("大会の詳細を表示できません。");
+          return;
+        }
+        const [cRes, sRes] = await Promise.all([
           fetch("/api/characters"),
           fetch(`/api/tournaments/${tournamentId}/dashboard/character/${charId}`)
         ]);
 
-        if (tRes.ok) {
-          const tData = await tRes.json();
-          setTournament(tData);
-        }
+        const tData = await tRes.json();
+        setTournament(tData);
         if (cRes.ok) {
           const cData = await cRes.json();
           setAllCharacters(Array.isArray(cData) ? cData : (cData.characters || []));
@@ -53,6 +61,7 @@ export default function SingleTournamentCharacterDetailPage() {
         }
       } catch (err) {
         console.error("Failed to fetch character detail:", err);
+        setError("大会の詳細を表示できません。");
       } finally {
         setLoading(false);
       }
@@ -67,6 +76,10 @@ export default function SingleTournamentCharacterDetailPage() {
         <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
       </div>
     );
+  }
+
+  if (error || !tournament) {
+    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{error || "大会の詳細を表示できません。"}</div></main>;
   }
 
   return (

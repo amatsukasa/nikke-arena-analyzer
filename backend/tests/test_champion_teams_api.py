@@ -459,8 +459,8 @@ class ChampionTeamsApiTest(unittest.TestCase):
     def test_get_scope_permissions_and_other_tournament_player(self):
         self._assert_status(409, main.get_champion_teams, self.full.id, self.full_player.id, self.db, self.owner)
         self._assert_status(404, main.get_champion_teams, self.champion.id, self.other_player.id, self.db, self.owner)
-        self._assert_status(403, main.get_champion_teams, self.champion.id, self.player.id, self.db, self.other)
-        self._assert_status(401, main.get_champion_teams, self.champion.id, self.player.id, self.db, None)
+        self._assert_status(404, main.get_champion_teams, self.champion.id, self.player.id, self.db, self.other)
+        self._assert_status(404, main.get_champion_teams, self.champion.id, self.player.id, self.db, None)
 
     def test_analyze_checks_authorization_before_form_parsing(self):
         request = FakeRequest([self._upload()])

@@ -1,16 +1,11 @@
 import os
-import sys
 import unittest
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
-fake_resend = MagicMock()
-fake_resend.Emails.send.return_value = {"id": "email_123"}
-sys.modules.setdefault("resend", fake_resend)
-
-from services.registration_email import send_registration_request
+from services import registration_email
 
 
 class RegistrationEmailTests(unittest.TestCase):
@@ -28,11 +23,21 @@ class RegistrationEmailTests(unittest.TestCase):
             "ADMIN_NOTIFICATION_EMAIL": "amatsukasa@gmail.com",
             "APP_BASE_URL": "https://nikkeari.cc",
         }
-        with patch.dict(os.environ, env, clear=False):
-            email_id = send_registration_request(user, "approval-token")
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.object(
+                registration_email.resend.Emails,
+                "send",
+                return_value={"id": "email_123"},
+            ) as send,
+        ):
+            email_id = registration_email.send_registration_request(
+                user,
+                "approval-token",
+            )
 
         self.assertEqual(email_id, "email_123")
-        payload = fake_resend.Emails.send.call_args.args[0]
+        payload = send.call_args.args[0]
         self.assertEqual(payload["from"], env["EMAIL_FROM"])
         self.assertEqual(payload["to"], [env["ADMIN_NOTIFICATION_EMAIL"]])
         self.assertIn(

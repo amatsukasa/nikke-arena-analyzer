@@ -33,6 +33,7 @@ export default function TournamentDetailRouter() {
     }
     const controller = new AbortController();
     setLoading(true);
+    setTournament(null);
     setLoadError("");
     fetch(`/api/tournaments/${tournamentId}`, { cache: "no-store", signal: controller.signal })
       .then(async response => {
@@ -42,7 +43,10 @@ export default function TournamentDetailRouter() {
       })
       .catch(error => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        setLoadError(error instanceof Error ? error.message : "大会情報の取得に失敗しました。");
+        // Individual tournament access deliberately returns 404 for both a
+        // missing tournament and an unauthorised viewer. Keep that boundary
+        // opaque in the UI as well.
+        setLoadError("大会詳細を表示できません。");
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);

@@ -111,11 +111,14 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertEqual(result["invalid_slots"], [])
         self.assertEqual(result["invalid_match_slots"], [])
 
-    def test_published_champion_dashboard_is_anonymous_and_scope_aware(self):
+    def test_published_champion_dashboard_is_owner_only_and_scope_aware(self):
         self.tournament.publication_status = "published"
         self.db.commit()
 
-        summary = main.get_dashboard_summary(self.tournament.id, self.db, None)
+        with self.assertRaises(HTTPException) as anonymous:
+            main.get_dashboard_summary(self.tournament.id, self.db, None)
+        self.assertEqual(anonymous.exception.status_code, 404)
+        summary = main.get_dashboard_summary(self.tournament.id, self.db, self.owner)
         self.assertEqual(
             (summary["registered_player_count"], summary["expected_player_count"],
              summary["registered_team_count"], summary["expected_team_count"],
@@ -124,10 +127,10 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         )
         self.assertEqual(summary["missing_seed_numbers"], [])
 
-        stats = main.get_dashboard_stats(self.tournament.id, None, self.db, None)
-        matchups = main.get_dashboard_matchups(self.tournament.id, None, self.db, None)
-        best8 = main.get_best8_decks(self.tournament.id, self.db, None)
-        players = main.get_dashboard_player_stats(self.tournament.id, None, self.db, None)
+        stats = main.get_dashboard_stats(self.tournament.id, None, self.db, self.owner)
+        matchups = main.get_dashboard_matchups(self.tournament.id, None, self.db, self.owner)
+        best8 = main.get_best8_decks(self.tournament.id, self.db, self.owner)
+        players = main.get_dashboard_player_stats(self.tournament.id, None, self.db, self.owner)
         self.assertEqual((stats["total_players"], stats["total_matches"]), (8, 7))
         self.assertEqual(len(matchups["matchups"]), 35)
         self.assertEqual((len(best8), len(players["players"])), (8, 8))
@@ -400,7 +403,7 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 function(*args)
             self.assertEqual(raised.exception.status_code, 409)
-        self.assertIsNotNone(main.get_champion_player_by_id(self.tournament.id, self.players[0].id, self.db, None))
+        self.assertIsNotNone(main.get_champion_player_by_id(self.tournament.id, self.players[0].id, self.db, self.owner))
         route_paths = {route.path for route in main.app.routes}
         self.assertIn("/api/tournaments/{tournament_id}/players/by-id/{player_id}/icon", route_paths)
         self.assertIn("/api/tournaments/{tournament_id}/matches/{bracket_stage}/{bracket_slot}/analyze", route_paths)

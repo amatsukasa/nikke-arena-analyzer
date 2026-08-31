@@ -6,13 +6,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   try {
     const { path } = await params;
     const filePath = path.join('/');
+    const token = request.cookies.get('auth_token')?.value;
     const res = await fetch(`${BACKEND_URL}/api/uploads/${filePath}`, {
       method: 'GET',
       cache: 'no-store',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     
     if (!res.ok) {
-      return new NextResponse('File not found', { status: 404 });
+      return new NextResponse('File not found', { status: res.status });
     }
 
     const contentType = res.headers.get('content-type') || 'application/octet-stream';

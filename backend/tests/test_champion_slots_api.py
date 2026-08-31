@@ -122,18 +122,18 @@ class ChampionSlotsApiTest(unittest.TestCase):
             404, main.get_champion_slots, 999999, self.db, self.owner
         )
         self._assert_http_status(
-            403, main.get_champion_slots, self.champion.id, self.db, self.other
+            404, main.get_champion_slots, self.champion.id, self.db, self.other
         )
         self._assert_http_status(
-            401, main.get_champion_slots, self.champion.id, self.db, None
+            404, main.get_champion_slots, self.champion.id, self.db, None
         )
 
         admin_response = main.get_champion_slots(self.champion.id, self.db, self.admin)
         self.assertEqual(len(admin_response["slots"]), 8)
         self.champion.publication_status = "published"
         self.db.commit()
-        public_response = main.get_champion_slots(self.champion.id, self.db, None)
-        self.assertEqual(len(public_response["slots"]), 8)
+        owner_response = main.get_champion_slots(self.champion.id, self.db, self.owner)
+        self.assertEqual(len(owner_response["slots"]), 8)
 
     def test_create_boundary_slots_seeds_unknowns_and_cross_tournament_reuse(self):
         slot_one = self._upsert(self.champion, 1, 1)
@@ -406,7 +406,7 @@ class ChampionSlotsApiTest(unittest.TestCase):
         )
         self.db.add(player)
         self.db.commit()
-        details = main.get_player_details(self.full.id, 7, self.db, None)
+        details = main.get_player_details(self.full.id, 7, self.db, self.owner)
         self.assertEqual(details["player"]["id"], player.id)
         self.assertEqual(details["player"]["seed_number"], 7)
         self.assertEqual(details["decks"], [])
