@@ -254,6 +254,25 @@ def _private_upload_tournament_id(asset_path: str, db: Session) -> int | None:
     if player is not None:
         return player.tournament_id
 
+    # Older full_64 registrations could persist a cache-buster in icon_url.
+    # The HTTP request correctly omits its query string from asset_path, so look
+    # up only the exact URL followed by a query boundary.  Escaping LIKE keeps
+    # underscores and percent signs in the requested path literal.
+    escaped_url = (
+        normalized_url
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    legacy_player = db.query(models.Player).filter(
+        models.Player.icon_url.like(f"{escaped_url}?%", escape="\\")
+    ).first()
+    if (
+        legacy_player is not None
+            and legacy_player.icon_url.partition("?")[0] == normalized_url
+    ):
+        return legacy_player.tournament_id
+
     crop_match = CHAMPION_CROP_NAME.fullmatch(Path(asset_path).name)
     if crop_match is not None and asset_path.startswith("cropped/"):
         return int(crop_match.group("tournament"))

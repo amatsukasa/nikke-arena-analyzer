@@ -63,6 +63,24 @@ class TournamentDetailAccessTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 404)
         self.assertNotIn("owner", str(raised.exception.detail).lower())
 
+    def _add_player_icon(self, tournament, seed_number, relative_path, *, icon_url=None):
+        player = models.Player(
+            tournament_id=tournament.id,
+            seed_number=seed_number,
+            name=f"Player {seed_number}",
+            icon_url=icon_url or f"/api/uploads/{relative_path}",
+        )
+        self.db.add(player)
+        self.db.commit()
+        return player
+
+    @staticmethod
+    def _write_upload(directory, relative_path):
+        path = Path(directory) / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not-a-real-image")
+        return path
+
     def test_detail_and_dashboard_access_matrix_for_all_scopes_and_statuses(self):
         for (scope, status), tournament in self.tournaments.items():
             with self.subTest(scope=scope, status=status, viewer="anonymous"):
@@ -121,25 +139,108 @@ class TournamentDetailAccessTest(unittest.TestCase):
 
     def test_player_icon_is_not_served_to_anonymous_or_unrelated_viewers(self):
         tournament = self.tournaments[("champion_8", "published")]
-        player = models.Player(
-            tournament_id=tournament.id, champion_slot=1, seed_number=1,
-            name="Player 1",
-            icon_url=f"/api/uploads/player_icons/tournament_{tournament.id}/player_1.png",
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                relative = f"player_icons/tournament_{tournament.id}/player_1.png"
+                self._add_player_icon(tournament, 1, relative)
+                self._write_upload(directory, relative)
+                self._assert_hidden(lambda: main.get_upload(relative, self.db, None))
+                self._assert_hidden(lambda: main.get_upload(relative, self.db, self.other_owner))
+                self.assertEqual(main.get_upload(relative, self.db, self.owner).status_code, 200)
+                self.assertEqual(main.get_upload(relative, self.db, self.admin).status_code, 200)
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
+    def test_full64_player_icon_accepts_exact_and_legacy_query_url_only_for_owner_or_admin(self):
+        tournament = self.tournaments[("full_64", "published")]
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                current_relative = f"player_icons/tournament_{tournament.id}/seed_8.png"
+                legacy_relative = f"player_icons/tournament_{tournament.id}/seed_9.png"
+                self._add_player_icon(tournament, 8, current_relative)
+                self._add_player_icon(
+                    tournament,
+                    9,
+                    legacy_relative,
+                    icon_url=f"/api/uploads/{legacy_relative}?t=1786364273040",
+                )
+                self._write_upload(directory, current_relative)
+                self._write_upload(directory, legacy_relative)
+
+                for relative in (current_relative, legacy_relative):
+                    with self.subTest(relative=relative, viewer="owner"):
+                        self.assertEqual(main.get_upload(relative, self.db, self.owner).status_code, 200)
+                    with self.subTest(relative=relative, viewer="admin"):
+                        self.assertEqual(main.get_upload(relative, self.db, self.admin).status_code, 200)
+
+                # Browsers never pass the query string into FastAPI's path
+                # parameter; the legacy DB value above must still authorize
+                # this normal asset request.
+                self.assertEqual(main.get_upload(legacy_relative, self.db, self.owner).status_code, 200)
+                for viewer in (None, self.normal, self.other_owner):
+                    with self.subTest(viewer=getattr(viewer, "role", "anonymous")):
+                        self._assert_hidden(lambda viewer=viewer: main.get_upload(legacy_relative, self.db, viewer))
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
+    def test_player_icon_query_match_requires_exact_path_and_query_boundary(self):
+        tournament = self.tournaments[("full_64", "draft")]
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                relative = f"player_icons/tournament_{tournament.id}/seed_10.png"
+                self._add_player_icon(
+                    tournament,
+                    10,
+                    relative,
+                    icon_url=f"/api/uploads/{relative}?t=old",
+                )
+                self._write_upload(directory, relative)
+                similar = f"player_icons/tournament_{tournament.id}/seed_10.png-copy"
+                no_boundary = f"player_icons/tournament_{tournament.id}/seed_10.png-old"
+                self._write_upload(directory, similar)
+                self._write_upload(directory, no_boundary)
+
+                self._assert_hidden(lambda: main.get_upload(similar, self.db, self.owner))
+                self._assert_hidden(lambda: main.get_upload(no_boundary, self.db, self.owner))
+                self._assert_hidden(lambda: main.get_upload("player_icons/../templates/public.png", self.db, self.owner))
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
+    def test_missing_unreferenced_and_null_owner_player_icons_stay_hidden(self):
+        full = self.tournaments[("full_64", "draft")]
+        null_owner = models.Tournament(
+            name="legacy-null-owner-icon", date=date(2026, 8, 31),
+            registration_scope="full_64", publication_status="published", created_by=None,
         )
-        self.db.add(player)
+        self.db.add(null_owner)
         self.db.commit()
         with tempfile.TemporaryDirectory() as directory:
             previous_upload_dir = main.UPLOAD_DIR
             try:
                 main.UPLOAD_DIR = directory
-                path = Path(directory) / "player_icons" / f"tournament_{tournament.id}" / "player_1.png"
-                path.parent.mkdir(parents=True)
-                path.write_bytes(b"not-a-real-image")
-                relative = f"player_icons/tournament_{tournament.id}/player_1.png"
-                self._assert_hidden(lambda: main.get_upload(relative, self.db, None))
-                self._assert_hidden(lambda: main.get_upload(relative, self.db, self.other_owner))
-                self.assertEqual(main.get_upload(relative, self.db, self.owner).status_code, 200)
-                self.assertEqual(main.get_upload(relative, self.db, self.admin).status_code, 200)
+                missing = f"player_icons/tournament_{full.id}/seed_11.png"
+                self._add_player_icon(full, 11, missing)
+                self._assert_hidden(lambda: main.get_upload(missing, self.db, self.owner))
+
+                unreferenced = f"player_icons/tournament_{full.id}/seed_12.png"
+                self._write_upload(directory, unreferenced)
+                self._assert_hidden(lambda: main.get_upload(unreferenced, self.db, self.owner))
+
+                legacy_relative = f"player_icons/tournament_{null_owner.id}/seed_1.png"
+                self._add_player_icon(null_owner, 1, legacy_relative, icon_url=f"/api/uploads/{legacy_relative}?t=legacy")
+                self._write_upload(directory, legacy_relative)
+                self._assert_hidden(lambda: main.get_upload(legacy_relative, self.db, self.owner))
+                self.assertEqual(main.get_upload(legacy_relative, self.db, self.admin).status_code, 200)
+
+                template = "templates/public-template.png"
+                self._write_upload(directory, template)
+                self.assertEqual(main.get_upload(template, self.db, None).status_code, 200)
             finally:
                 main.UPLOAD_DIR = previous_upload_dir
 
