@@ -121,6 +121,13 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         for code,label in (("best64","ベスト64"),("best32","ベスト32"),("best16","ベスト16"),("best8","ベスト8"),("best4","ベスト4"),("runner_up","準優勝"),("champion","優勝")):
             self.assertIn(f'{code}: "{label}"',results)
 
+    def test_public_analysis_tab_labels_change_without_changing_tab_ids(self):
+        for path in ("frontend/src/app/page.tsx", "frontend/src/app/tournament/[id]/dashboard/page.tsx"):
+            source=self.read(path)
+            for tab_id,label in (("team_winrate","Win Rate"),("matchups","Details"),("search","Team Search"),("overview","Trends")):
+                self.assertIn(f'setActiveTab("{tab_id}")',source)
+                self.assertIn(f"<span>{label}</span>",source)
+
     def test_trend_and_team_adoption_labels_keep_distinct_counts(self):
         trend=self.read("frontend/src/components/CharacterUsageByResultRanking.tsx")
         self.assertNotIn("採用Player数",trend)
@@ -131,14 +138,22 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         helper=self.read("frontend/src/lib/adoptionRate.ts")
         self.assertIn("entry.player_count",helper)
 
-    def test_matchup_history_displays_analysis_result_below_teams_responsively(self):
+    def test_matchup_history_displays_both_side_results_responsively(self):
         history=self.read("frontend/src/components/TeamMatchupHistory.tsx")
-        self.assertIn("resultBadge(match.isWin)",history)
-        self.assertNotIn("resultBadge(Boolean(match.winner_is_attacker))",history)
-        self.assertNotIn("resultBadge(!Boolean(match.winner_is_attacker))",history)
-        self.assertIn("xl:grid-cols-[max-content_auto_max-content]",history)
-        self.assertIn("text-purple-300\">分析対象",history)
-        self.assertNotIn("bg-purple-500/10",history)
+        self.assertIn("matchupSideResults(match)",history)
+        self.assertIn('resultBadge(sideResults.attacker, match.isAttacker, "攻撃側")',history)
+        self.assertIn('resultBadge(sideResults.defender, !match.isAttacker, "防衛側")',history)
+        self.assertIn("xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]",history)
+        self.assertIn("grid-cols-[2.5rem_auto] items-center justify-center",history)
+        self.assertIn('data-matchup-side="attacker"',history)
+        self.assertIn('data-matchup-side="defender"',history)
+        self.assertEqual(history.count("w-fit max-w-full min-w-0 justify-self-center"),2)
+        self.assertIn('data-matchup-characters="attacker"',history)
+        self.assertIn('data-matchup-characters="defender"',history)
+        self.assertEqual(history.count("[&>div]:justify-center"),2)
+        self.assertIn("row-start-1 justify-self-center xl:block",history)
+        self.assertIn("row-start-3 justify-self-center xl:block",history)
+        self.assertIn("bg-purple-500/10 ring-2 ring-purple-400/60",history)
         self.assertNotIn("検索対象",history)
         self.assertEqual(history.count(">分析対象</span>"),2)
         self.assertNotIn("overflow-x-auto",history)

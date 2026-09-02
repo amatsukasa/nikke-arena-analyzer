@@ -770,14 +770,14 @@ function DashboardContent() {
               className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Users size={18} />
-              <span>編成別勝率</span>
+              <span>Win Rate</span>
             </button>
             <button 
               onClick={() => setActiveTab("matchups")}
               className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Swords size={18} />
-              <span>編成詳細</span>
+              <span>Details</span>
             </button>
 
             <button 
@@ -785,14 +785,14 @@ function DashboardContent() {
               className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "search" ? "bg-emerald-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <Search size={18} />
-              <span>シナジー逆引き検索</span>
+              <span>Team Search</span>
             </button>
             <button
               onClick={() => setActiveTab("overview")}
               className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
             >
               <TrendingUp size={18} />
-              <span>トレンド分析</span>
+              <span>Trends</span>
             </button>
           </div>
           </div>

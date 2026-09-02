@@ -643,28 +643,28 @@ export default function Dashboard() {
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Users size={18} />
-          <span>編成別勝率</span>
+          <span>Win Rate</span>
         </button>
         <button 
           onClick={() => setActiveTab("matchups")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "matchups" ? "bg-purple-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Swords size={18} />
-          <span>編成詳細</span>
+          <span>Details</span>
         </button>
         <button 
           onClick={() => setActiveTab("search")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "search" ? "bg-emerald-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Search size={18} />
-          <span>シナジー逆引き検索</span>
+          <span>Team Search</span>
         </button>
         <button
           onClick={() => setActiveTab("overview")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "overview" ? "bg-blue-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <TrendingUp size={18} />
-          <span>トレンド分析</span>
+          <span>Trends</span>
         </button>
         <button
           onClick={() => setActiveTab("winrate")}
