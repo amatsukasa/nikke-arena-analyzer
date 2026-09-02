@@ -1,5 +1,20 @@
 export type TeamKey = (value: unknown) => string;
 
+export type MatchupResult = "WIN" | "LOSE";
+
+export function matchupSideResults(match: {
+  winner_is_attacker?: boolean;
+  isAttacker: boolean;
+  isWin: boolean;
+}): { attacker: MatchupResult; defender: MatchupResult } {
+  const attackerWon = typeof match.winner_is_attacker === "boolean"
+    ? match.winner_is_attacker
+    : match.isAttacker === match.isWin;
+  return attackerWon
+    ? { attacker: "WIN", defender: "LOSE" }
+    : { attacker: "LOSE", defender: "WIN" };
+}
+
 export function teamMatchupPerspective(matchups: any[], targetKey: string, teamKey: TeamKey) {
   const details: any[] = [];
   let totalWins = 0;
