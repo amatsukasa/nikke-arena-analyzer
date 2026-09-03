@@ -16,6 +16,8 @@ import { apiErrorMessage, normalizeTournament, TournamentSummary } from "../../.
 import { prepareAnalysisImage } from "../../../lib/deckImagePreparation";
 import { hasCompleteRegistrationStructure, normalizeAnalyzedRegistrationTeams, normalizeSavedRegistrationTeams, registrationSaveConfirmation, registrationTeamsPayload, validateRegistrationTeams } from "../../../lib/deckRegistration";
 import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } from "../../../lib/matchRegistration";
+import { usePlayerIconCropSettings } from "../../../hooks/usePlayerIconCropSettings";
+import { useCharacterCatalog } from "../../../hooks/useCharacterCatalog";
 
 export default function TournamentDetailRouter() {
   const params = useParams();
@@ -81,10 +83,11 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const router = useRouter();
   const formRef = useRef<HTMLDivElement>(null);
   const seedFieldRef = useRef<HTMLDivElement>(null);
+  const [playerIconCropSettings, setPlayerIconCropSettings] = usePlayerIconCropSettings();
 
   const [seed, setSeed] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
-  const [characters, setCharacters] = useState<any[]>([]);
+  const { characters, refreshCharacters } = useCharacterCatalog<any>();
   const [selectedTeams, setSelectedTeams] = useState<any[]>([]);
 
   // 勝敗登録用state
@@ -122,10 +125,6 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       setTournamentId(parseInt(id as string));
     }
   }, [id]);
-
-  useEffect(() => {
-    fetch("/api/characters").then(r => r.json()).then(setCharacters);
-  }, []);
 
   useEffect(() => {
     if (tournamentId) {
@@ -232,10 +231,11 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       });
       if (res.ok) {
         const data = await res.json();
+        const catalogUpdated = await refreshCharacters();
         if (data.is_update) {
-          alert("既存の編成データを上書きしました！（古いデータは自動削除済み）");
+          alert(catalogUpdated ? "既存の編成データを上書きしました！（古いデータは自動削除済み）" : "編成は上書きされましたが、Character画像情報を更新できませんでした。再度Playerを開くかページを再読み込みしてください。");
         } else {
-          alert("編成データを保存しました！");
+          alert(catalogUpdated ? "編成データを保存しました！" : "編成は保存されましたが、Character画像情報を更新できませんでした。再度Playerを開くかページを再読み込みしてください。");
         }
         if (registeredDecks.length > 0) {
           await loadPlayerDetails(seed);
@@ -556,7 +556,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
                 />
               ) : (
                 <div className="space-y-6" data-registration-mode="edit">
-                  <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} />
+                  <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} cropSettings={playerIconCropSettings} onCropSettingsChange={setPlayerIconCropSettings} />
                   <DeckRegistrationEditor
                     key={`full64-${tournamentId}-${seed}`}
                     teams={selectedTeams}

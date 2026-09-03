@@ -4,15 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronDown, Upload, X } from "lucide-react";
 import CharacterSearchSelect from "./CharacterSearchSelect";
 import AnalysisCharacterCrop from "./AnalysisCharacterCrop";
-import { RegistrationTeam, validateRegistrationTeams } from "../lib/deckRegistration";
+import { RegistrationTeam, registrationCharacterImageUrl, validateRegistrationTeams } from "../lib/deckRegistration";
 import { prepareAnalysisImage } from "../lib/deckImagePreparation";
 import { COLLECTION_OPTIONS, collectionSelectClass } from "../lib/collectionPresentation";
 import { useMobileRoundAccordion } from "../hooks/useMobileRoundAccordion";
-import { getCharIconUrl } from "../utils/charIcon";
 
 type ChampionTeam = RegistrationTeam;
 
-export interface RegistrationCharacter { id: number; name: string; rarity: string; image_url?: string; icon_url?: string | null }
+export interface RegistrationCharacter { id: number; name: string; rarity: string; image_url?: string; icon_url?: string | null; is_template_available?: boolean; template_filename?: string | null }
 interface Props {
   teams: RegistrationTeam[];
   characters: RegistrationCharacter[];
@@ -33,9 +32,9 @@ export default function DeckRegistrationEditor({ teams, characters, saved, disab
   const [localError, setLocalError] = useState("");
   const { expandedRound: expanded, roundToggleRefs, toggleRound } = useMobileRoundAccordion(0);
   const input = useRef<HTMLInputElement>(null);
-  const known = useMemo(() => new Set(characters.map(item => item.id)), [characters]);
+  const known = useMemo(() => new Set(characters.map(item => Number(item.id))), [characters]);
   const issues = useMemo(() => validateRegistrationTeams(teams, known), [teams, known]);
-  const byId = useMemo(() => new Map(characters.map(item => [item.id, item])), [characters]);
+  const byId = useMemo(() => new Map(characters.map(item => [Number(item.id), {...item,id:Number(item.id)}])), [characters]);
   useEffect(() => () => previews.forEach(URL.revokeObjectURL), [previews]);
   const clearSelectedImages = () => { previews.forEach(URL.revokeObjectURL); setFiles([]); setPreviews([]); };
   const selectFiles = (selected: File[]) => { previews.forEach(URL.revokeObjectURL); const next = selected.slice(0, 5); setFiles(next); setPreviews(next.map(URL.createObjectURL)); setLocalError(""); };
@@ -57,4 +56,4 @@ export default function DeckRegistrationEditor({ teams, characters, saved, disab
   </div>;
 }
 
-function CharacterCell({character,info,characters,disabled,onCharacter,onCollection,id,mobile=false}:{character:ChampionTeam["characters"][number];info?:RegistrationCharacter;characters:RegistrationCharacter[];disabled?:boolean;onCharacter:(id:number|null)=>void;onCollection:(value:string)=>void;id:string;mobile?:boolean}) { const empty=character.id===9999; const validId=character.id!=null&&!empty; const imageUrl=character.preview_image_data_url||character.image_url||(info?getCharIconUrl({...info,is_template_available:Boolean(info.image_url||info.icon_url)}):"")||null; const fallback=empty?"空き枠":validId?(info?.name||`ID:${character.id}`):"未判定"; return <div className={mobile?"flex w-full min-w-0 items-center gap-3 rounded-md bg-slate-950/50 p-2":"flex w-full min-w-0 flex-col items-center gap-2"}><AnalysisCharacterCrop imageUrl={imageUrl} alt={info?.name||"解析Character"} fallback={fallback} className={`${mobile?"h-12 w-12":"h-16 w-16"} rounded-lg`}/><div className="w-full min-w-0 flex-1"><p className="mb-1 truncate text-center text-xs text-slate-300">{empty?"空き枠":info?.name||"未判定"}</p><CharacterSearchSelect id={id} value={character.id} onChange={onCharacter} characters={characters} error={character.id==null} className="w-full min-w-0"/><select aria-label={`${id} コレクション`} disabled={disabled||empty} value={empty?"unknown":character.collection_level||"unknown"} onChange={event=>onCollection(event.target.value)} className={`mt-2 h-9 w-full min-w-0 rounded border-2 px-2 text-xs font-bold ${collectionSelectClass(character.collection_level)}`}>{empty?<option value="unknown">判定不要</option>:COLLECTION_OPTIONS.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></div></div>; }
+function CharacterCell({character,info,characters,disabled,onCharacter,onCollection,id,mobile=false}:{character:ChampionTeam["characters"][number];info?:RegistrationCharacter;characters:RegistrationCharacter[];disabled?:boolean;onCharacter:(id:number|null)=>void;onCollection:(value:string)=>void;id:string;mobile?:boolean}) { const empty=character.id===9999; const validId=character.id!=null&&!empty; const imageUrl=registrationCharacterImageUrl(character,info)||null; const fallback=empty?"空き枠":validId?(info?.name||`ID:${character.id}`):"未判定"; return <div className={mobile?"flex w-full min-w-0 items-center gap-3 rounded-md bg-slate-950/50 p-2":"flex w-full min-w-0 flex-col items-center gap-2"}><AnalysisCharacterCrop imageUrl={imageUrl} alt={info?.name||"解析Character"} fallback={fallback} className={`${mobile?"h-12 w-12":"h-16 w-16"} rounded-lg`}/><div className="w-full min-w-0 flex-1"><p className="mb-1 truncate text-center text-xs text-slate-300">{empty?"空き枠":info?.name||"未判定"}</p><CharacterSearchSelect id={id} value={character.id} onChange={onCharacter} characters={characters} error={character.id==null} className="w-full min-w-0"/><select aria-label={`${id} コレクション`} disabled={disabled||empty} value={empty?"unknown":character.collection_level||"unknown"} onChange={event=>onCollection(event.target.value)} className={`mt-2 h-9 w-full min-w-0 rounded border-2 px-2 text-xs font-bold ${collectionSelectClass(character.collection_level)}`}>{empty?<option value="unknown">判定不要</option>:COLLECTION_OPTIONS.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></div></div>; }

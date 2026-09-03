@@ -54,7 +54,7 @@ class Phase6BCommonFrontendContractTest(unittest.TestCase):
             "prepareAnalysisImage",
             "validateRegistrationTeams",
             "useMobileRoundAccordion",
-            "getCharIconUrl",
+            "registrationCharacterImageUrl",
         ):
             self.assertIn(contract, editor)
         self.assertIn('accept="image/jpeg,image/png,image/webp"', editor)
@@ -62,15 +62,23 @@ class Phase6BCommonFrontendContractTest(unittest.TestCase):
 
     def test_player_crop_contract_is_shared_and_guards_double_submission(self):
         editor = self._read("frontend/src/components/PlayerIconEditor.tsx")
+        full = self._read("frontend/src/app/tournament/[id]/page.tsx")
+        champion = self._read("frontend/src/components/ChampionTournamentRegistrationShell.tsx")
         for value in ('[1,"小 (1倍)"]', '[6,"中 (6倍)"]', '[10,"大 (10倍)"]'):
             self.assertIn(value, editor)
         self.assertIn("processing || busy", editor)
         self.assertIn('accept="image/jpeg,image/png,image/webp"', editor)
         self.assertIn('document.body.style.overflow = "hidden"', editor)
         self.assertIn('event.key === "Escape"', editor)
+        self.assertNotIn("setZoom(1)", editor)
+        self.assertNotIn("setCrop({ x: 0, y: 0 })", editor)
+        for source in (full, champion):
+            self.assertIn("usePlayerIconCropSettings()", source)
+            self.assertIn("cropSettings={playerIconCropSettings}", source)
 
     def test_tournament_switch_resets_state_and_stale_loads_are_generation_guarded(self):
         shell = self._read("frontend/src/components/ChampionTournamentRegistrationShell.tsx")
+        catalog = self._read("frontend/src/hooks/useCharacterCatalog.ts")
         for reset in (
             "initialized.current=false",
             "setSlots(initialSlots())",
@@ -83,7 +91,9 @@ class Phase6BCommonFrontendContractTest(unittest.TestCase):
         ):
             self.assertIn(reset, shell)
         self.assertIn("current===generation.current", shell)
-        self.assertIn("controller.abort()", shell)
+        self.assertIn("useCharacterCatalog", shell)
+        self.assertIn("activeController.current?.abort()", catalog)
+        self.assertIn("current !== generation.current", catalog)
         self.assertIn("activeTournamentId.current!==operationTournament", shell)
         self.assertIn("key={`icon-${tournamentId}-${selected.player.id}`}", shell)
         self.assertIn("key={`decks-${tournamentId}-${selected.player.id}`}", shell)
@@ -125,10 +135,12 @@ class Phase6BCommonFrontendContractTest(unittest.TestCase):
         shared = self._read("frontend/src/utils/charIcon.ts")
         team = self._read("frontend/src/components/TeamDisplay.tsx")
         editor = self._read("frontend/src/components/DeckRegistrationEditor.tsx")
+        registration = self._read("frontend/src/lib/deckRegistration.ts")
         self.assertIn("/api/char-icon/${id}.png", shared)
         self.assertIn("<CharacterIcon character={c}", team)
         self.assertIn("onError={() => setFailed(true)}", team)
-        self.assertIn("getCharIconUrl", editor)
+        self.assertIn("registrationCharacterImageUrl", editor)
+        self.assertIn("is_template_available || info.template_filename", registration)
         self.assertNotIn("/api/char-icon/${character.id}`", editor)
 
     def test_proxy_has_safe_error_and_bounded_body(self):
