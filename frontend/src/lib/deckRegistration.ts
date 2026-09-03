@@ -16,6 +16,26 @@ export interface RegistrationTeam {
   characters: RegistrationTeamCharacter[];
 }
 
+export function normalizeRegistrationCharacterId(value: unknown): number | null {
+  if (typeof value === "number") return Number.isInteger(value) ? value : null;
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function registrationCharacterImageUrl(
+  character: RegistrationTeamCharacter,
+  info?: { id: number; icon_url?: string | null; image_url?: string | null; is_template_available?: boolean; template_filename?: string | null },
+) {
+  if (character.preview_image_data_url) return character.preview_image_data_url;
+  if (character.image_url) return character.image_url;
+  if (!info) return "";
+  if (info.icon_url) return info.icon_url;
+  if (info.image_url) return info.image_url;
+  if (info.is_template_available || info.template_filename) return `/api/char-icon/${info.id}.png`;
+  return "";
+}
+
 export function hasCompleteRegistrationStructure(teams: RegistrationTeam[]) {
   return teams.length === 5
     && [...teams.map(team => team.team_number)].sort((a, b) => a - b).join(",") === "1,2,3,4,5"
@@ -49,7 +69,7 @@ export function normalizeSavedRegistrationTeams(data: any): RegistrationTeam[] {
   return source.map((team: any) => ({
     team_number: Number(team.team_number),
     characters: (Array.isArray(team.character_ids) ? team.character_ids : []).map((id: unknown, index: number) => ({
-      id: typeof id === "number" ? id : null,
+      id: normalizeRegistrationCharacterId(id),
       collection_level: Array.isArray(team.collection_levels) ? team.collection_levels[index] ?? null : null,
     })),
   }));
@@ -64,14 +84,15 @@ export function normalizeAnalyzedRegistrationTeams(data: any): RegistrationTeam[
       team_number: Number(structured ? team.team_number : teamIndex + 1),
       characters: characters.map((character: any) => {
         const rawId = structured ? character.character_id : character.predicted_character_id;
+        const id = normalizeRegistrationCharacterId(rawId);
         return {
-          id: typeof rawId === "number" ? rawId : null,
-          collection_level: rawId === 9999 ? null : character.collection_level ?? "unknown",
+          id,
+          collection_level: id === 9999 ? null : character.collection_level ?? "unknown",
           source_image_index: character.source_image_index ?? (structured ? team.source_image_index : null) ?? null,
           image_url: character.image_url ?? null,
           preview_image_data_url: character.preview_image_data_url ?? null,
-          original_predicted_id: typeof rawId === "number" ? rawId : null,
-          was_unrecognized: structured ? Boolean(character.unresolved) : rawId == null,
+          original_predicted_id: id,
+          was_unrecognized: structured ? Boolean(character.unresolved) : id == null,
           add_to_templates: false,
           template_source_url: character.template_source_url ?? null,
           template_source_data_url: character.template_source_data_url ?? null,

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
@@ -137,6 +138,91 @@ class TournamentDetailAccessTest(unittest.TestCase):
             self.assertIsNone(row.owner_name)
             self.assertIsNone(row.creator_email)
 
+    def test_character_list_uses_existing_files_without_mutating_stale_metadata(self):
+        character_with_file = models.Character(
+            id=901,
+            name="filesystem-template",
+            rarity="SSR",
+            is_template_available=False,
+            template_filename=None,
+        )
+        character_without_file = models.Character(
+            id=902,
+            name="stale-database-template",
+            rarity="SSR",
+            is_template_available=True,
+            template_filename="char_902_001.png",
+        )
+        self.db.add_all((character_with_file, character_without_file))
+        self.db.commit()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                template_dir = Path(directory) / "templates"
+                template_dir.mkdir()
+                (template_dir / "char_901_001.png").write_bytes(b"template")
+
+                with patch.object(
+                    main,
+                    "get_character_template_inventory",
+                    wraps=main.get_character_template_inventory,
+                ) as inventory:
+                    by_id = {item.id: item for item in main.get_characters(self.db)}
+                inventory.assert_called_once_with(directory)
+                self.assertTrue(by_id[901].is_template_available)
+                self.assertEqual(by_id[901].template_filename, "char_901_001.png")
+                self.assertEqual(by_id[901].icon_url, "/api/char-icon/901.png")
+                self.assertFalse(by_id[902].is_template_available)
+                self.assertIsNone(by_id[902].template_filename)
+                self.assertIsNone(by_id[902].icon_url)
+
+                self.db.expire_all()
+                persisted_with_file = self.db.get(models.Character, 901)
+                persisted_without_file = self.db.get(models.Character, 902)
+                self.assertFalse(persisted_with_file.is_template_available)
+                self.assertIsNone(persisted_with_file.template_filename)
+                self.assertTrue(persisted_without_file.is_template_available)
+                self.assertEqual(persisted_without_file.template_filename, "char_902_001.png")
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
+    def test_character_icon_get_is_read_only_for_discovered_and_missing_files(self):
+        discovered = models.Character(
+            id=903, name="discovered", rarity="SSR",
+            is_template_available=False, template_filename=None,
+        )
+        missing = models.Character(
+            id=904, name="missing", rarity="SSR",
+            is_template_available=True, template_filename="char_904_001.png",
+        )
+        self.db.add_all((discovered, missing))
+        self.db.commit()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                template_dir = Path(directory) / "templates"
+                template_dir.mkdir()
+                (template_dir / "char_903_001.png").write_bytes(b"template")
+
+                with patch.object(self.db, "commit", wraps=self.db.commit) as commit:
+                    self.assertEqual(main.get_char_icon(903, self.db).status_code, 200)
+                    with self.assertRaises(HTTPException) as raised:
+                        main.get_char_icon(904, self.db)
+                    self.assertEqual(raised.exception.status_code, 404)
+                    commit.assert_not_called()
+
+                self.db.expire_all()
+                self.assertFalse(self.db.get(models.Character, 903).is_template_available)
+                self.assertIsNone(self.db.get(models.Character, 903).template_filename)
+                self.assertTrue(self.db.get(models.Character, 904).is_template_available)
+                self.assertEqual(self.db.get(models.Character, 904).template_filename, "char_904_001.png")
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
     def test_player_icon_is_not_served_to_anonymous_or_unrelated_viewers(self):
         tournament = self.tournaments[("champion_8", "published")]
         with tempfile.TemporaryDirectory() as directory:
@@ -150,6 +236,40 @@ class TournamentDetailAccessTest(unittest.TestCase):
                 self._assert_hidden(lambda: main.get_upload(relative, self.db, self.other_owner))
                 self.assertEqual(main.get_upload(relative, self.db, self.owner).status_code, 200)
                 self.assertEqual(main.get_upload(relative, self.db, self.admin).status_code, 200)
+            finally:
+                main.UPLOAD_DIR = previous_upload_dir
+
+    def test_temporary_analysis_crops_support_full64_seed_and_champion_player_names(self):
+        full = self.tournaments[("full_64", "draft")]
+        champion = self.tournaments[("champion_8", "draft")]
+        with tempfile.TemporaryDirectory() as directory:
+            previous_upload_dir = main.UPLOAD_DIR
+            try:
+                main.UPLOAD_DIR = directory
+                paths = (
+                    f"cropped/crop_t{full.id}_s25_0864adb00330_r1_c1_preview.webp",
+                    f"cropped/crop_t{champion.id}_p123_abcdef123456_r5_c5.png",
+                )
+                for relative in paths:
+                    self._write_upload(directory, relative)
+                    with self.subTest(relative=relative, viewer="owner"):
+                        self.assertEqual(main.get_upload(relative, self.db, self.owner).status_code, 200)
+                    with self.subTest(relative=relative, viewer="admin"):
+                        self.assertEqual(main.get_upload(relative, self.db, self.admin).status_code, 200)
+                    for viewer in (None, self.normal, self.other_owner):
+                        with self.subTest(relative=relative, viewer=getattr(viewer, "role", "anonymous")):
+                            self._assert_hidden(lambda viewer=viewer: main.get_upload(relative, self.db, viewer))
+
+                rejected = (
+                    f"cropped/crop_t{full.id}_s25_r1_c1_preview.webp",
+                    f"cropped/crop_t{full.id}_s25_0864adb00330_r1_c1_preview.webp-copy",
+                    f"cropped/crop_t{full.id}_seed25_0864adb00330_r1_c1_preview.webp",
+                    "cropped/crop_t999999_s25_0864adb00330_r1_c1_preview.webp",
+                )
+                for relative in rejected:
+                    self._write_upload(directory, relative)
+                    with self.subTest(rejected=relative):
+                        self._assert_hidden(lambda relative=relative: main.get_upload(relative, self.db, self.owner))
             finally:
                 main.UPLOAD_DIR = previous_upload_dir
 

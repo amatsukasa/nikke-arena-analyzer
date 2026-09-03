@@ -41,7 +41,8 @@ CHAMPION_TEMPLATE_SOURCE_MAX_BYTES = 1024 * 1024
 CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES = 10 * 1024 * 1024
 CHAMPION_CROP_TTL_SECONDS = int(os.environ.get("CHAMPION_CROP_TTL_SECONDS", "21600"))
 CHAMPION_CROP_NAME = re.compile(
-    r"^crop_t(?P<tournament>\d+)_p(?P<player>\d+)_(?P<token>[0-9a-f]{12})_r\d+_c\d+(?:_preview)?\.(?:png|webp)$"
+    r"^crop_t(?P<tournament>\d+)_(?:p(?P<player>\d+)|s(?P<seed>\d+))_"
+    r"(?P<token>[0-9a-f]{12})_r\d+_c\d+(?:_preview)?\.(?:png|webp)$"
 )
 
 RESULT_SCORES = {
@@ -189,7 +190,7 @@ def _finalize_char_position_stats(char):
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from services.image_processor import process_images, write_lossless_png
-from services.character_templates import find_character_template
+from services.character_templates import find_character_template, get_character_template_inventory
 from services.collection_classifier import COLLECTION_VALUES
 from services.template_matcher import prepare_character_image
 from services.registration_email import (
@@ -336,7 +337,9 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     
-    # DBに template_filename が保存されている場合は優先してチェック
+    # DBに template_filename が保存されている場合は優先してチェック。
+    # This GET is deliberately read-only; catalog availability is derived from
+    # the filesystem by get_characters(), so stale metadata needs no repair here.
     template_filename = getattr(char, "template_filename", None)
     if template_filename:
         tpl_path = Path(UPLOAD_DIR) / "templates" / template_filename
@@ -346,37 +349,16 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
                 media_type="image/png",
                 headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
             )
-        else:
-            # ファイルが存在しない場合は一旦クリア
-            char.template_filename = None
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
 
     # filesystem を探索 (char_{char_id}.png または char_{char_id}_*.png)
     template_path = find_character_template(UPLOAD_DIR, char_id)
     if template_path:
-        try:
-            char.template_filename = template_path.name
-            char.is_template_available = True
-            db.commit()
-        except Exception:
-            db.rollback()
         return FileResponse(
             template_path,
             media_type="image/png",
             headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
         )
     
-    if getattr(char, "is_template_available", False) or getattr(char, "template_filename", None):
-        try:
-            char.is_template_available = False
-            char.template_filename = None
-            db.commit()
-        except Exception:
-            db.rollback()
-
     raise HTTPException(
         status_code=404,
         detail="Template not found",
@@ -839,13 +821,15 @@ def get_characters(db: Session = Depends(get_db)):
         rarity_order,
         models.Character.name,
     ).all()
+    # The filesystem is authoritative for display availability.  DB metadata can
+    # lag behind files restored from a persistent uploads volume; discovering the
+    # files here avoids both missing saved-deck icons and speculative per-icon 404s.
+    template_inventory = get_character_template_inventory(UPLOAD_DIR)
     res = []
     for character in characters:
-        tpl_filename = getattr(character, "template_filename", None)
-        is_avail = bool(
-            getattr(character, "is_template_available", False)
-            or getattr(character, "template_filename", None)
-        )
+        template_path = template_inventory.get(character.id)
+        tpl_filename = template_path.name if template_path else None
+        is_avail = template_path is not None
         if is_avail:
             icon_url = f"/api/char-icon/{character.id}.png"
         else:
