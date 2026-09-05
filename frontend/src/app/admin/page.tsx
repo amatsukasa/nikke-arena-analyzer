@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
 
 interface User {
   id: number;
@@ -32,7 +33,7 @@ export default function AdminPage() {
   const { user: currentUser, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'characters' | 'championships'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'characters' | 'championships' | 'templates'>('users');
 
   // ユーザー管理用ステート
   const [users, setUsers] = useState<User[]>([]);
@@ -438,21 +439,23 @@ export default function AdminPage() {
             >
               ← 大会一覧へ
             </button>
-            <button
-              onClick={() => {
-                if (activeTab === 'users') fetchUsers();
-                else if (activeTab === 'characters') fetchCharacters();
-                else fetchChampionships();
-              }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition animate-pulse"
-            >
-              🔄 最新情報に更新
-            </button>
+            {activeTab !== 'templates' && (
+              <button
+                onClick={() => {
+                  if (activeTab === 'users') fetchUsers();
+                  else if (activeTab === 'characters') fetchCharacters();
+                  else fetchChampionships();
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg text-sm transition animate-pulse"
+              >
+                🔄 最新情報に更新
+              </button>
+            )}
           </div>
         </div>
 
         {/* タブ切り替えバー */}
-        <div className="flex border-b border-slate-800 mt-6 gap-2">
+        <div className="flex overflow-x-auto border-b border-slate-800 mt-6 gap-2">
           <button
             onClick={() => {
               setActiveTab('users');
@@ -488,6 +491,18 @@ export default function AdminPage() {
             }`}
           >
             🏆 大会タイトル管理
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('templates');
+              setError('');
+              setMessage('');
+            }}
+            className={`whitespace-nowrap px-5 py-2.5 font-medium text-sm transition relative ${
+              activeTab === 'templates' ? 'text-indigo-400 border-b-2 border-indigo-500 font-bold' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            🖼️ Characterテンプレート管理
           </button>
         </div>
       </div>
@@ -827,6 +842,9 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {/* --- タブ内容4: Characterテンプレート管理 --- */}
+      {activeTab === 'templates' && <CharacterTemplatesAdmin embedded />}
 
       {/* --- 大会タイトル追加・編集用モーダル --- */}
       {isChampModalOpen && (

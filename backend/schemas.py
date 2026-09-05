@@ -111,6 +111,12 @@ class ChampionTeamCharacterInput(BaseModel):
     add_to_templates: bool = False
     template_source_url: Optional[str] = None
     template_source_data_url: Optional[str] = None
+    matched_template_filename: Optional[str] = None
+    similarity: Optional[float] = None
+    match_method: Optional[str] = None
+    analysis_token: Optional[str] = None
+    round_number: Optional[int] = None
+    position: Optional[int] = None
     model_config = ConfigDict(extra="forbid")
 
 

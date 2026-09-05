@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from services.template_matcher import predict_character, prepare_character_image
+from services.collection_classifier import collection_match_mask
+from services.template_matcher import masked_ccoef_normed, predict_character, prepare_character_image
 import services.template_matcher as template_matcher
 
 
@@ -20,7 +21,7 @@ class TemplateMatcherTests(unittest.TestCase):
             template_matcher.cv2,
             "matchTemplate",
             side_effect=(
-            lambda face, template, _method: np.array(
+            lambda face, template, _method, **_kwargs: np.array(
                 [[1.0 if np.array_equal(face, template) else 0.2]],
                 dtype=np.float32,
             )
@@ -65,15 +66,16 @@ class TemplateMatcherTests(unittest.TestCase):
         self.assertIsNone(character_id)
         self.assertGreaterEqual(confidence, 0.99)
 
-    def test_prepare_character_image_ignores_collection_region(self):
+    def test_matching_supplies_a_mask_that_excludes_collection_region(self):
         without_collection = np.zeros((160, 160, 3), dtype=np.uint8)
         with_collection = without_collection.copy()
-        with_collection[50:110, 0:36] = 255
-
-        prepared_without = prepare_character_image(without_collection)
-        prepared_with = prepare_character_image(with_collection)
-
-        self.assertTrue(np.array_equal(prepared_without, prepared_with))
+        mask = collection_match_mask(with_collection.shape)
+        with_collection[mask == 0] = 255
+        expected = collection_match_mask(mask.shape)
+        self.assertTrue(np.array_equal(mask, expected))
+        self.assertTrue(np.any(mask == 0))
+        self.assertTrue(np.any(mask == 255))
+        self.assertEqual(masked_ccoef_normed(with_collection, without_collection, mask), 1.0)
 
 
 if __name__ == "__main__":

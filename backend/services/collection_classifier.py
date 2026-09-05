@@ -32,6 +32,28 @@ COLLECTION_VALUES = {
 NORMALIZED_SIZE = 160
 # x1, y1, x2, y2. This is intentionally much narrower than the old color ROI.
 COLLECTION_ROI = (0, 45, 32, 105)
+COLLECTION_MATCH_MASK_PADDING = 4
+
+
+def collection_match_mask(shape: tuple[int, ...]) -> np.ndarray:
+    """Return a normalized validity mask which excludes the badge ROI.
+
+    White pixels participate in Character matching.  The same proportional
+    region is excluded for live crops and historical templates.
+    """
+    height, width = shape[:2]
+    mask = np.full((height, width), 255, dtype=np.uint8)
+    scale_x = width / NORMALIZED_SIZE
+    scale_y = height / NORMALIZED_SIZE
+    x1, y1, x2, y2 = COLLECTION_ROI
+    padding = COLLECTION_MATCH_MASK_PADDING
+    left = max(0, int(np.floor((x1 - padding) * scale_x)))
+    top = max(0, int(np.floor((y1 - padding) * scale_y)))
+    right = min(width, int(np.ceil((x2 + padding) * scale_x)))
+    bottom = min(height, int(np.ceil((y2 + padding) * scale_y)))
+    if left < right and top < bottom:
+        mask[top:bottom, left:right] = 0
+    return mask
 
 # OpenCV hue is 0..179. Saturation is required so white UI glyphs do not vote.
 RARITY_HSV_RANGES = {

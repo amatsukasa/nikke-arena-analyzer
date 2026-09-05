@@ -141,7 +141,7 @@ def process_images(
     cropped_dir = "uploads/cropped"
     os.makedirs(cropped_dir, exist_ok=True)
     
-    from services.template_matcher import get_templates, predict_character
+    from services.template_matcher import get_templates, predict_character_match
     templates = get_templates()
     
     teams = []
@@ -201,7 +201,8 @@ def process_images(
                 created_output_paths.append(preview_path)
             
             # AI推論
-            pred_id, conf = predict_character(face, templates, threshold=0.65)
+            match = predict_character_match(face, templates, threshold=0.65)
+            pred_id, conf = match.character_id, match.similarity
             collection_analysis = analyze_collection(
                 face,
                 debug=debug,
@@ -228,6 +229,11 @@ def process_images(
                 "template_source_url": f"/api/uploads/cropped/{crop_filename}",
                 "predicted_character_id": pred_id,
                 "confidence": conf,
+                "matched_template_filename": match.matched_template_filename,
+                "match_method": match.method,
+                "analysis_token": analysis_id,
+                "round_number": r_idx + 1,
+                "position": c_idx + 1,
                 "collection_level": collection_level,
                 "collection_confidence": collection_confidence,
                 # Additive structured response; legacy fields above stay intact.
