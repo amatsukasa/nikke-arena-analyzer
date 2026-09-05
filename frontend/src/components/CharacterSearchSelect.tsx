@@ -21,6 +21,9 @@ interface CharacterSearchSelectProps {
   className?: string;
   id?: string;
   error?: boolean;
+  allowUnknown?: boolean;
+  allowEmpty?: boolean;
+  placeholder?: string;
 }
 
 function useMediaQuery(query: string) {
@@ -44,6 +47,9 @@ export default function CharacterSearchSelect({
   className = "",
   id,
   error = false,
+  allowUnknown = true,
+  allowEmpty = true,
+  placeholder = "(不明)",
 }: CharacterSearchSelectProps) {
   const [open, setOpen] = useState(false);
   // Default to true for desktop first, will adjust on mount
@@ -107,7 +113,7 @@ export default function CharacterSearchSelect({
         {selectedChar ? (
           selectedChar.id === 9999 ? '空き枠' : `[${selectedChar.rarity}] ${selectedChar.name}`
         ) : (
-          "(不明)"
+          placeholder
         )}
       </span>
       <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
@@ -142,25 +148,29 @@ export default function CharacterSearchSelect({
       <Command.List className="flex-1 overflow-y-auto overflow-x-hidden p-1 sm:p-1 custom-scrollbar">
         <Command.Empty className="py-6 text-center text-sm text-slate-400">見つかりませんでした。</Command.Empty>
         
-        <Command.Item
-          key="unknown"
-          value="不明 unknown null"
-          onSelect={() => handleSelect(null)}
-          className="relative flex cursor-pointer select-none items-center rounded-md sm:rounded-sm px-3 py-3 sm:py-2 text-base sm:text-sm outline-none aria-selected:bg-slate-700/80 aria-selected:text-white data-[selected=true]:bg-slate-700/80 data-[selected=true]:text-white data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 mb-1 min-h-[48px] sm:min-h-0"
-        >
-          <span className="flex-1">(不明)</span>
-          {value === null && <Check className="h-5 w-5 sm:h-4 sm:w-4 text-indigo-400" />}
-        </Command.Item>
+        {allowUnknown && (
+          <Command.Item
+            key="unknown"
+            value="不明 unknown null"
+            onSelect={() => handleSelect(null)}
+            className="relative flex cursor-pointer select-none items-center rounded-md sm:rounded-sm px-3 py-3 sm:py-2 text-base sm:text-sm outline-none aria-selected:bg-slate-700/80 aria-selected:text-white data-[selected=true]:bg-slate-700/80 data-[selected=true]:text-white data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 mb-1 min-h-[48px] sm:min-h-0"
+          >
+            <span className="flex-1">(不明)</span>
+            {value === null && <Check className="h-5 w-5 sm:h-4 sm:w-4 text-indigo-400" />}
+          </Command.Item>
+        )}
         
-        <Command.Item
-          key="9999"
-          value="空き枠 empty 9999"
-          onSelect={() => handleSelect(9999)}
-          className="relative flex cursor-pointer select-none items-center rounded-md sm:rounded-sm px-3 py-3 sm:py-2 text-base sm:text-sm outline-none aria-selected:bg-slate-700/80 aria-selected:text-white data-[selected=true]:bg-slate-700/80 data-[selected=true]:text-white data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 mb-2 min-h-[48px] sm:min-h-0"
-        >
-          <span className="flex-1">空き枠</span>
-          {value === 9999 && <Check className="h-5 w-5 sm:h-4 sm:w-4 text-indigo-400" />}
-        </Command.Item>
+        {allowEmpty && (
+          <Command.Item
+            key="9999"
+            value="空き枠 empty 9999"
+            onSelect={() => handleSelect(9999)}
+            className="relative flex cursor-pointer select-none items-center rounded-md sm:rounded-sm px-3 py-3 sm:py-2 text-base sm:text-sm outline-none aria-selected:bg-slate-700/80 aria-selected:text-white data-[selected=true]:bg-slate-700/80 data-[selected=true]:text-white data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 mb-2 min-h-[48px] sm:min-h-0"
+          >
+            <span className="flex-1">空き枠</span>
+            {value === 9999 && <Check className="h-5 w-5 sm:h-4 sm:w-4 text-indigo-400" />}
+          </Command.Item>
+        )}
 
         {recentChars.length > 0 && (
           <Command.Group heading="最近使用したキャラ" className="text-slate-400 text-sm sm:text-xs mt-2 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 sm:[&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-semibold">

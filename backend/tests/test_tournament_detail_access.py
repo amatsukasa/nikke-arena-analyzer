@@ -173,7 +173,7 @@ class TournamentDetailAccessTest(unittest.TestCase):
                 inventory.assert_called_once_with(directory)
                 self.assertTrue(by_id[901].is_template_available)
                 self.assertEqual(by_id[901].template_filename, "char_901_001.png")
-                self.assertEqual(by_id[901].icon_url, "/api/char-icon/901.png")
+                self.assertEqual(by_id[901].icon_url, "/api/char-icon/901.png?v=char_901_001")
                 self.assertFalse(by_id[902].is_template_available)
                 self.assertIsNone(by_id[902].template_filename)
                 self.assertIsNone(by_id[902].icon_url)

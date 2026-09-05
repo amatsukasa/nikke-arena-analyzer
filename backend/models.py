@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, UniqueConstraint, CheckConstraint, JSON
+from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, Float, UniqueConstraint, CheckConstraint, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -49,6 +49,54 @@ class Character(Base):
     is_template_available = Column(Boolean, default=False)
     template_filename = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class CharacterTemplateReview(Base):
+    __tablename__ = "character_template_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_token", "round_number", "position", "matched_template_filename",
+            name="uq_template_review_analysis_position_match",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'kept', 'reassigned', 'disabled')",
+            name="ck_template_review_status",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    predicted_character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    corrected_character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    matched_template_filename = Column(String, nullable=False)
+    corrected_template_filename = Column(String, nullable=True)
+    similarity = Column(Float, nullable=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=True)
+    seed_number = Column(Integer, nullable=True)
+    champion_slot = Column(SmallInteger, nullable=True)
+    round_number = Column(SmallInteger, nullable=False)
+    position = Column(SmallInteger, nullable=False)
+    analysis_token = Column(String, nullable=False)
+    match_method = Column(String, nullable=False)
+    created_by = Column(Integer, ForeignKey("app_users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status = Column(String, nullable=False, default="pending", server_default="pending")
+    resolved_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class CharacterTemplateAudit(Base):
+    __tablename__ = "character_template_audits"
+    id = Column(Integer, primary_key=True)
+    actor_id = Column(Integer, ForeignKey("app_users.id"), nullable=False)
+    action = Column(String, nullable=False)
+    source_character_id = Column(Integer, nullable=True)
+    target_character_id = Column(Integer, nullable=True)
+    source_filename = Column(String, nullable=True)
+    target_filename = Column(String, nullable=True)
+    sha256 = Column(String, nullable=True)
+    review_id = Column(Integer, ForeignKey("character_template_reviews.id"), nullable=True)
+    success = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 class Championship(Base):
     __tablename__ = "championships"

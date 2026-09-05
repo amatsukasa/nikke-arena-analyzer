@@ -19,6 +19,20 @@ import time
 import re
 from pathlib import Path
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from services.template_management import (
+    describe_template,
+    list_template_paths,
+    move_to_quarantine,
+    next_template_name,
+    parse_template_name,
+    reassign_active_template,
+    representative_template,
+    restore_from_quarantine,
+    rollback_move,
+    safe_template_path,
+    template_operation_lock,
+    template_sha256,
+)
 
 app = FastAPI(
     title="NIKKE Arena Analysis API",
@@ -191,8 +205,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from services.image_processor import process_images, write_lossless_png
 from services.character_templates import find_character_template, get_character_template_inventory
-from services.collection_classifier import COLLECTION_VALUES
-from services.template_matcher import prepare_character_image
+from services.collection_classifier import COLLECTION_VALUES, collection_match_mask
+from services.template_matcher import prepare_character_image, masked_absolute_similarity
 from services.registration_email import (
     send_registration_approved,
     send_registration_request,
@@ -337,20 +351,7 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     
-    # DBに template_filename が保存されている場合は優先してチェック。
-    # This GET is deliberately read-only; catalog availability is derived from
-    # the filesystem by get_characters(), so stale metadata needs no repair here.
-    template_filename = getattr(char, "template_filename", None)
-    if template_filename:
-        tpl_path = Path(UPLOAD_DIR) / "templates" / template_filename
-        if tpl_path.is_file():
-            return FileResponse(
-                tpl_path,
-                media_type="image/png",
-                headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
-            )
-
-    # filesystem を探索 (char_{char_id}.png または char_{char_id}_*.png)
+    # Filesystem active generations are authoritative. This GET is read-only.
     template_path = find_character_template(UPLOAD_DIR, char_id)
     if template_path:
         return FileResponse(
@@ -831,7 +832,7 @@ def get_characters(db: Session = Depends(get_db)):
         tpl_filename = template_path.name if template_path else None
         is_avail = template_path is not None
         if is_avail:
-            icon_url = f"/api/char-icon/{character.id}.png"
+            icon_url = f"/api/char-icon/{character.id}.png?v={template_path.stem}"
         else:
             icon_url = None
         res.append(
@@ -913,7 +914,7 @@ def get_templates_list(
     db: Session = Depends(get_db),
 ):
     """AI学習に使用しているテンプレート画像の一覧を返す"""
-    template_dir = "uploads/templates"
+    template_dir = str(Path(UPLOAD_DIR) / "templates")
     result = []
     if not os.path.exists(template_dir):
         return []
@@ -941,28 +942,334 @@ def delete_template(
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
 ):
-    """指定キャラクターの全テンプレート画像を削除する（旧形式+新形式）"""
-    template_dir = "uploads/templates"
-    deleted = 0
-    # 旧形式
-    old_path = f"uploads/templates/char_{char_id}.png"
-    if os.path.exists(old_path):
-        os.remove(old_path)
-        deleted += 1
-    # 新形式
-    if os.path.exists(template_dir):
-        for f in os.listdir(template_dir):
-            if f.startswith(f"char_{char_id}_") and f.endswith(".png"):
-                os.remove(os.path.join(template_dir, f))
-                deleted += 1
-    if deleted == 0:
-        raise HTTPException(status_code=404, detail="Template not found")
-    char = db.query(models.Character).filter(models.Character.id == char_id).first()
-    if char:
-        char.is_template_available = False
-        char.template_filename = None
+    """Legacy destructive endpoint intentionally disabled; use per-file quarantine."""
+    raise HTTPException(status_code=409, detail="テンプレートは管理画面から個別に無効化してください")
+
+
+def _template_roots() -> tuple[Path, Path, Path]:
+    upload_root = Path(UPLOAD_DIR)
+    return upload_root, upload_root / "templates", upload_root / "template_quarantine"
+
+
+def _refresh_character_template_metadata(db: Session, character_ids: set[int]) -> None:
+    _, active_root, _ = _template_roots()
+    for character_id in character_ids:
+        character = db.get(models.Character, character_id)
+        if character is None:
+            continue
+        representative = representative_template(active_root, character_id)
+        character.is_template_available = representative is not None
+        character.template_filename = representative.name if representative else None
+
+
+def _template_audit(
+    db: Session, actor_id: int, action: str, *, source_character_id=None,
+    target_character_id=None, source_filename=None, target_filename=None,
+    digest=None, review_id=None, success=True,
+):
+    db.add(models.CharacterTemplateAudit(
+        actor_id=actor_id,
+        action=action,
+        source_character_id=source_character_id,
+        target_character_id=target_character_id,
+        source_filename=source_filename,
+        target_filename=target_filename,
+        sha256=digest,
+        review_id=review_id,
+        success=success,
+    ))
+
+
+def _record_failed_template_audit(db: Session, actor_id: int, action: str, **values) -> None:
+    """Best-effort failure audit; never hides the original operation error."""
+    try:
+        db.rollback()
+        _template_audit(db, actor_id, action, success=False, **values)
         db.commit()
-    return {"ok": True, "deleted_count": deleted}
+    except Exception as audit_error:
+        db.rollback()
+        print(f"[template-management] failed to persist failure audit action={action}: {audit_error}")
+
+
+@app.get("/api/admin/character-templates")
+def list_character_templates(
+    _: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    upload_root, active_root, quarantine_root = _template_roots()
+    active_paths = list_template_paths(active_root)
+    quarantine_paths = list_template_paths(quarantine_root)
+    character_ids = {
+        parse_template_name(path.name).character_id for path in active_paths + quarantine_paths
+    }
+    characters = {
+        row.id: row for row in db.query(models.Character).filter(models.Character.id.in_(character_ids or {-1})).all()
+    }
+    pending_counts = dict(db.query(
+        models.CharacterTemplateReview.predicted_character_id,
+        func.count(models.CharacterTemplateReview.id),
+    ).filter(models.CharacterTemplateReview.status == "pending").group_by(
+        models.CharacterTemplateReview.predicted_character_id
+    ).all())
+    active_representatives = {
+        character_id: representative_template(active_root, character_id) for character_id in character_ids
+    }
+    return {
+        "characters": [
+            {
+                "character_id": character_id,
+                "character_name": characters.get(character_id).name if characters.get(character_id) else f"ID:{character_id}",
+                "active": [describe_template(path, active=True, representative=path == active_representatives[character_id]) for path in active_paths if parse_template_name(path.name).character_id == character_id],
+                "quarantined": [describe_template(path, active=False, representative=False) for path in quarantine_paths if parse_template_name(path.name).character_id == character_id],
+                "pending_count": pending_counts.get(character_id, 0),
+                "representative_url": (
+                    f"/api/admin/character-templates/assets/active/{active_representatives[character_id].name}"
+                    if active_representatives[character_id] else None
+                ),
+            }
+            for character_id in sorted(character_ids)
+        ]
+    }
+
+
+@app.get("/api/admin/character-template-reviews")
+def list_character_template_reviews(
+    status: str = "pending",
+    _: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    if status not in {"pending", "kept", "reassigned", "disabled"}:
+        raise HTTPException(status_code=422, detail="Invalid review status")
+    reviews = db.query(models.CharacterTemplateReview).filter(
+        models.CharacterTemplateReview.status == status
+    ).order_by(models.CharacterTemplateReview.created_at.desc(), models.CharacterTemplateReview.id.desc()).all()
+    return [{
+        "id": review.id,
+        "status": review.status,
+        "predicted_character_id": review.predicted_character_id,
+        "corrected_character_id": review.corrected_character_id,
+        "matched_template_filename": review.matched_template_filename,
+        "corrected_template_filename": review.corrected_template_filename,
+        "similarity": review.similarity,
+        "tournament_id": review.tournament_id,
+        "player_id": review.player_id,
+        "seed_number": review.seed_number,
+        "champion_slot": review.champion_slot,
+        "round_number": review.round_number,
+        "position": review.position,
+        "created_at": review.created_at,
+    } for review in reviews]
+
+
+@app.get("/api/admin/character-templates/assets/{state}/{filename}")
+def get_admin_template_asset(
+    state: Literal["active", "quarantine"], filename: str,
+    _: models.AppUser = Depends(auth_module.require_admin),
+):
+    _, active_root, quarantine_root = _template_roots()
+    try:
+        path = safe_template_path(active_root if state == "active" else quarantine_root, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Template not found") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Template not found")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": NO_STORE_CACHE_CONTROL})
+
+
+@app.post("/api/admin/character-templates/{character_id}/{filename}/disable")
+def disable_character_template(
+    character_id: int, filename: str, body: dict | None = None,
+    admin: models.AppUser = Depends(auth_module.require_admin), db: Session = Depends(get_db),
+):
+    upload_root, _, _ = _template_roots()
+    moved = None
+    with template_operation_lock(upload_root):
+        try:
+            digest = template_sha256(safe_template_path(upload_root / "templates", filename, character_id))
+            original, destination = move_to_quarantine(upload_root, character_id, filename)
+            moved = (destination, original)
+            _refresh_character_template_metadata(db, {character_id})
+            _template_audit(db, admin.id, "disable", source_character_id=character_id, source_filename=filename, target_filename=destination.name, digest=digest)
+            db.commit()
+        except (ValueError, FileNotFoundError, FileExistsError) as exc:
+            _record_failed_template_audit(db, admin.id, "disable", source_character_id=character_id, source_filename=filename)
+            raise HTTPException(status_code=404, detail="Template not found or unavailable") from exc
+        except Exception:
+            db.rollback()
+            if moved:
+                rollback_move(*moved)
+            raise
+    return {"ok": True, "filename": destination.name}
+
+
+@app.post("/api/admin/character-templates/{character_id}/{filename}/restore")
+def restore_character_template(
+    character_id: int, filename: str,
+    admin: models.AppUser = Depends(auth_module.require_admin), db: Session = Depends(get_db),
+):
+    upload_root, _, _ = _template_roots()
+    moved = None
+    with template_operation_lock(upload_root):
+        try:
+            digest = template_sha256(safe_template_path(upload_root / "template_quarantine", filename, character_id))
+            original, destination = restore_from_quarantine(upload_root, character_id, filename)
+            moved = (destination, original)
+            _refresh_character_template_metadata(db, {character_id})
+            _template_audit(db, admin.id, "restore", source_character_id=character_id, source_filename=filename, target_filename=destination.name, digest=digest)
+            db.commit()
+        except (ValueError, FileNotFoundError) as exc:
+            _record_failed_template_audit(db, admin.id, "restore", source_character_id=character_id, source_filename=filename)
+            raise HTTPException(status_code=404, detail="Quarantined template not found") from exc
+        except Exception:
+            db.rollback()
+            if moved:
+                rollback_move(*moved)
+            raise
+    return {"ok": True, "filename": destination.name}
+
+
+@app.post("/api/admin/character-templates/{character_id}/{filename}/reassign")
+def reassign_character_template(
+    character_id: int, filename: str, body: dict,
+    admin: models.AppUser = Depends(auth_module.require_admin), db: Session = Depends(get_db),
+):
+    try:
+        target_character_id = int(body.get("target_character_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="target_character_id is required") from exc
+    if target_character_id == character_id or db.get(models.Character, target_character_id) is None:
+        raise HTTPException(status_code=422, detail="A different existing target Character is required")
+    upload_root, active_root, _ = _template_roots()
+    moved = None
+    with template_operation_lock(upload_root):
+        try:
+            source = safe_template_path(active_root, filename, character_id)
+            digest = template_sha256(source)
+            original, destination, duplicate = reassign_active_template(
+                upload_root, character_id, target_character_id, filename
+            )
+            moved = (destination, original)
+            representative = representative_template(active_root, target_character_id)
+            target_filename = representative.name if duplicate and representative else destination.name
+            _refresh_character_template_metadata(db, {character_id, target_character_id})
+            _template_audit(db, admin.id, "reassign", source_character_id=character_id, target_character_id=target_character_id, source_filename=filename, target_filename=target_filename, digest=digest)
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
+        except (ValueError, FileNotFoundError, FileExistsError) as exc:
+            if moved:
+                rollback_move(*moved)
+            _record_failed_template_audit(db, admin.id, "reassign", source_character_id=character_id, target_character_id=target_character_id, source_filename=filename)
+            raise HTTPException(status_code=409, detail="Template state changed; reload and retry") from exc
+        except Exception:
+            db.rollback()
+            if moved:
+                rollback_move(*moved)
+            raise
+    return {"ok": True, "filename": target_filename, "duplicate": duplicate}
+
+
+@app.delete("/api/admin/character-templates/{character_id}/{filename}")
+def permanently_delete_character_template(
+    character_id: int, filename: str, confirm: str = Query(...),
+    admin: models.AppUser = Depends(auth_module.require_admin), db: Session = Depends(get_db),
+):
+    if confirm != "DELETE":
+        raise HTTPException(status_code=422, detail="Permanent deletion requires confirm=DELETE")
+    upload_root, _, quarantine_root = _template_roots()
+    with template_operation_lock(upload_root):
+        tombstone = None
+        original = None
+        try:
+            path = safe_template_path(quarantine_root, filename, character_id)
+            if not path.is_file():
+                raise FileNotFoundError(filename)
+            digest = template_sha256(path)
+            original = path
+            tombstone = quarantine_root / f".{filename}.{secrets.token_hex(8)}.deleting"
+            os.replace(path, tombstone)
+            _template_audit(db, admin.id, "permanent_delete", source_character_id=character_id, source_filename=filename, digest=digest)
+            db.commit()
+        except (ValueError, FileNotFoundError) as exc:
+            _record_failed_template_audit(db, admin.id, "permanent_delete", source_character_id=character_id, source_filename=filename)
+            raise HTTPException(status_code=404, detail="Quarantined template not found") from exc
+        except Exception:
+            db.rollback()
+            if tombstone and original and tombstone.exists():
+                os.replace(tombstone, original)
+            raise
+        try:
+            tombstone.unlink()
+        except OSError as exc:
+            print(f"[template-management] tombstone cleanup failed file={filename}: {exc}")
+    return {"ok": True}
+
+
+@app.post("/api/admin/character-template-reviews/{review_id}/resolve")
+def resolve_character_template_review(
+    review_id: int, body: dict,
+    admin: models.AppUser = Depends(auth_module.require_admin), db: Session = Depends(get_db),
+):
+    action = body.get("action")
+    if action not in {"keep", "reassign", "disable"}:
+        raise HTTPException(status_code=422, detail="Invalid review action")
+    review = db.query(models.CharacterTemplateReview).filter(
+        models.CharacterTemplateReview.id == review_id
+    ).with_for_update().first()
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if review.status != "pending":
+        raise HTTPException(status_code=409, detail="Review is already resolved")
+    upload_root, active_root, _ = _template_roots()
+    moved = None
+    with template_operation_lock(upload_root):
+        try:
+            source_path = safe_template_path(active_root, review.matched_template_filename, review.predicted_character_id)
+            digest = template_sha256(source_path)
+            target_character_id = None
+            target_filename = None
+            if action == "keep":
+                review.status = "kept"
+            elif action == "disable":
+                original, destination = move_to_quarantine(upload_root, review.predicted_character_id, review.matched_template_filename)
+                moved = (destination, original)
+                target_filename = destination.name
+                review.status = "disabled"
+            else:
+                target_character_id = int(body.get("target_character_id") or review.corrected_character_id)
+                if db.get(models.Character, target_character_id) is None:
+                    raise HTTPException(status_code=422, detail="Target Character not found")
+                original, destination, duplicate = reassign_active_template(
+                    upload_root, review.predicted_character_id, target_character_id, review.matched_template_filename
+                )
+                moved = (destination, original)
+                target_filename = (representative_template(active_root, target_character_id) if duplicate else destination).name
+                review.status = "reassigned"
+            review.resolved_by = admin.id
+            review.resolved_at = datetime.now(timezone.utc)
+            affected_ids = {review.predicted_character_id}
+            if target_character_id is not None:
+                affected_ids.add(target_character_id)
+            _refresh_character_template_metadata(db, affected_ids)
+            _template_audit(db, admin.id, action, source_character_id=review.predicted_character_id, target_character_id=target_character_id, source_filename=review.matched_template_filename, target_filename=target_filename, digest=digest, review_id=review.id)
+            db.commit()
+        except HTTPException:
+            if moved:
+                rollback_move(*moved)
+            _record_failed_template_audit(db, admin.id, action, source_character_id=review.predicted_character_id, source_filename=review.matched_template_filename, review_id=review.id)
+            raise
+        except (ValueError, FileNotFoundError, FileExistsError) as exc:
+            if moved:
+                rollback_move(*moved)
+            _record_failed_template_audit(db, admin.id, action, source_character_id=review.predicted_character_id, source_filename=review.matched_template_filename, review_id=review.id)
+            raise HTTPException(status_code=409, detail="Template state changed; reload and retry") from exc
+        except Exception:
+            db.rollback()
+            if moved:
+                rollback_move(*moved)
+            raise
+    return {"ok": True, "status": review.status, "target_filename": target_filename}
 
 @app.get("/api/admin/all-characters")
 def get_all_characters_admin(
@@ -970,7 +1277,7 @@ def get_all_characters_admin(
     db: Session = Depends(get_db),
 ):
     """全キャラクターをテンプレート有無フラグ付きで返す（管理者用）"""
-    template_dir = "uploads/templates"
+    template_dir = str(Path(UPLOAD_DIR) / "templates")
     # テンプレートが存在するキャラIDのセット
     template_ids = set()
     if os.path.exists(template_dir):
@@ -1012,7 +1319,10 @@ def get_all_characters_admin(
             "class_type": c.class_type,
             "has_template": has_tpl,
             "template_count": tpl_count,
-            "image_url": f"/api/uploads/templates/{c.template_filename}" if getattr(c, "template_filename", None) else (f"/api/char-icon/{c.id}.png" if has_tpl else None),
+            "image_url": (
+                f"/api/char-icon/{c.id}.png?v={representative_template(Path(template_dir), c.id).stem}"
+                if has_tpl and representative_template(Path(template_dir), c.id) else None
+            ),
         })
     return result
 
@@ -1022,21 +1332,19 @@ def delete_character(
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db)
 ):
-    """キャラクターをDBから完全削除（テンプレートも削除、管理者のみ）"""
+    """Character deletion never bypasses recoverable template management."""
     if char_id == EMPTY_SLOT_CHARACTER_ID:
         raise HTTPException(status_code=400, detail="空枠は削除できません")
     char = db.query(models.Character).filter(models.Character.id == char_id).first()
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
-    # テンプレートがあれば全て削除
-    template_dir = "uploads/templates"
-    old_path = os.path.join(template_dir, f"char_{char_id}.png")
-    if os.path.exists(old_path):
-        os.remove(old_path)
-    if os.path.exists(template_dir):
-        for f in os.listdir(template_dir):
-            if f.startswith(f"char_{char_id}_") and f.endswith(".png"):
-                os.remove(os.path.join(template_dir, f))
+    upload_root, active_root, quarantine_root = _template_roots()
+    related_files = [
+        path for path in list_template_paths(active_root) + list_template_paths(quarantine_root)
+        if parse_template_name(path.name).character_id == char_id
+    ]
+    if related_files:
+        raise HTTPException(status_code=409, detail="テンプレートを無効化し、隔離済み画像を完全削除してからCharacterを削除してください")
     db.delete(char)
     db.commit()
     return {"ok": True}
@@ -1082,10 +1390,13 @@ def merge_characters(
             replaced += 1
 
     if not keep_source:
-        # from_id のテンプレートがあれば削除
-        fpath = f"uploads/templates/char_{from_id}.png"
-        if os.path.exists(fpath):
-            os.remove(fpath)
+        _, active_root, quarantine_root = _template_roots()
+        if any(
+            parse_template_name(path.name).character_id == from_id
+            for path in list_template_paths(active_root) + list_template_paths(quarantine_root)
+        ):
+            db.rollback()
+            raise HTTPException(status_code=409, detail="統合元テンプレートを管理画面で整理してからCharacterを統合してください")
         # from_id のキャラレコードを削除
         db.delete(from_char)
 
@@ -1949,48 +2260,119 @@ def load_champion_template_source(
 
 
 def install_champion_character_template(character_id: int, source_image, db: Session):
-    """Install one corrected crop using the legacy full_64 naming/dedup rules."""
+    """Install one corrected crop using the shared naming/dedup rules."""
     import cv2 as _cv2
 
     template_dir = Path(UPLOAD_DIR) / "templates"
     template_dir.mkdir(parents=True, exist_ok=True)
-    existing = sorted(
-        path for path in template_dir.iterdir()
-        if path.is_file() and (path.name.startswith(f"char_{character_id}_") or path.name == f"char_{character_id}.png")
-    )
-    prepared_source = prepare_character_image(source_image)
-    representative = existing[0].name if existing else None
-    for path in existing:
-        existing_image = _cv2.imread(str(path))
-        if existing_image is None:
-            continue
-        try:
-            prepared_existing = prepare_character_image(existing_image)
-            height, width = prepared_source.shape[:2]
-            resized = _cv2.resize(prepared_existing, (width, height))
-            similarity = 1.0 - (_cv2.absdiff(prepared_source, resized).mean() / 255.0)
-            if similarity > 0.92:
-                character = db.get(models.Character, character_id)
-                character.is_template_available = True
-                if not character.template_filename:
-                    character.template_filename = path.name
-                return None
-        except Exception:
-            continue
-    used_numbers = []
-    for path in existing:
-        stem_suffix = path.stem.removeprefix(f"char_{character_id}_")
-        if stem_suffix.isdigit():
-            used_numbers.append(int(stem_suffix))
-    next_number = max(used_numbers, default=0) + 1
-    destination = template_dir / f"char_{character_id}_{next_number:03d}.png"
-    if not write_lossless_png(str(destination), source_image):
-        raise OSError(f"Failed to save template: {destination}")
-    character = db.get(models.Character, character_id)
-    character.is_template_available = True
-    if not character.template_filename:
+    # Keep enumeration, duplicate detection, generation allocation, and the
+    # write in one lock so concurrent workers cannot choose the same filename.
+    with template_operation_lock(Path(UPLOAD_DIR)):
+        existing = sorted(
+            path for path in list_template_paths(template_dir)
+            if parse_template_name(path.name).character_id == character_id
+        )
+        prepared_source = prepare_character_image(source_image)
+        for path in existing:
+            existing_image = _cv2.imread(str(path))
+            if existing_image is None:
+                continue
+            try:
+                prepared_existing = prepare_character_image(existing_image)
+                height, width = prepared_source.shape[:2]
+                resized = _cv2.resize(prepared_existing, (width, height))
+                similarity = masked_absolute_similarity(
+                    prepared_source, resized, collection_match_mask(prepared_source.shape)
+                )
+                if similarity > 0.92:
+                    character = db.get(models.Character, character_id)
+                    character.is_template_available = True
+                    representative = representative_template(template_dir, character_id)
+                    character.template_filename = representative.name if representative else path.name
+                    return None
+            except Exception:
+                continue
+        destination = template_dir / next_template_name(template_dir, character_id)
+        if not write_lossless_png(str(destination), source_image):
+            raise OSError(f"Failed to save template: {destination}")
+        character = db.get(models.Character, character_id)
+        character.is_template_available = True
         character.template_filename = destination.name
-    return destination
+        return destination
+
+
+def add_template_correction_review(
+    db: Session,
+    *,
+    payload,
+    corrected_template_filename: str | None,
+    tournament: models.Tournament,
+    player: models.Player,
+    actor: models.AppUser,
+) -> None:
+    """Record a fresh, uniquely attributable A→B correction without moving A."""
+    value = (lambda key: getattr(payload, key, None)) if not isinstance(payload, dict) else payload.get
+    try:
+        predicted_id = int(value("original_predicted_id"))
+        corrected_id = int(value("id"))
+        round_number = int(value("round_number"))
+        position = int(value("position"))
+    except (TypeError, ValueError):
+        return
+    matched_filename = value("matched_template_filename")
+    analysis_token = value("analysis_token")
+    match_method = value("match_method")
+    if (
+        predicted_id == corrected_id
+        or not matched_filename
+        or not analysis_token
+        or match_method != "masked_ccoeff_normed"
+        or not corrected_template_filename
+        or not (1 <= round_number <= 5 and 1 <= position <= 5)
+    ):
+        return
+    try:
+        parsed = parse_template_name(matched_filename)
+        matched_path = safe_template_path(Path(UPLOAD_DIR) / "templates", matched_filename, predicted_id)
+    except ValueError:
+        return
+    if parsed.character_id != predicted_id or not matched_path.is_file():
+        return
+    source_url = value("template_source_url") or value("image_url")
+    source_path = path_from_upload_url(source_url) if source_url else None
+    source_match = CHAMPION_CROP_NAME.fullmatch(source_path.name) if source_path else None
+    if source_match is None or source_match.group("token") != analysis_token:
+        return
+    if int(source_match.group("tournament")) != tournament.id:
+        return
+    if source_match.group("player") and int(source_match.group("player")) != player.id:
+        return
+    if source_match.group("seed") and int(source_match.group("seed")) != player.seed_number:
+        return
+    exists = db.query(models.CharacterTemplateReview.id).filter(
+        models.CharacterTemplateReview.analysis_token == analysis_token,
+        models.CharacterTemplateReview.round_number == round_number,
+        models.CharacterTemplateReview.position == position,
+        models.CharacterTemplateReview.matched_template_filename == matched_filename,
+    ).first()
+    if exists:
+        return
+    db.add(models.CharacterTemplateReview(
+        predicted_character_id=predicted_id,
+        corrected_character_id=corrected_id,
+        matched_template_filename=matched_filename,
+        corrected_template_filename=corrected_template_filename,
+        similarity=value("similarity"),
+        tournament_id=tournament.id,
+        player_id=player.id,
+        seed_number=player.seed_number,
+        champion_slot=player.champion_slot,
+        round_number=round_number,
+        position=position,
+        analysis_token=analysis_token,
+        match_method=match_method,
+        created_by=actor.id,
+    ))
 
 
 @app.get(
@@ -2454,7 +2836,7 @@ def save_champion_teams(
             total_template_bytes += source_bytes
             if total_template_bytes > CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES:
                 raise HTTPException(status_code=422, detail="Corrected template sources exceed the total size limit")
-            template_sources.append((character.id, source_image))
+            template_sources.append((character, source_image))
 
     existing_sets = db.query(models.DeckSet).filter(
         models.DeckSet.player_id == player.id
@@ -2481,10 +2863,20 @@ def save_champion_teams(
                 collection3=collections[2], collection4=collections[3],
                 collection5=collections[4],
             ))
-        for character_id, source_image in template_sources:
+        for character_payload, source_image in template_sources:
+            character_id = character_payload.id
             created_path = install_champion_character_template(character_id, source_image, db)
             if created_path is not None:
                 created_template_paths.append(created_path)
+            corrected_path = representative_template(Path(UPLOAD_DIR) / "templates", character_id)
+            add_template_correction_review(
+                db,
+                payload=character_payload,
+                corrected_template_filename=corrected_path.name if corrected_path else None,
+                tournament=tournament,
+                player=player,
+                actor=current_user,
+            )
         db.flush()
         db.commit()
         committed = True
@@ -3036,7 +3428,7 @@ async def update_player_info(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    require_tournament_manager(tournament_id, db, current_user)
+    tournament = require_tournament_manager(tournament_id, db, current_user)
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
@@ -3071,7 +3463,7 @@ async def save_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    require_tournament_manager(tournament_id, db, current_user)
+    tournament = require_tournament_manager(tournament_id, db, current_user)
     temporary_crop_urls = [
         character.get(url_field)
         for team in data.get("teams", [])
@@ -3225,56 +3617,25 @@ async def save_teams(
                     local_path = path_from_upload_url(image_url)
                     if local_path and local_path.exists():
                         import cv2 as _cv2
-                        # このキャラの既存テンプレートを収集（旧形式 char_{id}.png も含む）
-                        existing = sorted([
-                            f for f in os.listdir(template_dir)
-                            if f.startswith(f"char_{c_id}_") or f == f"char_{c_id}.png"
-                        ])
-                        # コレクション領域を除外して、キャラクター部分だけで重複判定する。
                         template_source = _cv2.imread(str(local_path))
-                        new_img = (
-                            prepare_character_image(template_source)
-                            if template_source is not None
-                            else None
-                        )
-                        is_duplicate = False
-                        saved_template_filename = existing[0] if existing else None
-                        if new_img is not None:
-                            for ef in existing:
-                                ex_path = os.path.join(template_dir, ef)
-                                ex_img = _cv2.imread(ex_path)
-                                if ex_img is None:
-                                    continue
-                                try:
-                                    ex_img = prepare_character_image(ex_img)
-                                    h, w = new_img.shape[:2]
-                                    ex_resized = _cv2.resize(ex_img, (w, h))
-                                    diff = _cv2.absdiff(new_img, ex_resized)
-                                    similarity = 1.0 - (diff.mean() / 255.0)
-                                    if similarity > 0.92:  # 92%以上一致なら重複
-                                        is_duplicate = True
-                                        break
-                                except Exception:
-                                    pass
-                        if not is_duplicate:
-                            next_num = len(existing) + 1
-                            template_path = os.path.join(template_dir, f"char_{c_id}_{next_num:03d}.png")
-                            if not write_lossless_png(template_path, template_source):
-                                raise OSError(f"Failed to save template: {template_path}")
-                            saved_template_filename = os.path.basename(template_path)
+                        if template_source is None:
+                            raise OSError(f"Failed to decode template source: {local_path}")
+                        created_path = install_champion_character_template(int(c_id), template_source, db)
+                        representative = representative_template(Path(template_dir), int(c_id))
+                        saved_template_filename = representative.name if representative else None
+                        if created_path is not None:
                             templates_added += 1
-                            print(f"[Template] 追加: {template_path}（累計 {next_num} 枚）")
+                            print(f"[Template] 追加: {created_path}")
                         else:
                             print(f"[Template] スキップ（重複）: char_{c_id}")
-                        # DB上のフラグを更新
-                        char_db = db.query(models.Character).filter(models.Character.id == c_id).first()
-                        if char_db:
-                            char_db.is_template_available = True
-                            if (
-                                not getattr(char_db, "template_filename", None)
-                                and saved_template_filename
-                            ):
-                                char_db.template_filename = saved_template_filename
+                        add_template_correction_review(
+                            db,
+                            payload=char_info,
+                            corrected_template_filename=saved_template_filename,
+                            tournament=tournament,
+                            player=player,
+                            actor=current_user,
+                        )
 
         
         db.commit()

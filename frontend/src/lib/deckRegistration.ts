@@ -9,6 +9,12 @@ export interface RegistrationTeamCharacter {
   add_to_templates?: boolean;
   template_source_url?: string | null;
   template_source_data_url?: string | null;
+  matched_template_filename?: string | null;
+  similarity?: number | null;
+  match_method?: string | null;
+  analysis_token?: string | null;
+  round_number?: number | null;
+  position?: number | null;
 }
 
 export interface RegistrationTeam {
@@ -96,6 +102,12 @@ export function normalizeAnalyzedRegistrationTeams(data: any): RegistrationTeam[
           add_to_templates: false,
           template_source_url: character.template_source_url ?? null,
           template_source_data_url: character.template_source_data_url ?? null,
+          matched_template_filename: character.matched_template_filename ?? null,
+          similarity: typeof character.similarity === "number" ? character.similarity : (typeof character.confidence === "number" ? character.confidence : null),
+          match_method: character.match_method ?? null,
+          analysis_token: character.analysis_token ?? null,
+          round_number: character.round_number ?? teamIndex + 1,
+          position: character.position ?? null,
         };
       }),
     };
@@ -103,7 +115,7 @@ export function normalizeAnalyzedRegistrationTeams(data: any): RegistrationTeam[
 }
 
 export function registrationTeamsPayload(teams: RegistrationTeam[]) {
-  return teams.map(team => ({ team_number: team.team_number, characters: team.characters.map(character => ({
+  return teams.map(team => ({ team_number: team.team_number, characters: team.characters.map((character, characterIndex) => ({
     id: character.id,
     collection_level: character.id === 9999 ? null : character.collection_level,
     image_url: character.image_url ?? null,
@@ -115,6 +127,12 @@ export function registrationTeamsPayload(teams: RegistrationTeam[]) {
     // save; full_64 ignores it unless add_to_templates is true.
     template_source_url: character.template_source_url ?? null,
     template_source_data_url: character.add_to_templates ? character.template_source_data_url ?? null : null,
+    matched_template_filename: character.matched_template_filename ?? null,
+    similarity: character.similarity ?? null,
+    match_method: character.match_method ?? null,
+    analysis_token: character.analysis_token ?? null,
+    round_number: character.round_number ?? team.team_number,
+    position: character.position ?? characterIndex + 1,
   })) }));
 }
 

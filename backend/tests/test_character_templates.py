@@ -6,7 +6,7 @@ from services.character_templates import find_character_template, get_character_
 
 
 class CharacterTemplateTests(unittest.TestCase):
-    def test_prefers_legacy_template(self):
+    def test_prefers_latest_active_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
             template_dir = Path(tmp) / "templates"
             template_dir.mkdir()
@@ -14,15 +14,15 @@ class CharacterTemplateTests(unittest.TestCase):
             legacy.write_bytes(b"legacy")
             (template_dir / "char_10_001.png").write_bytes(b"numbered")
 
-            self.assertEqual(find_character_template(tmp, 10), legacy)
+            self.assertEqual(find_character_template(tmp, 10), template_dir / "char_10_001.png")
 
-    def test_returns_first_numbered_template(self):
+    def test_returns_latest_numbered_template(self):
         with tempfile.TemporaryDirectory() as tmp:
             template_dir = Path(tmp) / "templates"
             template_dir.mkdir()
-            expected = template_dir / "char_20_001.png"
-            (template_dir / "char_20_002.png").write_bytes(b"second")
-            expected.write_bytes(b"first")
+            expected = template_dir / "char_20_002.png"
+            expected.write_bytes(b"second")
+            (template_dir / "char_20_001.png").write_bytes(b"first")
 
             self.assertEqual(find_character_template(tmp, 20), expected)
 
@@ -43,7 +43,7 @@ class CharacterTemplateTests(unittest.TestCase):
 
             self.assertEqual(
                 get_character_template_inventory(tmp),
-                {10: legacy, 20: numbered},
+                {10: template_dir / "char_10_002.png", 20: numbered},
             )
 
 
