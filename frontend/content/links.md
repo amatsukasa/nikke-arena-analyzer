@@ -1,7 +1,7 @@
 ---
 title: リンク集
 description: 公式情報やおすすめサイト、データ提供者様について
-updatedAt: 2026-08-31
+updatedAt: 2026-09-07
 ---
 
 ## 公式サイト・公式SNS
@@ -25,11 +25,17 @@ updatedAt: 2026-08-31
 - DAIMATSU]様([X.com](https://x.com/DAIMATSU120))
 - おっちー様([X.com](https://x.com/occhi0193))
 - ぶちょう様
-- うみろ様
+- うみろ様([X.com](https://x.com/umirooooo))
 - モルトキ様([X.com](https://x.com/Moltoki))
 - じすお様([X.com](https://x.com/magicjis))
 - いぶき様([X.com](https://x.com/ibukiyoru) / [Youtube](https://www.youtube.com/@ibuki_games))
 - Naskun様([X.com](https://x.com/cwp_Nas))
+- セツナ様([X.com](https://x.com/setsuna_nik))
+- NICO様([X.com](https://x.com/NICOxNIKKE))
+- ナデ様
+- タムラ料理長様([X.com](https://x.com/TmrChef))
+- Haba様
+- Ultima様
 
 なお、データ提供者様は随時募集しています。
 管理者（つかぴ）までお気軽にお問い合わせください。
