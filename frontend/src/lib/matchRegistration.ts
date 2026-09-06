@@ -18,6 +18,37 @@ export interface MatchEditorResult {
   issues: string[];
 }
 
+export function matchEditorResultKey(result: MatchEditorResult | null): string {
+  if (!result) return "empty";
+  const rounds = [...result.rounds]
+    .sort((left, right) => left.roundNumber - right.roundNumber)
+    .map(round => `${round.roundNumber}:${round.winner ?? "unknown"}`)
+    .join(",");
+  return `${rounds}|${result.issues.join("\u001f")}`;
+}
+
+export interface PreparedMatchResultImage {
+  originalFile: File;
+  uploadFile: File;
+  previewFile: File;
+  isModalCrop: boolean;
+}
+
+export function selectMatchResultImage(
+  originalFile: File,
+  prepared: { file: File; preCropped: boolean },
+): PreparedMatchResultImage {
+  const ratio = originalFile.size > 0 ? prepared.file.size / originalFile.size : 1;
+  const useModalCrop = prepared.preCropped && ratio <= 1.2;
+  const selected = useModalCrop ? prepared.file : originalFile;
+  return {
+    originalFile,
+    uploadFile: selected,
+    previewFile: selected,
+    isModalCrop: useModalCrop,
+  };
+}
+
 export const CHAMPION_MATCH_ORDER: ReadonlyArray<readonly [MatchStage, number]> = [
   ["quarterfinal", 1], ["quarterfinal", 2], ["quarterfinal", 3], ["quarterfinal", 4],
   ["semifinal", 1], ["semifinal", 2], ["final", 1],

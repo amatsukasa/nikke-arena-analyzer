@@ -307,10 +307,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     if (!tournamentId) throw new Error("大会IDが確定していません。");
     setIsUploading(true);
     try {
-      const prepared = await prepareAnalysisImage(file, { maxOutputWidth: 1080, filenameSuffix: ".match-modal.png" });
-      const ratio = file.size > 0 ? prepared.file.size / file.size : 1;
-      const upload = prepared.preCropped && ratio <= 1.2 ? prepared.file : file;
-      const body = new FormData(); body.append("tournament_id",String(tournamentId)); body.append("attacker_seed",String(attackerSeed)); body.append("defender_seed",String(defenderSeed)); body.append("stage",matchStage); body.append("image",upload);
+      const body = new FormData(); body.append("tournament_id",String(tournamentId)); body.append("attacker_seed",String(attackerSeed)); body.append("defender_seed",String(defenderSeed)); body.append("stage",matchStage); body.append("image",file);
       const response = await fetch("/api/analyze/match_result",{method:"POST",body}); const data=await response.json().catch(()=>({}));
       if(!response.ok)throw new Error(data?.detail||"解析エラーが発生しました。");
       return normalizeFull64MatchAnalysis(data);
