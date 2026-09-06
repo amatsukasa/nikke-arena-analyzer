@@ -1334,38 +1334,39 @@ def resolve_character_template_review(
 def get_all_characters_admin(
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
+    query: str = Query("", max_length=100),
+    rarity: str = Query("", max_length=20),
+    class_type: str = Query("", max_length=20),
 ):
-    """全キャラクターをテンプレート有無フラグ付きで返す（管理者用）"""
-    template_dir = str(Path(UPLOAD_DIR) / "templates")
-    # テンプレートが存在するキャラIDのセット
-    template_ids = set()
-    if os.path.exists(template_dir):
-        for fname in os.listdir(template_dir):
-            if fname.startswith("char_") and fname.endswith(".png"):
-                try:
-                    cid = int(fname.split("_")[1].split(".")[0])
-                    template_ids.add(cid)
-                except Exception:
-                    pass
-
-    # キャラごとのテンプレート数をカウント
+    """Return one filtered admin page; scan template filenames once per request."""
+    template_dir = Path(UPLOAD_DIR) / "templates"
+    chars_query = db.query(models.Character).filter(models.Character.id != EMPTY_SLOT_CHARACTER_ID)
+    normalized_query = query.strip()
+    if normalized_query:
+        chars_query = chars_query.filter(models.Character.name.ilike(f"%{normalized_query}%"))
+    if rarity:
+        chars_query = chars_query.filter(models.Character.rarity == rarity)
+    if class_type:
+        chars_query = chars_query.filter(models.Character.class_type == class_type)
+    total = chars_query.count()
+    chars = chars_query.order_by(models.Character.name, models.Character.id).offset(offset).limit(limit).all()
+    page_character_ids = {character.id for character in chars}
     template_counts: dict[int, int] = {}
-    for cid in template_ids:
-        count = 0
-        old_path = os.path.join(template_dir, f"char_{cid}.png")
-        if os.path.exists(old_path):
-            count += 1
-        for f in os.listdir(template_dir):
-            if f.startswith(f"char_{cid}_") and f.endswith(".png"):
-                count += 1
-        template_counts[cid] = count
-
-    chars = db.query(models.Character).filter(
-        models.Character.id != EMPTY_SLOT_CHARACTER_ID
-    ).order_by(models.Character.name).all()
+    representatives: dict[int, Path] = {}
+    for template_path in list_template_paths(template_dir):
+        parsed = parse_template_name(template_path.name)
+        if parsed.character_id not in page_character_ids:
+            continue
+        template_counts[parsed.character_id] = template_counts.get(parsed.character_id, 0) + 1
+        current = representatives.get(parsed.character_id)
+        if current is None or parsed.generation > parse_template_name(current.name).generation:
+            representatives[parsed.character_id] = template_path
     result = []
     for c in chars:
-        has_tpl = c.id in template_ids
+        template_path = representatives.get(c.id)
+        has_tpl = template_path is not None
         tpl_count = template_counts.get(c.id, 0)
         result.append({
             "char_id": c.id,
@@ -1379,11 +1380,18 @@ def get_all_characters_admin(
             "has_template": has_tpl,
             "template_count": tpl_count,
             "image_url": (
-                f"/api/char-icon/{c.id}.png?v={representative_template(Path(template_dir), c.id).stem}"
-                if has_tpl and representative_template(Path(template_dir), c.id) else None
+                f"/api/char-icon/{c.id}.png?v={template_path.stem}"
+                if template_path else None
             ),
         })
-    return result
+    return {
+        "characters": result,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_next": offset + len(result) < total,
+        "page": offset // limit + 1,
+    }
 
 @app.delete("/api/characters/{char_id}")
 def delete_character(

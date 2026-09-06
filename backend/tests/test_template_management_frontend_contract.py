@@ -15,6 +15,7 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         page = (ROOT / "frontend/src/components/admin/CharacterTemplatesAdmin.tsx").read_text(encoding="utf-8")
         admin = (ROOT / "frontend/src/app/admin/page.tsx").read_text(encoding="utf-8")
         asset_proxy = (ROOT / "frontend/src/app/api/admin/character-templates/assets/[state]/[filename]/route.ts").read_text(encoding="utf-8")
+        character_proxy = (ROOT / "frontend/src/app/api/admin/all-characters/route.ts").read_text(encoding="utf-8")
         for label in (
             "要確認",
             "Character別テンプレート",
@@ -64,6 +65,28 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertIn("proxyBackend(", asset_proxy)
         self.assertIn('private, max-age=60', asset_proxy)
         self.assertNotIn("NEXT_PUBLIC_API_URL", asset_proxy)
+
+        self.assertIn("const CHARACTER_PAGE_SIZE = 30", admin)
+        self.assertIn("activeTab !== 'characters'", admin)
+        self.assertIn("characterRequest.current?.abort()", admin)
+        self.assertIn("characterRequestGeneration", admin)
+        self.assertIn("setDebouncedSearchTerm", admin)
+        self.assertIn("data.characters", admin)
+        self.assertIn("const lastValidOffset = data.total > 0", admin)
+        self.assertIn("if (characterOffset > lastValidOffset)", admin)
+        self.assertIn("setCharacterOffset(lastValidOffset)", admin)
+        self.assertIn('loading="lazy"', admin)
+        self.assertIn('decoding="async"', admin)
+        self.assertIn("src={character.image_url}", admin)
+        self.assertNotIn("${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${c.image_url}", admin)
+        auth_guard_start = admin.index("// 認証と管理者権限のガード")
+        auth_guard_end = admin.index("}, [isLoading, token, currentUser, router]);", auth_guard_start)
+        auth_guard = admin[auth_guard_start:auth_guard_end]
+        self.assertNotIn("fetchCharacters()", auth_guard)
+        self.assertIn("/api/admin/all-characters?${params}", admin)
+        self.assertIn("proxyBackend(request", character_proxy)
+        self.assertIn("ALLOWED_FILTERS", character_proxy)
+        self.assertNotIn("NEXT_PUBLIC_API_URL", character_proxy)
 
         search = (ROOT / "frontend/src/components/CharacterSearchSelect.tsx").read_text(encoding="utf-8")
         self.assertIn("allowUnknown = true", search)
