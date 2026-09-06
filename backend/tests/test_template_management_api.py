@@ -41,7 +41,7 @@ class TemplateManagementApiTests(unittest.TestCase):
         self.db.add(row); self.db.flush(); return row
 
     def test_list_disable_restore_and_permanent_delete(self):
-        result = main.list_character_templates(self.admin, self.db)
+        result = main.list_character_templates(self.admin, self.db, "active", 0, 30, "")
         group = result["characters"][0]
         self.assertEqual([item["generation"] for item in group["active"]], [0, 1])
         self.assertTrue(group["active"][1]["representative"])
@@ -55,6 +55,26 @@ class TemplateManagementApiTests(unittest.TestCase):
         main.permanently_delete_character_template(1, "char_1_001.png", "DELETE", self.admin, self.db)
         self.assertFalse((Path(self.temp.name) / "template_quarantine" / "char_1_001.png").exists())
         self.assertEqual(self.db.query(models.CharacterTemplateAudit).count(), 4)
+
+    def test_every_successful_admin_mutation_invalidates_matcher_cache(self):
+        with patch.object(main, "_invalidate_template_matcher_cache") as invalidate:
+            main.disable_character_template(1, "char_1_001.png", {}, self.admin, self.db)
+            main.restore_character_template(1, "char_1_001.png", self.admin, self.db)
+            main.disable_character_template(1, "char_1_001.png", {}, self.admin, self.db)
+            main.permanently_delete_character_template(
+                1, "char_1_001.png", "DELETE", self.admin, self.db
+            )
+        self.assertEqual(invalidate.call_count, 4)
+
+    def test_template_listing_hashes_only_requested_page(self):
+        root = Path(self.temp.name) / "templates"
+        for generation in range(2, 37):
+            (root / f"char_1_{generation:03d}.png").write_bytes(str(generation).encode())
+        with patch.object(main, "describe_template", wraps=main.describe_template) as describe:
+            result = main.list_character_templates(self.admin, self.db, "active", 0, 30, "")
+        self.assertEqual(result["total"], 37)
+        self.assertEqual(sum(len(group["active"]) for group in result["characters"]), 30)
+        self.assertEqual(describe.call_count, 30)
 
     def test_review_keep_does_not_move_predicted_template(self):
         tournament = models.Tournament(name="T", date=date(2026, 1, 1), created_by=self.user_row.id)

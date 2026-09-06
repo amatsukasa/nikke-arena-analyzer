@@ -1,5 +1,8 @@
 import unittest
 from unittest.mock import patch
+import tempfile
+from pathlib import Path
+import cv2
 
 import numpy as np
 
@@ -76,6 +79,73 @@ class TemplateMatcherTests(unittest.TestCase):
         self.assertTrue(np.any(mask == 0))
         self.assertTrue(np.any(mask == 255))
         self.assertEqual(masked_ccoef_normed(with_collection, without_collection, mask), 1.0)
+
+    def test_template_decode_is_cached_until_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "char_10_001.png"
+            cv2.imwrite(str(path), self.face)
+            template_matcher.invalidate_template_cache()
+            with patch.object(template_matcher, "TEMPLATE_DIR", directory), patch.object(
+                template_matcher.cv2, "imread", wraps=cv2.imread
+            ) as imread:
+                template_matcher.get_templates()
+                template_matcher.get_templates()
+                self.assertEqual(imread.call_count, 1)
+                path.write_bytes(path.read_bytes() + b"x")
+                template_matcher.get_templates()
+                self.assertEqual(imread.call_count, 2)
+
+    def test_template_cache_honors_configured_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for character_id in range(1, 6):
+                candidate_image = np.random.default_rng(character_id).integers(
+                    0, 256, size=self.face.shape, dtype=np.uint8
+                )
+                cv2.imwrite(
+                    str(Path(directory) / f"char_{character_id}_001.png"),
+                    candidate_image,
+                )
+            template_matcher.invalidate_template_cache()
+            with patch.object(template_matcher, "TEMPLATE_DIR", directory), patch.object(
+                template_matcher, "TEMPLATE_CACHE_LIMIT", 3
+            ):
+                templates = template_matcher.get_templates()
+            self.assertEqual(sum(len(rows) for rows in templates.values()), 5)
+            self.assertEqual(template_matcher.template_cache_size(), 3)
+
+    def test_template_cache_honors_byte_limit_and_evicted_templates_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for character_id in range(1, 6):
+                cv2.imwrite(
+                    str(Path(directory) / f"char_{character_id}_001.png"),
+                    self.face,
+                )
+            template_matcher.invalidate_template_cache()
+            one_candidate_bytes = self.face.nbytes + self.face[:, :, 0].nbytes
+            with patch.object(template_matcher, "TEMPLATE_DIR", directory), patch.object(
+                template_matcher, "TEMPLATE_CACHE_MAX_BYTES", one_candidate_bytes * 2
+            ), patch.object(template_matcher, "TEMPLATE_CACHE_LIMIT", 2048), patch.object(
+                template_matcher.cv2, "imread", wraps=cv2.imread
+            ) as imread:
+                first = template_matcher.get_templates()
+                first_ids = sorted(first)
+                first_match = predict_character(
+                    first[1][0].image, first, threshold=-1.0, min_margin=-1.0
+                )[0]
+                first_reads = imread.call_count
+                second = template_matcher.get_templates()
+                second_match = predict_character(
+                    second[1][0].image, second, threshold=-1.0, min_margin=-1.0
+                )[0]
+
+            self.assertEqual(first_ids, sorted(second))
+            self.assertIsNotNone(first_match)
+            self.assertEqual(second_match, first_match)
+            self.assertEqual(first_reads, 5)
+            self.assertGreater(imread.call_count, first_reads)
+            self.assertLessEqual(
+                template_matcher.template_cache_nbytes(), one_candidate_bytes * 2
+            )
 
 
 if __name__ == "__main__":

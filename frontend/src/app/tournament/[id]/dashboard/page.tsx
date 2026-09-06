@@ -826,7 +826,7 @@ export default function Dashboard() {
                       
                       <div className="w-32 h-32 rounded-full border-4 border-amber-500 shadow-[0_0_30px_rgba(245,158,11,0.3)] bg-slate-900 overflow-hidden shrink-0 z-10 flex items-center justify-center">
                           {myPlayerDetails?.player?.icon_url ? (
-                             <img src={myPlayerDetails.player.icon_url.includes('?') ? myPlayerDetails.player.icon_url : `${myPlayerDetails.player.icon_url}?t=${Date.now()}`} alt="Player Icon" className="w-full h-full object-cover" />
+                             <img src={myPlayerDetails.player.icon_url} alt="Player Icon" className="w-full h-full object-cover" />
                           ) : (
                              <div className="text-slate-600">
                                 <UserIcon size={64} />
@@ -1493,7 +1493,7 @@ export default function Dashboard() {
                         <span className="shrink-0 text-xs font-bold text-slate-500">#{idx + 1}</span>
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-900 ring-1 ring-white/20">
                           {data.player.icon_url ? (
-                            <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="" className="h-full w-full object-cover" />
+                            <img src={data.player.icon_url} alt="" className="h-full w-full object-cover" />
                           ) : (
                             <UserIcon size={20} className="text-slate-600" />
                           )}
@@ -1580,7 +1580,7 @@ export default function Dashboard() {
                           <div className="flex flex-col items-center space-y-2">
                             <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
                               {data.player.icon_url ? (
-                                <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="Icon" className="w-full h-full object-cover" />
+                                <img src={data.player.icon_url} alt="Icon" className="w-full h-full object-cover" />
                               ) : (
                                 <UserIcon size={20} className="text-slate-600" />
                               )}
@@ -1656,7 +1656,7 @@ export default function Dashboard() {
                         <span className="text-xs font-bold text-slate-500">#{idx + 1}</span>
                         <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center shrink-0">
                           {data.player.icon_url ? (
-                            <img src={`${data.player.icon_url}?t=${Date.now()}`} alt="Icon" className="w-full h-full object-cover" />
+                            <img src={data.player.icon_url} alt="Icon" className="w-full h-full object-cover" />
                           ) : (
                             <UserIcon size={20} className="text-slate-600" />
                           )}

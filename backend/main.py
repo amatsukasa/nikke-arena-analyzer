@@ -204,6 +204,28 @@ def _finalize_char_position_stats(char):
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 from services.image_processor import process_images, write_lossless_png
+from services.analysis_execution import AnalysisBusyError, AnalysisReservation, reserve_analysis_slot, run_cpu_analysis, shutdown_analysis_executor
+
+
+def require_analysis_capacity():
+    try:
+        reservation = reserve_analysis_slot()
+    except AnalysisBusyError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="画像解析が混み合っています。数秒後にもう一度お試しください。",
+            headers={"Retry-After": "5"},
+        ) from exc
+    try:
+        yield reservation
+    finally:
+        # Once submitted, only the worker Future is allowed to release it.
+        reservation.release_if_unsubmitted()
+
+
+def request_analysis_reservation(value) -> AnalysisReservation | None:
+    """Return FastAPI's resolved dependency; direct unit calls pass Depends."""
+    return value if isinstance(value, AnalysisReservation) else None
 from services.character_templates import find_character_template, get_character_template_inventory
 from services.collection_classifier import COLLECTION_VALUES, collection_match_mask
 from services.template_matcher import prepare_character_image, masked_absolute_similarity
@@ -473,6 +495,9 @@ async def shutdown_event():
         with contextlib.suppress(asyncio.CancelledError):
             await _upload_cleanup_task
         _upload_cleanup_task = None
+    # Admission is closed before shutdown waits for the one shared worker.
+    # Waiting in a helper thread keeps the event loop responsive while it drains.
+    await asyncio.to_thread(shutdown_analysis_executor)
 
 
 # ===== 認証エンドポイント =====
@@ -951,6 +976,11 @@ def _template_roots() -> tuple[Path, Path, Path]:
     return upload_root, upload_root / "templates", upload_root / "template_quarantine"
 
 
+def _invalidate_template_matcher_cache() -> None:
+    from services.template_matcher import invalidate_template_cache
+    invalidate_template_cache()
+
+
 def _refresh_character_template_metadata(db: Session, character_ids: set[int]) -> None:
     _, active_root, _ = _template_roots()
     for character_id in character_ids:
@@ -995,12 +1025,15 @@ def _record_failed_template_audit(db: Session, actor_id: int, action: str, **val
 def list_character_templates(
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
+    state: Literal["active", "quarantine"] = "active",
+    offset: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
+    query: str = Query("", max_length=100),
 ):
-    upload_root, active_root, quarantine_root = _template_roots()
-    active_paths = list_template_paths(active_root)
-    quarantine_paths = list_template_paths(quarantine_root)
+    _, active_root, quarantine_root = _template_roots()
+    selected_paths = list_template_paths(active_root if state == "active" else quarantine_root)
     character_ids = {
-        parse_template_name(path.name).character_id for path in active_paths + quarantine_paths
+        parse_template_name(path.name).character_id for path in selected_paths
     }
     characters = {
         row.id: row for row in db.query(models.Character).filter(models.Character.id.in_(character_ids or {-1})).all()
@@ -1011,39 +1044,60 @@ def list_character_templates(
     ).filter(models.CharacterTemplateReview.status == "pending").group_by(
         models.CharacterTemplateReview.predicted_character_id
     ).all())
-    active_representatives = {
-        character_id: representative_template(active_root, character_id) for character_id in character_ids
-    }
+    active_representatives = {}
+    for path in selected_paths if state == "active" else []:
+        parsed = parse_template_name(path.name)
+        current = active_representatives.get(parsed.character_id)
+        if current is None or parsed.generation > parse_template_name(current.name).generation:
+            active_representatives[parsed.character_id] = path
+    normalized_query = query.strip().casefold()
+    entries = [
+        path for path in selected_paths
+        if not normalized_query or normalized_query in (
+            f"{parse_template_name(path.name).character_id} "
+            f"{characters.get(parse_template_name(path.name).character_id).name if characters.get(parse_template_name(path.name).character_id) else ''}"
+        ).casefold()
+    ]
+    total = len(entries)
+    page_paths = entries[offset:offset + limit]
+    page_character_ids = sorted({parse_template_name(path.name).character_id for path in page_paths})
     return {
         "characters": [
             {
                 "character_id": character_id,
                 "character_name": characters.get(character_id).name if characters.get(character_id) else f"ID:{character_id}",
-                "active": [describe_template(path, active=True, representative=path == active_representatives[character_id]) for path in active_paths if parse_template_name(path.name).character_id == character_id],
-                "quarantined": [describe_template(path, active=False, representative=False) for path in quarantine_paths if parse_template_name(path.name).character_id == character_id],
+                "active": [describe_template(path, active=True, representative=path == active_representatives.get(character_id)) for path in page_paths if state == "active" and parse_template_name(path.name).character_id == character_id],
+                "quarantined": [describe_template(path, active=False, representative=False) for path in page_paths if state == "quarantine" and parse_template_name(path.name).character_id == character_id],
                 "pending_count": pending_counts.get(character_id, 0),
                 "representative_url": (
                     f"/api/admin/character-templates/assets/active/{active_representatives[character_id].name}"
-                    if active_representatives[character_id] else None
+                    if active_representatives.get(character_id) else None
                 ),
             }
-            for character_id in sorted(character_ids)
-        ]
+            for character_id in page_character_ids
+        ],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
     }
 
 
 @app.get("/api/admin/character-template-reviews")
 def list_character_template_reviews(
     status: str = "pending",
+    offset: int = Query(0, ge=0),
+    limit: int = Query(15, ge=1, le=100),
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
 ):
     if status not in {"pending", "kept", "reassigned", "disabled"}:
         raise HTTPException(status_code=422, detail="Invalid review status")
-    reviews = db.query(models.CharacterTemplateReview).filter(
+    query = db.query(models.CharacterTemplateReview).filter(
         models.CharacterTemplateReview.status == status
-    ).order_by(models.CharacterTemplateReview.created_at.desc(), models.CharacterTemplateReview.id.desc()).all()
-    return [{
+    )
+    total = query.count()
+    reviews = query.order_by(models.CharacterTemplateReview.created_at.desc(), models.CharacterTemplateReview.id.desc()).offset(offset).limit(limit).all()
+    return {"reviews": [{
         "id": review.id,
         "status": review.status,
         "predicted_character_id": review.predicted_character_id,
@@ -1058,7 +1112,7 @@ def list_character_template_reviews(
         "round_number": review.round_number,
         "position": review.position,
         "created_at": review.created_at,
-    } for review in reviews]
+    } for review in reviews], "total": total, "offset": offset, "limit": limit}
 
 
 @app.get("/api/admin/character-templates/assets/{state}/{filename}")
@@ -1099,6 +1153,7 @@ def disable_character_template(
             if moved:
                 rollback_move(*moved)
             raise
+    _invalidate_template_matcher_cache()
     return {"ok": True, "filename": destination.name}
 
 
@@ -1125,6 +1180,7 @@ def restore_character_template(
             if moved:
                 rollback_move(*moved)
             raise
+    _invalidate_template_matcher_cache()
     return {"ok": True, "filename": destination.name}
 
 
@@ -1167,6 +1223,7 @@ def reassign_character_template(
             if moved:
                 rollback_move(*moved)
             raise
+    _invalidate_template_matcher_cache()
     return {"ok": True, "filename": target_filename, "duplicate": duplicate}
 
 
@@ -1203,6 +1260,7 @@ def permanently_delete_character_template(
             tombstone.unlink()
         except OSError as exc:
             print(f"[template-management] tombstone cleanup failed file={filename}: {exc}")
+    _invalidate_template_matcher_cache()
     return {"ok": True}
 
 
@@ -1269,6 +1327,7 @@ def resolve_character_template_review(
             if moved:
                 rollback_move(*moved)
             raise
+    _invalidate_template_matcher_cache()
     return {"ok": True, "status": review.status, "target_filename": target_filename}
 
 @app.get("/api/admin/all-characters")
@@ -2679,6 +2738,7 @@ async def analyze_champion_deck(
     request: Request,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
+    _analysis_capacity: AnalysisReservation = Depends(require_analysis_capacity),
 ):
     # Authorization and ownership checks deliberately precede multipart parsing/decoding.
     _, player = require_champion_player_manager(
@@ -2719,7 +2779,8 @@ async def analyze_champion_deck(
             if total == 0:
                 raise HTTPException(status_code=422, detail="Empty image files are not allowed")
         try:
-            result = process_images(
+            result = await run_cpu_analysis(
+                process_images,
                 saved_paths,
                 tournament_id,
                 player.id,
@@ -2727,7 +2788,14 @@ async def analyze_champion_deck(
                 include_source_metadata=True,
                 created_output_paths=analysis_output_paths,
                 crop_owner_player_id=player.id,
+                reservation=request_analysis_reservation(_analysis_capacity),
             )
+        except AnalysisBusyError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="画像解析が混み合っています。数秒後にもう一度お試しください。",
+                headers={"Retry-After": "5"},
+            ) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -2898,6 +2966,8 @@ def save_champion_teams(
             except OSError as cleanup_error:
                 print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
         raise
+    if created_template_paths:
+        _invalidate_template_matcher_cache()
     for path in owned_crop_paths:
         try:
             path.unlink(missing_ok=True)
@@ -3182,6 +3252,7 @@ async def analyze_champion_match_result(
     request: Request,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
+    _analysis_capacity: AnalysisReservation = Depends(require_analysis_capacity),
 ):
     # Authorization, scope, fixed participants and deck readiness must precede
     # multipart parsing and all image/OCR work.
@@ -3256,7 +3327,17 @@ async def analyze_champion_match_result(
         ):
             raise HTTPException(status_code=413, detail="Decoded image dimensions exceed the allowed limit")
         try:
-            raw_result = extract_match_results(temporary_path)
+            raw_result = await run_cpu_analysis(
+                extract_match_results,
+                temporary_path,
+                reservation=request_analysis_reservation(_analysis_capacity),
+            )
+        except AnalysisBusyError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="画像解析が混み合っています。数秒後にもう一度お試しください。",
+                headers={"Retry-After": "5"},
+            ) from exc
         except Exception as exc:
             print(
                 f"[champion-result] analysis failed tournament={tournament_id} "
@@ -3639,6 +3720,8 @@ async def save_teams(
 
         
         db.commit()
+        if templates_added:
+            _invalidate_template_matcher_cache()
         deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
         if deleted_crops:
             print(f"[Cleanup] Removed {deleted_crops} registered crop images")
@@ -3730,7 +3813,10 @@ async def upload_player_icon(
     return {"url": icon_url, "player_id": player.id}
 
 @app.post("/api/analyze/deck")
-async def analyze_deck(request: Request):
+async def analyze_deck(
+    request: Request,
+    _analysis_capacity: AnalysisReservation = Depends(require_analysis_capacity),
+):
     # Starlette 1.x ではマルチパートの1パートあたりデフォルト1MBの制限がある。
     # PC/タブレットのスクリーンショットは1MBを超える場合があるため、
     # Request.form() を直接使用して max_part_size を 20MB に引き上げる。
@@ -3767,12 +3853,20 @@ async def analyze_deck(request: Request):
                 shutil.copyfileobj(image.file, buffer)
 
         try:
-            return process_images(
+            return await run_cpu_analysis(
+                process_images,
                 saved_paths,
                 tournament_id,
                 seed_number,
                 pre_cropped_flags=pre_cropped_flags,
+                reservation=request_analysis_reservation(_analysis_capacity),
             )
+        except AnalysisBusyError as e:
+            raise HTTPException(
+                status_code=429,
+                detail="画像解析が混み合っています。数秒後にもう一度お試しください。",
+                headers={"Retry-After": "5"},
+            ) from e
         except Exception as e:
             import traceback
             print(f"[analyze_deck] process_images でエラーが発生しました: {e}")
@@ -3788,7 +3882,8 @@ async def analyze_match_result(
     attacker_seed: int = Form(...),
     defender_seed: int = Form(...),
     stage: str = Form("Groups"),
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    _analysis_capacity: AnalysisReservation = Depends(require_analysis_capacity),
 ):
     upload_dir = "uploads"
     os.makedirs(upload_dir, exist_ok=True)
@@ -3799,7 +3894,11 @@ async def analyze_match_result(
         
     try:
         from services.match_processor import extract_match_results
-        result = extract_match_results(file_path)
+        result = await run_cpu_analysis(
+            extract_match_results,
+            file_path,
+            reservation=request_analysis_reservation(_analysis_capacity),
+        )
         
         resp = {
             "tournament_id": tournament_id,
@@ -3810,6 +3909,12 @@ async def analyze_match_result(
             "winner": result["winner"]
         }
         return resp
+    except AnalysisBusyError as e:
+        raise HTTPException(
+            status_code=429,
+            detail="画像解析が混み合っています。数秒後にもう一度お試しください。",
+            headers={"Retry-After": "5"},
+        ) from e
     except Exception as e:
         print(f"Error extracting match results: {e}")
         raise HTTPException(status_code=500, detail=str(e))

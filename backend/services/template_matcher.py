@@ -1,17 +1,24 @@
 import cv2
 import os
 import numpy as np
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from services.collection_classifier import NORMALIZED_SIZE, collection_match_mask
-from services.template_management import list_template_paths, parse_template_name
+from services.template_management import list_template_paths, parse_template_name, template_operation_lock
 
 TEMPLATE_DIR = "uploads/templates"
+MATCHER_ALGORITHM_VERSION = 2
+TEMPLATE_CACHE_LIMIT = 2048
+TEMPLATE_CACHE_MAX_BYTES = 48 * 1024 * 1024
+_template_cache: OrderedDict[tuple[str, int, int, int], "TemplateCandidate"] = OrderedDict()
+cv2.setNumThreads(max(1, int(os.environ.get("OPENCV_NUM_THREADS", "1"))))
 
 @dataclass(frozen=True)
 class TemplateCandidate:
     image: np.ndarray
     filename: str
+    normalized: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -39,21 +46,64 @@ def get_templates():
     if not os.path.exists(TEMPLATE_DIR):
         return templates
 
-    for template_path in list_template_paths(Path(TEMPLATE_DIR)):
-        filename = template_path.name
-        try:
-            char_id = parse_template_name(filename).character_id
-            img = cv2.imread(str(template_path))
-            if img is not None:
-                if char_id not in templates:
-                    templates[char_id] = []
-                templates[char_id].append(TemplateCandidate(img, filename))
-        except Exception as e:
-            print(f"Failed to load template {filename}: {e}")
+    live_keys = set()
+    template_root = Path(TEMPLATE_DIR)
+    # Take the same lock as admin mutations so one analysis sees either the
+    # complete pre-operation set or the complete post-operation set.
+    with template_operation_lock(template_root.parent):
+        for template_path in list_template_paths(template_root):
+            filename = template_path.name
+            try:
+                char_id = parse_template_name(filename).character_id
+                stat = template_path.stat()
+                key = (str(template_path.resolve()), stat.st_mtime_ns, stat.st_size, MATCHER_ALGORITHM_VERSION)
+                live_keys.add(key)
+                candidate = _template_cache.get(key)
+                if candidate is None:
+                    img = cv2.imread(str(template_path))
+                    if img is None:
+                        continue
+                    gray = prepare_character_image(img)
+                    candidate = TemplateCandidate(img, filename, _normalized_vector(gray))
+                    _template_cache[key] = candidate
+                else:
+                    _template_cache.move_to_end(key)
+                if candidate is not None:
+                    if char_id not in templates:
+                        templates[char_id] = []
+                    templates[char_id].append(candidate)
+            except Exception as e:
+                print(f"Failed to load template {filename}: {e}")
 
     total = sum(len(v) for v in templates.values())
     print(f"[Template] {len(templates)} キャラ / 計 {total} 枚 読み込み完了")
+    for key in list(_template_cache):
+        if key not in live_keys:
+            _template_cache.pop(key, None)
+    while (
+        len(_template_cache) > TEMPLATE_CACHE_LIMIT
+        or template_cache_nbytes() > TEMPLATE_CACHE_MAX_BYTES
+    ):
+        _template_cache.popitem(last=False)
     return templates
+
+
+def invalidate_template_cache() -> None:
+    with template_operation_lock(Path(TEMPLATE_DIR).parent):
+        _template_cache.clear()
+
+
+def template_cache_size() -> int:
+    return len(_template_cache)
+
+
+def template_cache_nbytes() -> int:
+    """Return bytes held by cached NumPy buffers (excluding Python overhead)."""
+    return sum(
+        candidate.image.nbytes
+        + (candidate.normalized.nbytes if candidate.normalized is not None else 0)
+        for candidate in _template_cache.values()
+    )
 
 
 def _candidate(candidate, char_id: int, index: int) -> TemplateCandidate:
@@ -75,6 +125,14 @@ def masked_ccoef_normed(first: np.ndarray, second: np.ndarray, valid_mask: np.nd
     if denominator == 0:
         return 1.0 if np.array_equal(first[valid], second[valid]) else 0.0
     return float(np.dot(first_values, second_values) / denominator)
+
+
+def _normalized_vector(gray: np.ndarray) -> np.ndarray:
+    valid = collection_match_mask(gray.shape).astype(bool)
+    values = gray[valid].astype(np.float32).reshape(-1)
+    values -= values.mean()
+    norm = np.linalg.norm(values)
+    return values / norm if norm else values
 
 
 def masked_absolute_similarity(first: np.ndarray, second: np.ndarray, valid_mask: np.ndarray) -> float:
@@ -99,6 +157,7 @@ def predict_character_match(face_img, templates: dict, threshold=0.65, min_margi
     # グレースケールに変換
     face_gray = prepare_character_image(face_img)
     valid_mask = collection_match_mask(face_gray.shape)
+    face_vector = _normalized_vector(face_gray)
 
     for char_id, template_list in templates.items():
         char_best_score = -1.0
@@ -106,11 +165,15 @@ def predict_character_match(face_img, templates: dict, threshold=0.65, min_margi
 
         for index, raw_candidate in enumerate(template_list):
             candidate = _candidate(raw_candidate, char_id, index)
-            template_gray = prepare_character_image(candidate.image)
-
-            # Preserve CCOEFF_NORMED scoring while removing excluded pixels
-            # from both the covariance numerator and both denominators.
-            max_val = masked_ccoef_normed(face_gray, template_gray, valid_mask)
+            template_vector = candidate.normalized
+            if template_vector is None:
+                template_vector = _normalized_vector(prepare_character_image(candidate.image))
+            if not face_vector.size or face_vector.size != template_vector.size:
+                max_val = -1.0
+            elif not np.any(face_vector) or not np.any(template_vector):
+                max_val = masked_ccoef_normed(face_gray, prepare_character_image(candidate.image), valid_mask)
+            else:
+                max_val = float(np.dot(face_vector, template_vector))
 
             # このキャラの最高スコアを更新
             if max_val > char_best_score:
