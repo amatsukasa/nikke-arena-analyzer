@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query, BackgroundTasks
 import auth as auth_module
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
@@ -827,14 +827,18 @@ from sqlalchemy import case, func
 
 @app.get("/api/characters", response_model=List[schemas.Character])
 def get_characters(db: Session = Depends(get_db)):
-    # deck_teams の使用回数を集計
-    usage_counts = {}
-    for i in range(1, 6):
-        col = getattr(models.DeckTeam, f"char{i}_id")
-        counts = db.query(col, func.count(col)).group_by(col).all()
-        for char_id, count in counts:
-            if char_id:
-                usage_counts[char_id] = usage_counts.get(char_id, 0) + count
+    # All five Character slots are flattened before aggregation so usage counts
+    # require one query while preserving one count per occupied slot.
+    character_slots = union_all(*(
+        select(getattr(models.DeckTeam, f"char{i}_id").label("character_id"))
+        for i in range(1, 6)
+    )).subquery()
+    usage_counts = dict(
+        db.query(character_slots.c.character_id, func.count())
+        .filter(character_slots.c.character_id.is_not(None))
+        .group_by(character_slots.c.character_id)
+        .all()
+    )
 
     # SSR > SR > R 順、五十音順（名前順）
     rarity_order = case(

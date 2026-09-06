@@ -142,6 +142,31 @@ export default function Dashboard() {
     if (isFirstLoad || !tournamentId) return;
 
     const controller = new AbortController();
+    const fetchCharacters = async () => {
+      try {
+        const charsRes = await fetch("/api/characters", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!charsRes.ok) {
+          setDataError("大会ダッシュボードのデータを取得できませんでした。");
+          return;
+        }
+        setAllCharacters(await charsRes.json());
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error(error);
+        setDataError("大会ダッシュボードのデータを取得できませんでした。");
+      }
+    };
+    void fetchCharacters();
+    return () => controller.abort();
+  }, [isFirstLoad, tournamentId]);
+
+  useEffect(() => {
+    if (isFirstLoad || !tournamentId) return;
+
+    const controller = new AbortController();
     setStats(null);
     setTournament(null);
     setDashboardSummary(null);
@@ -169,7 +194,6 @@ export default function Dashboard() {
         setIsPrivateTournament(true);
 
         const urls = [
-          `/api/characters?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
@@ -197,11 +221,10 @@ export default function Dashboard() {
           return;
         }
 
-        const [charsData, summaryData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
+        const [summaryData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
           responses.map(res => res.json())
         );
 
-        setAllCharacters(charsData);
         setDashboardSummary(summaryData);
         setBracketData(bracketDataRaw);
         setMyPlayerDetails(detailsData);

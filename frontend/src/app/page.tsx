@@ -336,6 +336,24 @@ function DashboardContent() {
   }, [selectedCharId]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const fetchCharacters = async () => {
+      try {
+        const charsRes = await fetch("/api/characters", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (charsRes.ok) setAllCharacters(await charsRes.json());
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error(error);
+      }
+    };
+    void fetchCharacters();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     if (isFirstLoad) return;
     // allTournamentsにデータがあるのにフィルタ後0件の場合もローディング終了
     if (allTournaments.length > 0 && selectedTournamentIds.length === 0) {
@@ -354,13 +372,7 @@ function DashboardContent() {
       try {
         const timestamp = Date.now();
         
-        // 1. 全キャラクター情報取得
-        const charsRes = await fetch(`/api/characters?t=${timestamp}`, { cache: 'no-store', signal: controller.signal });
-        if (charsRes.ok) {
-          setAllCharacters(await charsRes.json());
-        }
-
-        // 2. 横断分析APIの呼び出し
+        // 横断分析APIの呼び出し
         if (
           selectedTournamentIds.length === 0 ||
           !filterServer ||
