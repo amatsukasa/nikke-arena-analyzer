@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
@@ -29,6 +29,25 @@ interface AdminCharacter {
   image_url: string | null;
 }
 
+const CHARACTER_PAGE_SIZE = 30;
+
+function AdminCharacterIcon({ character }: { character: AdminCharacter }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [character.image_url]);
+  return character.image_url && !failed ? (
+    <img
+      src={character.image_url}
+      alt={character.char_name}
+      className="h-full w-full object-cover"
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  ) : (
+    <span className="text-xs font-bold text-slate-500">{character.char_name.substring(0, 2)}</span>
+  );
+}
+
 export default function AdminPage() {
   const { user: currentUser, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
@@ -42,9 +61,15 @@ export default function AdminPage() {
   // キャラクター管理用ステート
   const [characters, setCharacters] = useState<AdminCharacter[]>([]);
   const [charsLoading, setCharsLoading] = useState(false);
+  const [charsError, setCharsError] = useState('');
+  const [charactersTotal, setCharactersTotal] = useState(0);
+  const [characterOffset, setCharacterOffset] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [filterRarity, setFilterRarity] = useState('');
   const [filterClass, setFilterClass] = useState('');
+  const characterRequest = useRef<AbortController | null>(null);
+  const characterRequestGeneration = useRef(0);
 
   // 大会タイトル(Championship)管理用ステート
   const [championships, setChampionships] = useState<any[]>([]);
@@ -91,11 +116,28 @@ export default function AdminPage() {
         router.push('/staff');
       } else {
         fetchUsers();
-        fetchCharacters();
         fetchChampionships();
       }
     }
   }, [isLoading, token, currentUser, router]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (isLoading || !token || currentUser?.role !== 'admin' || activeTab !== 'characters') {
+      characterRequest.current?.abort();
+      return;
+    }
+    void fetchCharacters();
+    return () => characterRequest.current?.abort();
+    // apiFetch is provided by the authenticated context; request generation
+    // prevents an older response from replacing the selected page.
+  }, [activeTab, characterOffset, debouncedSearchTerm, filterRarity, filterClass, isLoading, token, currentUser?.role]);
 
   const fetchChampionships = async () => {
     setChampsLoading(true);
@@ -220,19 +262,44 @@ export default function AdminPage() {
   };
 
   const fetchCharacters = async () => {
+    characterRequest.current?.abort();
+    const controller = new AbortController();
+    characterRequest.current = controller;
+    const generation = ++characterRequestGeneration.current;
     setCharsLoading(true);
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    setCharsError('');
     try {
-      const response = await apiFetch(`${apiUrl}/api/admin/all-characters`);
+      const params = new URLSearchParams({
+        offset: String(characterOffset),
+        limit: String(CHARACTER_PAGE_SIZE),
+      });
+      if (debouncedSearchTerm) params.set('query', debouncedSearchTerm);
+      if (filterRarity) params.set('rarity', filterRarity);
+      if (filterClass) params.set('class_type', filterClass);
+      const response = await apiFetch(`/api/admin/all-characters?${params}`, {
+        signal: controller.signal,
+      });
       if (!response.ok) {
         throw new Error('キャラクター一覧の取得に失敗しました。');
       }
       const data = await response.json();
-      setCharacters(data);
+      if (generation !== characterRequestGeneration.current) return;
+      const lastValidOffset = data.total > 0
+        ? Math.floor((data.total - 1) / CHARACTER_PAGE_SIZE) * CHARACTER_PAGE_SIZE
+        : 0;
+      if (characterOffset > lastValidOffset) {
+        setCharacterOffset(lastValidOffset);
+        return;
+      }
+      setCharacters(data.characters);
+      setCharactersTotal(data.total);
     } catch (err: any) {
-      setError(err.message || 'キャラクターデータの取得に失敗しました。');
+      if (err?.name === 'AbortError') return;
+      if (generation === characterRequestGeneration.current) {
+        setCharsError(err.message || 'キャラクターデータの取得に失敗しました。');
+      }
     } finally {
-      setCharsLoading(false);
+      if (generation === characterRequestGeneration.current) setCharsLoading(false);
     }
   };
 
@@ -403,14 +470,6 @@ export default function AdminPage() {
       setError(err.message || '削除中にエラーが発生しました。');
     }
   };
-
-  // キャラクター絞り込みフィルタ処理
-  const filteredCharacters = characters.filter((c) => {
-    const matchSearch = c.char_name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchRarity = filterRarity ? c.rarity === filterRarity : true;
-    const matchClass = filterClass ? c.class_type === filterClass : true;
-    return matchSearch && matchRarity && matchClass;
-  });
 
   if (isLoading) {
     return (
@@ -636,12 +695,12 @@ export default function AdminPage() {
                 type="text"
                 placeholder="🔍 キャラクター名で検索..."
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => { setSearchTerm(e.target.value); setCharacterOffset(0); }}
                 className="bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-full md:w-64 transition"
               />
               <select
                 value={filterRarity}
-                onChange={(e) => setFilterRarity(e.target.value)}
+                onChange={(e) => { setFilterRarity(e.target.value); setCharacterOffset(0); }}
                 className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 transition"
               >
                 <option value="">全てのレア度</option>
@@ -651,7 +710,7 @@ export default function AdminPage() {
               </select>
               <select
                 value={filterClass}
-                onChange={(e) => setFilterClass(e.target.value)}
+                onChange={(e) => { setFilterClass(e.target.value); setCharacterOffset(0); }}
                 className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 transition"
               >
                 <option value="">全てのクラス</option>
@@ -670,7 +729,12 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {charsLoading ? (
+          {charsError ? (
+            <div className="py-8 text-center text-sm text-red-300">
+              <p>{charsError}</p>
+              <button onClick={() => void fetchCharacters()} className="mt-3 rounded bg-indigo-600 px-4 py-2 font-bold text-white">再試行</button>
+            </div>
+          ) : charsLoading ? (
             <div className="text-center py-8 text-slate-400 text-sm">キャラクターデータを取得中...</div>
           ) : (
             <div className="overflow-x-auto border border-slate-800 rounded-lg">
@@ -690,30 +754,18 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800 text-slate-300">
-                  {filteredCharacters.length === 0 ? (
+                  {characters.length === 0 ? (
                     <tr>
                       <td colSpan={10} className="p-8 text-center text-slate-500">
                         該当するキャラクターが見つかりません。
                       </td>
                     </tr>
                   ) : (
-                    filteredCharacters.map((c) => (
+                    characters.map((c) => (
                       <tr key={c.char_id} className="hover:bg-slate-900/50 transition">
                         <td className="p-4">
                           <div className="w-10 h-10 rounded-full border border-slate-700 overflow-hidden bg-slate-950 flex items-center justify-center">
-                            {c.image_url ? (
-                              <img
-                                src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${c.image_url}`}
-                                alt={c.char_name}
-                                className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  // 画像読み込み失敗時は代替テキストを表示
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                            ) : (
-                              <span className="text-slate-500 text-xs font-bold">{c.char_name.substring(0, 2)}</span>
-                            )}
+                            <AdminCharacterIcon character={c} />
                           </div>
                         </td>
                         <td className="p-4 font-semibold text-slate-200">{c.char_name}</td>
@@ -767,6 +819,13 @@ export default function AdminPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!charsError && charactersTotal > 0 && (
+            <div className="mt-4 flex items-center justify-between gap-3 text-sm text-slate-400">
+              <button disabled={characterOffset === 0 || charsLoading} onClick={() => setCharacterOffset(Math.max(0, characterOffset - CHARACTER_PAGE_SIZE))} className="rounded border border-slate-700 px-4 py-2 disabled:opacity-40">前へ</button>
+              <span>{Math.floor(characterOffset / CHARACTER_PAGE_SIZE) + 1} / {Math.max(1, Math.ceil(charactersTotal / CHARACTER_PAGE_SIZE))} ページ（{charactersTotal}件）</span>
+              <button disabled={characterOffset + CHARACTER_PAGE_SIZE >= charactersTotal || charsLoading} onClick={() => setCharacterOffset(characterOffset + CHARACTER_PAGE_SIZE)} className="rounded border border-slate-700 px-4 py-2 disabled:opacity-40">次へ</button>
             </div>
           )}
         </div>

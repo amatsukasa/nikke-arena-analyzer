@@ -2,6 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Avoid one analysis request spawning a CPU thread per core in the single-worker API.
+ENV OPENBLAS_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    OPENCV_NUM_THREADS=1
+
 # システム依存ライブラリのインストール
 RUN apt-get update && apt-get install -y \
     libgl1 \

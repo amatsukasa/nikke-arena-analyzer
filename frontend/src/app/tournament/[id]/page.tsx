@@ -18,6 +18,7 @@ import { hasCompleteRegistrationStructure, normalizeAnalyzedRegistrationTeams, n
 import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } from "../../../lib/matchRegistration";
 import { usePlayerIconCropSettings } from "../../../hooks/usePlayerIconCropSettings";
 import { useCharacterCatalog } from "../../../hooks/useCharacterCatalog";
+import { playerIconUrl } from "../../../lib/playerIconUrl";
 
 export default function TournamentDetailRouter() {
   const params = useParams();
@@ -84,6 +85,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const formRef = useRef<HTMLDivElement>(null);
   const seedFieldRef = useRef<HTMLDivElement>(null);
   const [playerIconCropSettings, setPlayerIconCropSettings] = usePlayerIconCropSettings();
+  const [playerIconRevision, setPlayerIconRevision] = useState(0);
 
   const [seed, setSeed] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
@@ -132,14 +134,14 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     }
   }, [tournamentId]);
 
-  const loadPlayerDetails = async (targetSeed = seed) => {
+  const loadPlayerDetails = async (targetSeed = seed, iconRevisionOverride = playerIconRevision) => {
     if (!tournamentId) return;
     setIsLoadingRegisteredDecks(true);
     try {
       const response = await fetch(`/api/tournaments/${tournamentId}/players/${targetSeed}/details`);
       const data = await response.json();
       const iconUrl = data.player?.icon_url;
-      setFormPlayerIcon(iconUrl ? `${iconUrl}?t=${Date.now()}` : "");
+      setFormPlayerIcon(playerIconUrl(iconUrl, iconRevisionOverride) ?? "");
       const savedTeams = normalizeSavedRegistrationTeams(data);
       setRegisteredDecks(data.decks || []);
       setSelectedTeams(savedTeams);
@@ -265,8 +267,10 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       const response = await fetch("/api/upload/player-icon", { method: "POST", body: formData, credentials: "include" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.detail || `アップロードに失敗しました (HTTP ${response.status})`);
-      setFormPlayerIcon(`${data.url}?t=${Date.now()}`);
-      await loadPlayerDetails(seed);
+      const revision = Date.now();
+      setPlayerIconRevision(revision);
+      setFormPlayerIcon(playerIconUrl(data.url, revision) ?? "");
+      await loadPlayerDetails(seed, revision);
       await fetchBracket();
     } finally {
       setIsUploadingIcon(false);
@@ -280,9 +284,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   // プレイヤーのアイコンURLを取得
   const getPlayerIconUrl = (player: any) => {
     if (!player) return null;
-    const bust = `?t=${Date.now()}`;
-    if (player.icon_url) return player.icon_url.includes("?") ? player.icon_url : player.icon_url + bust;
-    return null;
+    return playerIconUrl(player.icon_url, playerIconRevision);
   };
 
   const getPlayerBySeed = (seedNum: number) => {

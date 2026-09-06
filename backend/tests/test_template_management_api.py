@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from sqlalchemy import event
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -41,7 +42,7 @@ class TemplateManagementApiTests(unittest.TestCase):
         self.db.add(row); self.db.flush(); return row
 
     def test_list_disable_restore_and_permanent_delete(self):
-        result = main.list_character_templates(self.admin, self.db)
+        result = main.list_character_templates(self.admin, self.db, "active", 0, 30, "")
         group = result["characters"][0]
         self.assertEqual([item["generation"] for item in group["active"]], [0, 1])
         self.assertTrue(group["active"][1]["representative"])
@@ -55,6 +56,102 @@ class TemplateManagementApiTests(unittest.TestCase):
         main.permanently_delete_character_template(1, "char_1_001.png", "DELETE", self.admin, self.db)
         self.assertFalse((Path(self.temp.name) / "template_quarantine" / "char_1_001.png").exists())
         self.assertEqual(self.db.query(models.CharacterTemplateAudit).count(), 4)
+
+    def test_every_successful_admin_mutation_invalidates_matcher_cache(self):
+        with patch.object(main, "_invalidate_template_matcher_cache") as invalidate:
+            main.disable_character_template(1, "char_1_001.png", {}, self.admin, self.db)
+            main.restore_character_template(1, "char_1_001.png", self.admin, self.db)
+            main.disable_character_template(1, "char_1_001.png", {}, self.admin, self.db)
+            main.permanently_delete_character_template(
+                1, "char_1_001.png", "DELETE", self.admin, self.db
+            )
+        self.assertEqual(invalidate.call_count, 4)
+
+    def test_template_listing_hashes_only_requested_page(self):
+        root = Path(self.temp.name) / "templates"
+        for generation in range(2, 37):
+            (root / f"char_1_{generation:03d}.png").write_bytes(str(generation).encode())
+        with patch.object(main, "describe_template", wraps=main.describe_template) as describe:
+            result = main.list_character_templates(self.admin, self.db, "active", 0, 30, "")
+        self.assertEqual(result["total"], 37)
+        self.assertEqual(sum(len(group["active"]) for group in result["characters"]), 30)
+        self.assertEqual(describe.call_count, 30)
+
+    def test_admin_character_listing_is_filtered_paged_and_scans_templates_once(self):
+        for character_id in range(3, 68):
+            self.db.add(models.Character(
+                id=character_id,
+                name=f"Character {character_id:03d}",
+                rarity="SSR" if character_id % 2 else "SR",
+                class_type="火力型" if character_id % 3 else "支援型",
+            ))
+        self.db.commit()
+        statements = []
+
+        def record_sql(*args):
+            statements.append(args[2])
+
+        event.listen(engine, "before_cursor_execute", record_sql)
+        try:
+            with patch.object(main, "list_template_paths", wraps=main.list_template_paths) as listing:
+                result = main.get_all_characters_admin(
+                    self.admin, self.db, offset=0, limit=30,
+                    query="Character", rarity="SSR", class_type="火力型",
+                )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_sql)
+
+        self.assertLessEqual(len(result["characters"]), 30)
+        self.assertEqual(result["offset"], 0)
+        self.assertEqual(result["limit"], 30)
+        self.assertEqual(result["page"], 1)
+        self.assertEqual(result["has_next"], result["total"] > 30)
+        self.assertTrue(all(row["rarity"] == "SSR" for row in result["characters"]))
+        self.assertTrue(all(row["class_type"] == "火力型" for row in result["characters"]))
+        self.assertEqual(listing.call_count, 1)
+        select_statements = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+        self.assertEqual(len(select_statements), 2)
+
+    def test_admin_character_listing_page_boundaries(self):
+        self.db.query(models.Character).delete()
+        self.db.commit()
+        for total in (0, 1, 30, 31, 60, 61):
+            with self.subTest(total=total):
+                self.db.query(models.Character).delete()
+                self.db.add_all([
+                    models.Character(id=character_id, name=f"Character {character_id:03d}", rarity="SSR")
+                    for character_id in range(1, total + 1)
+                ])
+                self.db.commit()
+
+                first = main.get_all_characters_admin(
+                    self.admin, self.db, offset=0, limit=30,
+                    query="", rarity="", class_type="",
+                )
+                self.assertEqual(first["total"], total)
+                self.assertEqual(len(first["characters"]), min(total, 30))
+                self.assertEqual(first["page"], 1)
+                self.assertEqual(first["has_next"], total > 30)
+
+                if total > 30:
+                    second = main.get_all_characters_admin(
+                        self.admin, self.db, offset=30, limit=30,
+                        query="", rarity="", class_type="",
+                    )
+                    self.assertEqual(second["total"], total)
+                    self.assertEqual(len(second["characters"]), min(total - 30, 30))
+                    self.assertEqual(second["page"], 2)
+                    self.assertEqual(second["has_next"], total > 60)
+
+                if total > 60:
+                    third = main.get_all_characters_admin(
+                        self.admin, self.db, offset=60, limit=30,
+                        query="", rarity="", class_type="",
+                    )
+                    self.assertEqual(third["total"], total)
+                    self.assertEqual(len(third["characters"]), total - 60)
+                    self.assertEqual(third["page"], 3)
+                    self.assertFalse(third["has_next"])
 
     def test_review_keep_does_not_move_predicted_template(self):
         tournament = models.Tournament(name="T", date=date(2026, 1, 1), created_by=self.user_row.id)
