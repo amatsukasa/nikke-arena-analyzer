@@ -15,6 +15,8 @@ sys.modules.setdefault("pytesseract", MagicMock())
 
 from services.image_processor import (
     CHARACTER_CROP_CENTERS,
+    CHARACTER_CROP_X_OFFSETS,
+    _character_crop_left,
     NORMALIZED_MODAL_WIDTH,
     _aligned_character_centers,
     _extract_modal_roi,
@@ -28,6 +30,16 @@ from services.image_processor import (
 
 
 class ImageProcessorModalTests(unittest.TestCase):
+    def test_character_crop_offsets_apply_to_every_shared_mode_slot(self):
+        self.assertEqual(CHARACTER_CROP_X_OFFSETS, (-7, -6, -5, -2, -2))
+        self.assertEqual(
+            tuple(
+                _character_crop_left(center, index)
+                for index, center in enumerate((154, 348, 542, 736, 931))
+            ),
+            (67, 262, 457, 654, 849),
+        )
+
     def test_pre_cropped_image_skips_modal_detection(self):
         image = np.zeros((278, 538, 3), dtype=np.uint8)
         image[40:220, 100:420] = 255
