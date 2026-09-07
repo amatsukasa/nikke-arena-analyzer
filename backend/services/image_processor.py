@@ -8,6 +8,11 @@ from services.collection_classifier import analyze_collection
 
 PREVIEW_WEBP_QUALITY = 55
 LOSSLESS_PNG_COMPRESSION = 9
+NORMALIZED_MODAL_WIDTH = 1080
+CHARACTER_CROP_CENTERS = (152, 346, 540, 734, 928)
+MAX_CHARACTER_ALIGNMENT_SHIFT = 24
+ROUND_TAB_LOWER_CYAN = np.array([70, 50, 50])
+ROUND_TAB_UPPER_CYAN = np.array([120, 255, 255])
 
 
 def write_lossless_png(path, image):
@@ -50,6 +55,134 @@ def _extract_modal_roi(img, pre_cropped=False):
     return (0, 0, img.shape[1], img.shape[0])
 
 
+def _aligned_character_centers(x_anchor, anchor_is_reliable):
+    """Apply one conservative horizontal translation to all five card crops."""
+    if not anchor_is_reliable:
+        return CHARACTER_CROP_CENTERS, 0
+    reference = min(CHARACTER_CROP_CENTERS, key=lambda center: abs(center - x_anchor))
+    shift = int(x_anchor - reference)
+    if abs(shift) > MAX_CHARACTER_ALIGNMENT_SHIFT:
+        return CHARACTER_CROP_CENTERS, 0
+    return tuple(center + shift for center in CHARACTER_CROP_CENTERS), shift
+
+
+def _is_alignment_anchor_reliable(width, height, area, modal_height):
+    return (
+        0.12 * NORMALIZED_MODAL_WIDTH <= width <= 0.25 * NORMALIZED_MODAL_WIDTH
+        and 0.04 * modal_height <= height <= 0.20 * modal_height
+        and area >= 0.20 * width * height
+    )
+
+
+def _find_round_tab_anchor(normalized_modal):
+    hsv = cv2.cvtColor(normalized_modal, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, ROUND_TAB_LOWER_CYAN, ROUND_TAB_UPPER_CYAN)
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    modal_height = normalized_modal.shape[0]
+    y_limit = int(modal_height * 0.17)
+    valid = [contour for contour in contours if cv2.boundingRect(contour)[1] < y_limit]
+    if not valid:
+        return 400, 540, False
+    contour = max(valid, key=cv2.contourArea)
+    x, y, width, height = cv2.boundingRect(contour)
+    reliable = _is_alignment_anchor_reliable(
+        width,
+        height,
+        cv2.contourArea(contour),
+        modal_height,
+    )
+    return y, x + width // 2, reliable
+
+
+def _find_character_card_centers(normalized_modal, global_shift, fallback_centers):
+    """Use the five ROUND tab bounds as the five character-column centers."""
+    gray = cv2.cvtColor(normalized_modal, cv2.COLOR_BGR2GRAY)
+    height = normalized_modal.shape[0]
+    tab_band = gray[:int(height * 0.22)]
+    if tab_band.size == 0:
+        return fallback_centers, False
+
+    edges = cv2.Canny(tab_band, 50, 150)
+    contours, _ = cv2.findContours(
+        edges,
+        cv2.RETR_LIST,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    candidates = []
+    for contour in contours:
+        x, y, width, tab_height = cv2.boundingRect(contour)
+        if (
+            0.14 * NORMALIZED_MODAL_WIDTH <= width <= 0.22 * NORMALIZED_MODAL_WIDTH
+            and 0.08 * height <= tab_height <= 0.20 * height
+            and y < 0.17 * height
+        ):
+            candidates.append((x, x + width, x + width / 2))
+
+    detected_pairs = []
+    for expected_center in CHARACTER_CROP_CENTERS:
+        expected_center += global_shift
+        nearby = [
+            candidate
+            for candidate in candidates
+            if abs(candidate[2] - expected_center) <= 35
+        ]
+        if not nearby:
+            return fallback_centers, False
+        left, right, _ = min(
+            nearby,
+            key=lambda candidate: abs(candidate[2] - expected_center),
+        )
+        detected_pairs.append((left, right))
+
+    widths = [right - left for left, right in detected_pairs]
+    centers = tuple(round((left + right) / 2) for left, right in detected_pairs)
+    gaps = [centers[index + 1] - centers[index] for index in range(4)]
+    if not (
+        all(160 <= width <= 205 for width in widths)
+        and all(185 <= gap <= 210 for gap in gaps)
+        and all(80 <= center <= NORMALIZED_MODAL_WIDTH - 80 for center in centers)
+    ):
+        return fallback_centers, False
+    return centers, True
+
+
+def _resolve_round_character_centers(rounds_data):
+    """Reuse ROUND01's reliable card grid for every image in the same upload."""
+    if not rounds_data:
+        return []
+
+    first_round = rounds_data[0]
+    first_fallback, first_shift = _aligned_character_centers(
+        first_round["x_anchor"],
+        first_round["alignment_anchor_is_reliable"],
+    )
+    first_centers, first_reliable = _find_character_card_centers(
+        first_round["img"],
+        first_shift,
+        first_fallback,
+    )
+    if first_reliable:
+        return [first_centers] * len(rounds_data)
+
+    centers_by_round = []
+    for round_data in rounds_data:
+        fallback, global_shift = _aligned_character_centers(
+            round_data["x_anchor"],
+            round_data["alignment_anchor_is_reliable"],
+        )
+        centers, _ = _find_character_card_centers(
+            round_data["img"],
+            global_shift,
+            fallback,
+        )
+        centers_by_round.append(centers)
+    return centers_by_round
+
+
 def process_images(
     image_paths,
     tournament_id,
@@ -62,9 +195,6 @@ def process_images(
 ):
     analysis_id = secrets.token_hex(6)
     # 1. Round1〜5の自動ソート (水色のタブのX座標で判定)
-    lower_cyan = np.array([70, 50, 50])
-    upper_cyan = np.array([120, 255, 255])
-    
     rounds_data = []
     
     pre_cropped_flags = pre_cropped_flags or []
@@ -86,47 +216,29 @@ def process_images(
         img_modal = img[m_y:m_y+m_h, m_x:m_x+m_w]
         
         # モーダルを 1080px 幅に正規化
-        scale = 1080.0 / m_w
-        img_res = cv2.resize(img_modal, (1080, int(m_h * scale)))
+        scale = NORMALIZED_MODAL_WIDTH / m_w
+        img_res = cv2.resize(
+            img_modal,
+            (NORMALIZED_MODAL_WIDTH, int(m_h * scale)),
+        )
         
-        # モーダル内でシアンのタブを探してY座標の基準にする
-        hsv = cv2.cvtColor(img_res, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, lower_cyan, upper_cyan)
-        cnts_cyan, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        y_anchor_tab = 400
-        x_anchor_tab = 540  # デフォルト: 画面中央
-        if cnts_cyan:
-            valid_cnts = []
-            modal_h = img_res.shape[0]
-            y_limit = int(modal_h * 0.17)
-            
-            for cnt in cnts_cyan:
-                x_t, y_t, w_t, h_t = cv2.boundingRect(cnt)
-                if y_t < y_limit:
-                    valid_cnts.append(cnt)
-            
-            if valid_cnts:
-                c = max(valid_cnts, key=cv2.contourArea)
-            else:
-                c = None
-                
-            if c is not None:
-                x_tab, y_tab, w_tab, h_tab = cv2.boundingRect(c)
-                # タブの中心X座標を記録（左端ほどROUND01に近い）
-                x_anchor_tab = x_tab + w_tab // 2
-                y_anchor_tab = y_tab
+        # モーダル内でシアンのタブを探し、Round順・Y位置・X補正に使う。
+        y_anchor_tab, x_anchor_tab, alignment_anchor_is_reliable = (
+            _find_round_tab_anchor(img_res)
+        )
             
         rounds_data.append({
             "path": path, 
             "img": img_res, 
             "y_tab": y_anchor_tab,
             "source_image_index": image_index,
-            "x_anchor": x_anchor_tab  # ラウンド判定用X座標
+            "x_anchor": x_anchor_tab,  # ラウンド判定用X座標
+            "alignment_anchor_is_reliable": alignment_anchor_is_reliable,
         })
         
     # X座標の昇順でソート（左=ROUND01 ～ 右=ROUND05）
     rounds_data.sort(key=lambda r: r["x_anchor"])
+    centers_by_round = _resolve_round_character_centers(rounds_data)
         
     # プレイヤー情報の取得 (自動抽出は廃止し、デフォルト値を返す)
     player_name = f"Player {seed_number}"
@@ -135,7 +247,6 @@ def process_images(
     # 2. キャラクターアイコンの切り抜き
     y_offset = 200 
     w_crop, h_crop = 160, 160
-    centers = [152, 346, 540, 734, 928]
     
     # 保存先ディレクトリ
     cropped_dir = "uploads/cropped"
@@ -146,7 +257,7 @@ def process_images(
     
     teams = []
     
-    for r_idx, r_data in enumerate(rounds_data):
+    for r_idx, (r_data, centers) in enumerate(zip(rounds_data, centers_by_round)):
         img = r_data["img"]
         y_tab_r = r_data["y_tab"]
         y_crop = y_tab_r + y_offset
