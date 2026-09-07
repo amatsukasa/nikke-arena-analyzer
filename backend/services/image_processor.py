@@ -10,6 +10,9 @@ PREVIEW_WEBP_QUALITY = 55
 LOSSLESS_PNG_COMPRESSION = 9
 NORMALIZED_MODAL_WIDTH = 1080
 CHARACTER_CROP_CENTERS = (152, 346, 540, 734, 928)
+# Keep the ROUND-tab grid as the single source of card positions, then apply
+# the small per-column optical correction shared by every tournament mode.
+CHARACTER_CROP_X_OFFSETS = (-7, -6, -5, -2, -2)
 MAX_CHARACTER_ALIGNMENT_SHIFT = 24
 ROUND_TAB_LOWER_CYAN = np.array([70, 50, 50])
 ROUND_TAB_UPPER_CYAN = np.array([120, 255, 255])
@@ -183,6 +186,10 @@ def _resolve_round_character_centers(rounds_data):
     return centers_by_round
 
 
+def _character_crop_left(center_x, character_index, crop_width=160):
+    return int(center_x - crop_width / 2) + CHARACTER_CROP_X_OFFSETS[character_index]
+
+
 def process_images(
     image_paths,
     tournament_id,
@@ -264,7 +271,7 @@ def process_images(
         
         team = []
         for c_idx, center_x in enumerate(centers):
-            x_crop = int(center_x - w_crop / 2)
+            x_crop = _character_crop_left(center_x, c_idx, w_crop)
             
             # 画像切り抜き (境界チェック付き)
             y_start = max(0, y_crop)

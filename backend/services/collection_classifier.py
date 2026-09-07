@@ -8,6 +8,8 @@ never be sufficient to report a collection.
 
 from __future__ import annotations
 
+import base64
+from functools import lru_cache
 import logging
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,7 @@ COLLECTION_VALUES = {
 
 NORMALIZED_SIZE = 160
 # x1, y1, x2, y2. This is intentionally much narrower than the old color ROI.
-COLLECTION_ROI = (0, 45, 32, 105)
+COLLECTION_ROI = (0, 43, 32, 105)
 COLLECTION_MATCH_MASK_PADDING = 4
 
 
@@ -89,12 +91,119 @@ HEXAGON_PROBE_CENTER_Y = (33, 37)
 HEXAGON_PROBE_MIN_COLOR_DENSITY = 0.60
 HEXAGON_PROBE_MIN_CONTRAST_SCORE = 0.48
 HEXAGON_PROBE_MIN_DENSITY_DELTA = 0.25
+BADGE_TEMPLATE_SEARCH_ROI = (0, 58, 38, 102)
+BADGE_TEMPLATE_MIN_SCORE = 0.22
+BADGE_TEMPLATE_MIN_COLOR_PIXELS = 40
+BADGE_TEMPLATE_EXPECTED_X = (0, 5)
+BADGE_TEMPLATE_EXPECTED_Y = (58, 66)
+# A compact, user-supplied line drawing of the Collection badge. Keeping the
+# tiny reference in-module avoids runtime files, I/O, and deployment drift.
+BADGE_TEMPLATE_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACkAAAAuCAYAAAC1ZTBOAAAACXBIWXMAABYlAAAWJQFJUiTw"
+    "AAAAG3RFWHRTb2Z0d2FyZQBDZWxzeXMgU3R1ZGlvIFRvb2zBp+F8AAABQ0lEQVRYhe2ZURKD"
+    "MAhE4f6X7Q3oRycdjRICbMSx3T+1sm9SQwhhESGEmHkXSEQYEpiIOAt5Bre9h4ANQ86MHAo2"
+    "BOk1z8K6IDNmqXdnIJGTIgJrQqInQSSuCrkKLuJzgLwKTvM8891BVgDuYBR/FpFyuF49DxOR"
+    "tIsyKkUN9g+Z1W9AmmkDsEqlIHuAHsR63sdSk3gUUgOYlTbio1KvFNLKz+WQU2t2FeRWZvXz"
+    "8XqVQXoqeujsRsH1PkNILT14IaMLxTSkZmaBQrayEUhL3mQNgYwKtt9GQnqWwUhc2Eiu6AUt"
+    "+btH63Am3rPrySv0h0TpANl0B9jDvrt1MO7QINDS2C16QZbvaVdtZZPeA/f9zag/ufREAdGf"
+    "jAb0xJqNd1nPPPP+804fvMaobxp6Iqa1WdLf8aqzRSJgyYaCJMLXk01vi4vB0qmCP8wAAAAA"
+    "SUVORK5CYII="
+)
 
 
 def _normalized_face(face: np.ndarray) -> np.ndarray:
     if face.shape[:2] == (NORMALIZED_SIZE, NORMALIZED_SIZE):
         return face
     return cv2.resize(face, (NORMALIZED_SIZE, NORMALIZED_SIZE))
+
+
+@lru_cache(maxsize=1)
+def _badge_template_edges() -> np.ndarray:
+    encoded = np.frombuffer(base64.b64decode(BADGE_TEMPLATE_PNG_BASE64), dtype=np.uint8)
+    template = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+    return cv2.Canny(template, 40, 120)
+
+
+def _badge_template_match(normalized: np.ndarray) -> dict[str, Any] | None:
+    """Find the fixed-position badge outline with small scale/position tolerance."""
+    x1, y1, x2, y2 = BADGE_TEMPLATE_SEARCH_ROI
+    search = cv2.cvtColor(normalized[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    search_edges = cv2.Canny(cv2.GaussianBlur(search, (3, 3), 0), 30, 100)
+    template_edges = _badge_template_edges()
+    best: dict[str, Any] | None = None
+    for height in range(32, 41):
+        width = round(template_edges.shape[1] * height / template_edges.shape[0])
+        if width > search_edges.shape[1] or height > search_edges.shape[0]:
+            continue
+        template = cv2.resize(template_edges, (width, height), interpolation=cv2.INTER_AREA)
+        scores = cv2.matchTemplate(search_edges, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(scores)
+        candidate = {
+            "score": round(float(score), 4),
+            "bbox": [x1 + location[0], y1 + location[1], width, height],
+        }
+        if best is None or candidate["score"] > best["score"]:
+            best = candidate
+    return best
+
+
+def _template_supported_candidate(
+    hue: np.ndarray,
+    saturation: np.ndarray,
+    template_match: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Use badge shape plus local rarity color as conservative presence evidence."""
+    if template_match is None or template_match["score"] < BADGE_TEMPLATE_MIN_SCORE:
+        return None
+    x, absolute_y, width, height = template_match["bbox"]
+    # Keep the match close to the normalized badge position while tolerating
+    # the measured 1-3 px variation caused by compression and interpolation.
+    if not (
+        BADGE_TEMPLATE_EXPECTED_X[0] <= x <= BADGE_TEMPLATE_EXPECTED_X[1]
+        and BADGE_TEMPLATE_EXPECTED_Y[0]
+        <= absolute_y
+        <= BADGE_TEMPLATE_EXPECTED_Y[1]
+    ):
+        return None
+    roi_y = absolute_y - COLLECTION_ROI[1]
+    left = max(0, x)
+    top = max(0, roi_y)
+    right = min(hue.shape[1], x + width)
+    bottom = min(hue.shape[0], roi_y + height)
+    if left >= right or top >= bottom:
+        return None
+
+    best_rarity = None
+    best_count = 0
+    for rarity, (low, high) in RARITY_HSV_RANGES.items():
+        count = int(np.count_nonzero(
+            (hue[top:bottom, left:right] >= low)
+            & (hue[top:bottom, left:right] <= high)
+            & (saturation[top:bottom, left:right] >= MIN_SATURATION)
+        ))
+        if count > best_count:
+            best_rarity = rarity
+            best_count = count
+    if best_rarity is None or best_count < BADGE_TEMPLATE_MIN_COLOR_PIXELS:
+        return None
+
+    center_x = x + (width - 1) / 2.0
+    center_y = roi_y + (height - 1) / 2.0
+    contour = _hexagon_points(center_x, center_y, width, height).reshape((-1, 1, 2))
+    area = float(cv2.contourArea(contour))
+    shape_score = min(1.0, 0.55 + float(template_match["score"]))
+    return {
+        "rarity": best_rarity,
+        "area": round(area, 3),
+        "bbox": [int(x), int(roi_y), int(width), int(height)],
+        "solidity": 1.0,
+        "fill_ratio": round(area / float(width * height), 4),
+        "shape_score": round(shape_score, 4),
+        "shape_profile": "badge_template",
+        "template_score": template_match["score"],
+        "color_pixels": best_count,
+        "_contour": contour,
+    }
 
 
 def _bounded_score(value: float, low: float, high: float) -> float:
@@ -357,6 +466,7 @@ def analyze_collection(
         }
 
     normalized = _normalized_face(face)
+    template_match = None
     x1, y1, x2, y2 = COLLECTION_ROI
     roi = normalized[y1:y2, x1:x2]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -374,6 +484,16 @@ def analyze_collection(
             candidate = _hexagon_probe_candidate(mask, rarity)
         if candidate is not None:
             candidates.append(candidate)
+
+    if not candidates:
+        template_match = _badge_template_match(normalized)
+        template_candidate = _template_supported_candidate(
+            hue,
+            saturation,
+            template_match,
+        )
+        if template_candidate is not None:
+            candidates.append(template_candidate)
 
     candidates.sort(
         key=lambda item: (item["shape_score"], item["area"]),
@@ -400,6 +520,7 @@ def analyze_collection(
         debug_info = {
             "reason": "no_badge_shaped_component",
             "roi": list(COLLECTION_ROI),
+            "badge_template_match": template_match,
             "candidates": public_candidates,
         }
         logger.debug("Collection absent: %s", debug_info)
@@ -447,6 +568,7 @@ def analyze_collection(
 
     debug_info = {
         "roi": list(COLLECTION_ROI),
+        "badge_template_match": template_match,
         "selected_bbox": list(best["bbox"]),
         "shape_score": best["shape_score"],
         "rarity_margin": round(rarity_margin, 4),

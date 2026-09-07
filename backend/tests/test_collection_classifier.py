@@ -61,6 +61,56 @@ def _synthetic_compact_badge(hue: int, *, x_offset: int = 0) -> np.ndarray:
 
 
 class CollectionClassifierTests(unittest.TestCase):
+    def test_collection_roi_extends_two_pixels_upward(self):
+        self.assertEqual(collection_classifier.COLLECTION_ROI, (0, 43, 32, 105))
+
+    def test_badge_template_separates_badge_from_existing_negative_fixture(self):
+        positive_face = cv2.imread(str(FIXTURE_DIR / "emilia_sr15.png"))
+        positive = collection_classifier._badge_template_match(positive_face)
+        negative_face = cv2.imread(str(FIXTURE_DIR / "anis_no_collection.png"))
+        negative = collection_classifier._badge_template_match(negative_face)
+        self.assertIsNotNone(positive)
+        self.assertIsNotNone(negative)
+        self.assertGreaterEqual(positive["score"], collection_classifier.BADGE_TEMPLATE_MIN_SCORE)
+        self.assertLess(negative["score"], collection_classifier.BADGE_TEMPLATE_MIN_SCORE)
+
+    def test_badge_template_and_local_color_can_rescue_presence(self):
+        roi_height = collection_classifier.COLLECTION_ROI[3] - collection_classifier.COLLECTION_ROI[1]
+        hue = np.full((roi_height, 32), 90, dtype=np.uint8)
+        saturation = np.full((roi_height, 32), 220, dtype=np.uint8)
+        candidate = collection_classifier._template_supported_candidate(
+            hue,
+            saturation,
+            {"score": 0.30, "bbox": [1, 61, 34, 38]},
+        )
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["rarity"], "r")
+        self.assertEqual(candidate["shape_profile"], "badge_template")
+
+    def test_badge_template_rescue_rejects_wrong_fixed_position(self):
+        roi_height = collection_classifier.COLLECTION_ROI[3] - collection_classifier.COLLECTION_ROI[1]
+        hue = np.full((roi_height, 32), 90, dtype=np.uint8)
+        saturation = np.full((roi_height, 32), 220, dtype=np.uint8)
+        candidate = collection_classifier._template_supported_candidate(
+            hue,
+            saturation,
+            {"score": 0.30, "bbox": [6, 61, 34, 38]},
+        )
+        self.assertIsNone(candidate)
+
+    def test_badge_template_rescue_tolerates_measured_position_variation(self):
+        roi_height = collection_classifier.COLLECTION_ROI[3] - collection_classifier.COLLECTION_ROI[1]
+        hue = np.full((roi_height, 32), 145, dtype=np.uint8)
+        saturation = np.full((roi_height, 32), 220, dtype=np.uint8)
+        for x, y in ((0, 58), (5, 66)):
+            with self.subTest(x=x, y=y):
+                candidate = collection_classifier._template_supported_candidate(
+                    hue,
+                    saturation,
+                    {"score": 0.30, "bbox": [x, y, 34, 38]},
+                )
+                self.assertIsNotNone(candidate)
+
     def test_classifies_all_rarities_and_level_bands(self):
         cases = [
             (90, False, "r_0_14"),
