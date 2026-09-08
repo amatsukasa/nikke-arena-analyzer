@@ -54,6 +54,21 @@ class Tournament(TournamentBase):
     published_by: Optional[int] = None
     play_server: Optional[str] = None
     provider_game_start_date: Optional[date_type] = None
+    game_start_date: Optional[date_type] = None
+    display_order: Optional[int] = None
+    is_champion_arena: bool = False
+    has_match_data: bool = True
+    model_config = ConfigDict(from_attributes=True)
+
+class ChampionArenaTournamentBase(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    game_start_date: Optional[date_type] = None
+    display_order: Optional[int] = None
+    is_champion_arena: bool = True
+    has_match_data: bool = False
+
+class ChampionArenaTournament(ChampionArenaTournamentBase):
+    id: int
     model_config = ConfigDict(from_attributes=True)
 
 class PlayerBase(BaseModel):
