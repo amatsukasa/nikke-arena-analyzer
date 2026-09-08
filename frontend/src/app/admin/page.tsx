@@ -53,6 +53,10 @@ export default function AdminPage() {
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<'users' | 'characters' | 'championships' | 'templates'>('users');
+  const [templateCharacterFilter, setTemplateCharacterFilter] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
 
   // ユーザー管理用ステート
   const [users, setUsers] = useState<User[]>([]);
@@ -553,6 +557,7 @@ export default function AdminPage() {
           </button>
           <button
             onClick={() => {
+              setTemplateCharacterFilter(null);
               setActiveTab('templates');
               setError('');
               setMessage('');
@@ -792,11 +797,23 @@ export default function AdminPage() {
                         <td className="p-4 text-slate-400 text-xs">{c.manufacturer || '-'}</td>
                         <td className="p-4 text-slate-400">{c.weapon || '-'}</td>
                         <td className="p-4">
-                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                            c.template_count > 0 ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'bg-slate-800 text-slate-500'
-                          }`}>
-                            {c.template_count} 枚
-                          </span>
+                          {c.template_count > 0 ? (
+                            <button
+                              type="button"
+                              aria-label={`${c.char_name}のテンプレート${c.template_count}枚を見る`}
+                              onClick={() => {
+                                setTemplateCharacterFilter({ id: c.char_id, name: c.char_name });
+                                setActiveTab('templates');
+                              }}
+                              className="whitespace-nowrap rounded px-2 py-0.5 text-xs font-bold text-indigo-300 underline decoration-indigo-400/70 underline-offset-2 transition hover:bg-indigo-500/20 hover:text-indigo-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                            >
+                              {c.template_count}枚を見る →
+                            </button>
+                          ) : (
+                            <span className="whitespace-nowrap px-2 py-0.5 text-xs text-slate-500">
+                              0枚
+                            </span>
+                          )}
                         </td>
                         <td className="p-4 text-right">
                           <div className="flex justify-end gap-2">
@@ -903,7 +920,12 @@ export default function AdminPage() {
       )}
 
       {/* --- タブ内容4: Characterテンプレート管理 --- */}
-      {activeTab === 'templates' && <CharacterTemplatesAdmin embedded />}
+      {activeTab === 'templates' && (
+        <CharacterTemplatesAdmin
+          embedded
+          initialCharacterFilter={templateCharacterFilter}
+        />
+      )}
 
       {/* --- 大会タイトル追加・編集用モーダル --- */}
       {isChampModalOpen && (

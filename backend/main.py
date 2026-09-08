@@ -1033,19 +1033,31 @@ def list_character_templates(
     offset: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=100),
     query: str = Query("", max_length=100),
+    character_id: int | None = Query(None, ge=1),
 ):
     _, active_root, quarantine_root = _template_roots()
+    exact_character_id = character_id if isinstance(character_id, int) else None
     selected_paths = list_template_paths(active_root if state == "active" else quarantine_root)
+    if exact_character_id is not None:
+        selected_paths = [
+            path for path in selected_paths
+            if parse_template_name(path.name).character_id == exact_character_id
+        ]
     character_ids = {
         parse_template_name(path.name).character_id for path in selected_paths
     }
     characters = {
         row.id: row for row in db.query(models.Character).filter(models.Character.id.in_(character_ids or {-1})).all()
     }
-    pending_counts = dict(db.query(
+    pending_query = db.query(
         models.CharacterTemplateReview.predicted_character_id,
         func.count(models.CharacterTemplateReview.id),
-    ).filter(models.CharacterTemplateReview.status == "pending").group_by(
+    ).filter(models.CharacterTemplateReview.status == "pending")
+    if exact_character_id is not None:
+        pending_query = pending_query.filter(
+            models.CharacterTemplateReview.predicted_character_id == exact_character_id
+        )
+    pending_counts = dict(pending_query.group_by(
         models.CharacterTemplateReview.predicted_character_id
     ).all())
     active_representatives = {}
