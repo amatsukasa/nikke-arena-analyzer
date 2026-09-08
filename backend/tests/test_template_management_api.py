@@ -77,6 +77,19 @@ class TemplateManagementApiTests(unittest.TestCase):
         self.assertEqual(sum(len(group["active"]) for group in result["characters"]), 30)
         self.assertEqual(describe.call_count, 30)
 
+    def test_template_listing_filters_by_exact_character_id(self):
+        (Path(self.temp.name) / "templates" / "char_2.png").write_bytes(b"other")
+        result = main.list_character_templates(
+            self.admin, self.db, "active", 0, 30, "", character_id=1
+        )
+        self.assertEqual(result["total"], 2)
+        self.assertEqual([group["character_id"] for group in result["characters"]], [1])
+        self.assertTrue(all(
+            item["character_id"] == 1
+            for group in result["characters"]
+            for item in group["active"]
+        ))
+
     def test_admin_character_listing_is_filtered_paged_and_scans_templates_once(self):
         for character_id in range(3, 68):
             self.db.add(models.Character(

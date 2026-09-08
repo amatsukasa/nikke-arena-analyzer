@@ -54,8 +54,10 @@ const REVIEW_PAGE_SIZE = 15;
 
 export default function CharacterTemplatesAdmin({
   embedded = false,
+  initialCharacterFilter = null,
 }: {
   embedded?: boolean;
+  initialCharacterFilter?: { id: number; name: string } | null;
 }) {
   const { user, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
@@ -64,9 +66,11 @@ export default function CharacterTemplatesAdmin({
   const [reviews, setReviews] = useState<Review[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [tab, setTab] = useState<"pending" | "active" | "quarantine">(
-    "pending",
+    initialCharacterFilter ? "active" : "pending",
   );
-  const [query, setQuery] = useState("");
+  const [draftQuery, setDraftQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [characterFilter, setCharacterFilter] = useState(initialCharacterFilter);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
@@ -78,6 +82,7 @@ export default function CharacterTemplatesAdmin({
   } | null>(null);
   const [targetCharacterId, setTargetCharacterId] = useState<number | null>(null);
   const loadController = useRef<AbortController | null>(null);
+  const isComposing = useRef(false);
   const { characters } = useCharacterCatalog<SearchCharacter>(() =>
     setError("Character候補を取得できませんでした。"),
   );
@@ -104,8 +109,9 @@ export default function CharacterTemplatesAdmin({
           state: tab,
           offset: String((page - 1) * TEMPLATE_PAGE_SIZE),
           limit: String(TEMPLATE_PAGE_SIZE),
-          query,
+          query: appliedQuery,
         });
+        if (characterFilter) params.set("character_id", String(characterFilter.id));
         const response = await apiFetch(
           `${apiUrl}/api/admin/character-templates?${params}`,
           { cache: "no-store", signal: controller.signal },
@@ -127,7 +133,7 @@ export default function CharacterTemplatesAdmin({
         setLoading(false);
       }
     }
-  }, [apiFetch, apiUrl, page, query, tab]);
+  }, [apiFetch, apiUrl, appliedQuery, characterFilter, page, tab]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -176,7 +182,18 @@ export default function CharacterTemplatesAdmin({
     }
   };
 
-  if (isLoading || loading)
+  const applySearch = () => {
+    setPage(1);
+    setAppliedQuery(draftQuery);
+  };
+  const clearSearch = () => {
+    setDraftQuery("");
+    setAppliedQuery("");
+    setCharacterFilter(null);
+    setPage(1);
+  };
+
+  if (isLoading)
     return (
       <main
         className={
@@ -340,19 +357,41 @@ export default function CharacterTemplatesAdmin({
           </section>
         ) : (
           <section className="space-y-4">
-            <input
-              aria-label="Character名またはIDで検索"
-              value={query}
-              onChange={(event) => { setPage(1); setQuery(event.target.value); }}
-              placeholder="名前またはIDで検索"
-              className="w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"
-            />
-            {templateEntries.length === 0 && (
+            {characterFilter && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-indigo-500/40 bg-indigo-950/30 p-3 text-sm">
+                <span>絞り込み中: {characterFilter.name}（ID {characterFilter.id}）</span>
+                <button type="button" onClick={clearSearch} className="rounded bg-slate-700 px-3 py-1">
+                  絞り込み解除
+                </button>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <input
+                aria-label="Character名またはIDで検索"
+                value={draftQuery}
+                onChange={(event) => setDraftQuery(event.target.value)}
+                onCompositionStart={() => { isComposing.current = true; }}
+                onCompositionEnd={() => { isComposing.current = false; }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing && !isComposing.current) applySearch();
+                }}
+                placeholder="名前またはIDで検索"
+                className="min-w-64 flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2"
+              />
+              <button type="button" onClick={applySearch} className="rounded bg-indigo-600 px-4 py-2">検索</button>
+              <button type="button" onClick={clearSearch} className="rounded bg-slate-700 px-4 py-2">クリア</button>
+            </div>
+            {loading ? (
+              <p className="text-slate-400">読み込み中…</p>
+            ) : templateEntries.length === 0 && (
               <p className="text-slate-400">
                 該当するテンプレートはありません。
               </p>
             )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              aria-busy={loading}
+              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            >
             {visibleTemplates.map(({ group, template }) => (
               <article
                 key={template.filename}
