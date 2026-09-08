@@ -19,6 +19,7 @@ const mainItems = [
   { href: '/', label: 'TOP' },
   { href: '/about', label: 'ABOUT' },
   { href: '/guide', label: 'GUIDE' },
+  { href: '/champion-arena/results', label: 'チャンアリ戦績' },
   { href: '/links', label: 'LINK' },
   { href: '/updates', label: 'UPDATE' },
   { href: '/contact', label: 'CONTACT' },

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
 from typing import List, Literal, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_type, datetime, timedelta, timezone
 import hashlib
 import base64
 import secrets
@@ -1768,6 +1768,83 @@ def get_dashboard_summary(
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
     return get_dashboard_summary_data(tournament, db)
 
+def _champion_arena_master_payload(tournament: models.Tournament) -> dict:
+    return {
+        "id": tournament.id,
+        "title": tournament.name,
+        "game_start_date": tournament.game_start_date,
+        "display_order": tournament.display_order,
+        "is_champion_arena": tournament.is_champion_arena,
+        "has_match_data": tournament.has_match_data,
+    }
+
+
+@app.get("/api/champion-arena/tournaments", response_model=List[schemas.ChampionArenaTournament])
+def get_champion_arena_tournaments(db: Session = Depends(get_db)):
+    tournaments = db.query(models.Tournament).filter(
+        models.Tournament.is_champion_arena.is_(True)
+    ).order_by(
+        models.Tournament.display_order.desc().nullslast(),
+        models.Tournament.game_start_date.desc().nullslast(),
+        models.Tournament.id.desc(),
+    ).all()
+    return [_champion_arena_master_payload(tournament) for tournament in tournaments]
+
+
+@app.get("/api/admin/champion-arena-tournaments", response_model=List[schemas.ChampionArenaTournament])
+def get_admin_champion_arena_tournaments(
+    _: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    tournaments = db.query(models.Tournament).filter(
+        models.Tournament.is_champion_arena.is_(True)
+    ).order_by(models.Tournament.display_order.desc().nullslast(), models.Tournament.id.desc()).all()
+    return [_champion_arena_master_payload(tournament) for tournament in tournaments]
+
+
+@app.post("/api/admin/champion-arena-tournaments", response_model=schemas.ChampionArenaTournament)
+def create_champion_arena_tournament(
+    body: schemas.ChampionArenaTournamentBase,
+    admin: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    tournament = models.Tournament(
+        name=body.title.strip(),
+        date=body.game_start_date or date_type(1970, 1, 1),
+        game_start_date=body.game_start_date,
+        display_order=body.display_order,
+        is_champion_arena=body.is_champion_arena,
+        has_match_data=body.has_match_data,
+        created_by=admin.id,
+        publication_status="draft",
+    )
+    db.add(tournament)
+    db.commit()
+    db.refresh(tournament)
+    return _champion_arena_master_payload(tournament)
+
+
+@app.put("/api/admin/champion-arena-tournaments/{tournament_id}", response_model=schemas.ChampionArenaTournament)
+def update_champion_arena_tournament(
+    tournament_id: int,
+    body: schemas.ChampionArenaTournamentBase,
+    _: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    tournament = db.get(models.Tournament, tournament_id)
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    tournament.name = body.title.strip()
+    tournament.game_start_date = body.game_start_date
+    tournament.date = body.game_start_date or tournament.date
+    tournament.display_order = body.display_order
+    tournament.is_champion_arena = body.is_champion_arena
+    tournament.has_match_data = body.has_match_data
+    db.commit()
+    db.refresh(tournament)
+    return _champion_arena_master_payload(tournament)
+
+
 @app.get("/api/tournaments", response_model=List[schemas.Tournament])
 def get_tournaments(
     mine: bool = False,
@@ -1781,7 +1858,10 @@ def get_tournaments(
         if current_user.role != "admin":
             query = query.filter(models.Tournament.created_by == current_user.id)
     else:
-        query = query.filter(models.Tournament.publication_status == "published")
+        query = query.filter(
+            models.Tournament.publication_status == "published",
+            models.Tournament.has_match_data.is_(True),
+        )
     tournaments = query.order_by(
         models.Tournament.created_at.desc(),
         models.Tournament.id.desc(),

@@ -136,6 +136,10 @@ class Tournament(Base):
         server_default="full_64",
     )
     provider_game_start_date = Column(Date, nullable=True)
+    game_start_date = Column(Date, nullable=True)
+    display_order = Column(Integer, nullable=True)
+    is_champion_arena = Column(Boolean, nullable=False, default=False, server_default="false")
+    has_match_data = Column(Boolean, nullable=False, default=True, server_default="true")
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)

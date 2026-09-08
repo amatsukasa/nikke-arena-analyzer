@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
+import ChampionArenaMastersAdmin from '../../components/admin/ChampionArenaMastersAdmin';
 
 interface User {
   id: number;
@@ -916,6 +917,7 @@ export default function AdminPage() {
               </table>
             </div>
           )}
+          <ChampionArenaMastersAdmin />
         </div>
       )}
 
