@@ -33,6 +33,51 @@ class ChampionArenaMasterTest(unittest.TestCase):
             schemas.TournamentBase(name="通常大会",date=date(2026,2,1)),self.db,self.admin
         )
         self.assertTrue(tournament.has_match_data)
+    def test_existing_tournament_can_join_and_leave_results_without_losing_match_data(self):
+        tournament=models.Tournament(
+            name="チャンピオンアリーナ β37",date=date(2026,3,1),
+            created_by=self.admin.id,publication_status="published",has_match_data=True,
+        )
+        self.db.add(tournament); self.db.commit(); self.db.refresh(tournament)
+        updated=main.update_tournament(
+            tournament.id,
+            schemas.TournamentBase(
+                name=tournament.name,date=tournament.date,display_order=37,
+                is_champion_arena=True,has_match_data=True,game_start_date=date(2026,3,1),
+            ),
+            self.db,self.admin,
+        )
+        self.assertEqual(updated.display_order,37)
+        self.assertTrue(updated.is_champion_arena)
+        self.assertTrue(updated.has_match_data)
+        self.assertEqual([row["id"] for row in main.get_champion_arena_tournaments(self.db)],[tournament.id])
+        self.assertEqual([row.id for row in main.get_tournaments(False,self.db,None)],[tournament.id])
+        main.update_tournament(
+            tournament.id,
+            schemas.TournamentBase(
+                name=tournament.name,date=tournament.date,display_order=37,
+                is_champion_arena=False,has_match_data=True,
+            ),
+            self.db,self.admin,
+        )
+        self.assertEqual(main.get_champion_arena_tournaments(self.db),[])
+    def test_legacy_partial_update_preserves_champion_arena_fields(self):
+        start_date=date(2026,3,1)
+        tournament=models.Tournament(
+            name="更新前",date=date(2026,3,2),created_by=self.admin.id,
+            display_order=37,is_champion_arena=True,has_match_data=True,
+            game_start_date=start_date,
+        )
+        self.db.add(tournament); self.db.commit(); self.db.refresh(tournament)
+        legacy_update=schemas.TournamentBase(
+            name="更新後",date=date(2026,3,3),season="任意タイトル",
+        )
+        self.assertTrue({"game_start_date","display_order","is_champion_arena","has_match_data"}.isdisjoint(legacy_update.model_fields_set))
+        updated=main.update_tournament(tournament.id,legacy_update,self.db,self.admin)
+        self.assertEqual(updated.display_order,37)
+        self.assertTrue(updated.is_champion_arena)
+        self.assertTrue(updated.has_match_data)
+        self.assertEqual(updated.game_start_date,start_date)
     def test_admin_writes_keep_shared_admin_authorization(self):
         for endpoint, parameter in (
             (main.create_champion_arena_tournament,"admin"),

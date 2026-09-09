@@ -43,6 +43,10 @@ class TournamentBase(BaseModel):
     championship_id: Optional[int] = None
     registration_scope: Literal["full_64", "champion_8"] = "full_64"
     provider_game_start_date: Optional[date_type] = None
+    game_start_date: Optional[date_type] = None
+    display_order: Optional[int] = None
+    is_champion_arena: bool = False
+    has_match_data: bool = True
 
 class Tournament(TournamentBase):
     id: int
