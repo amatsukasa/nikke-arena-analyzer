@@ -14,6 +14,10 @@ export interface TournamentSummary {
   published_at?: string | null;
   registration_scope: RegistrationScope;
   provider_game_start_date: string | null;
+  game_start_date: string | null;
+  display_order: number | null;
+  is_champion_arena: boolean;
+  has_match_data: boolean;
 }
 
 export const REGISTRATION_SCOPE_LABELS: Record<RegistrationScope, string> = {
@@ -62,6 +66,10 @@ export function normalizeTournament(value: Partial<TournamentSummary> & Pick<Tou
     ...value,
     registration_scope: value.registration_scope ?? "full_64",
     provider_game_start_date: value.provider_game_start_date ?? null,
+    game_start_date: value.game_start_date ?? null,
+    display_order: value.display_order ?? null,
+    is_champion_arena: value.is_champion_arena ?? false,
+    has_match_data: value.has_match_data ?? true,
   } as TournamentSummary;
 }
 

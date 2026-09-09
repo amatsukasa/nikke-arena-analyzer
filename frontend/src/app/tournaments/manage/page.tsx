@@ -31,6 +31,10 @@ export default function Home() {
   const [newStartDate, setNewStartDate] = useState("");
   const [registrationScope, setRegistrationScope] = useState<RegistrationScope>("full_64");
   const [providerGameStartDate, setProviderGameStartDate] = useState("");
+  const [arenaGameStartDate, setArenaGameStartDate] = useState("");
+  const [displayOrder, setDisplayOrder] = useState("");
+  const [isChampionArena, setIsChampionArena] = useState(false);
+  const [hasMatchData, setHasMatchData] = useState(true);
   const providerDateTouched = useRef(false);
   const providerDateInitialized = useRef(false);
   const formUserId = useRef<number | null>(null);
@@ -100,6 +104,10 @@ export default function Home() {
     const scopeState = createTournamentFormScopeState(user?.game_start_date);
     setRegistrationScope(scopeState.registrationScope);
     setProviderGameStartDate(scopeState.providerGameStartDate);
+    setArenaGameStartDate("");
+    setDisplayOrder("");
+    setIsChampionArena(false);
+    setHasMatchData(true);
     providerDateTouched.current = scopeState.providerDateTouched;
     providerDateInitialized.current = scopeState.providerDateInitialized;
     formUserId.current = user?.id ?? null;
@@ -117,6 +125,10 @@ export default function Home() {
     const scopeState = editTournamentFormScopeState(normalizeTournament(t));
     setRegistrationScope(scopeState.registrationScope);
     setProviderGameStartDate(scopeState.providerGameStartDate);
+    setArenaGameStartDate(t.game_start_date || "");
+    setDisplayOrder(t.display_order == null ? "" : String(t.display_order));
+    setIsChampionArena(Boolean(t.is_champion_arena));
+    setHasMatchData(t.has_match_data !== false);
     providerDateTouched.current = scopeState.providerDateTouched;
     providerDateInitialized.current = scopeState.providerDateInitialized;
     formUserId.current = user?.id ?? null;
@@ -148,7 +160,13 @@ export default function Home() {
         provider_game_start_date: providerGameStartDate || null,
       };
       const body = editTournamentId
-        ? commonBody
+        ? {
+            ...commonBody,
+            game_start_date: arenaGameStartDate || null,
+            display_order: displayOrder === "" ? null : Number(displayOrder),
+            is_champion_arena: isChampionArena,
+            has_match_data: hasMatchData,
+          }
         : { ...commonBody, registration_scope: registrationScope };
       const url = editTournamentId
         ? `/api/tournaments/${editTournamentId}`
@@ -460,6 +478,20 @@ export default function Home() {
                 )}
                 <p id="registration-scope-warning" className="text-xs leading-5 text-amber-300">登録範囲は大会作成後に変更できません。選択を誤った場合は、大会を作り直す必要があります。</p>
               </fieldset>
+              {editTournamentId && (
+                <fieldset className="space-y-3 rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
+                  <legend className="px-1 text-sm font-medium text-slate-300">チャンアリ戦績設定</legend>
+                  <label className="block text-sm text-slate-300">開催順
+                    <input type="number" value={displayOrder} onChange={event => setDisplayOrder(event.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-slate-800/50 px-4 py-3" />
+                  </label>
+                  <label className="block text-sm text-slate-300">大会の開始日（任意）
+                    <input type="date" value={arenaGameStartDate} onChange={event => setArenaGameStartDate(event.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-slate-800/50 px-4 py-3" />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isChampionArena} onChange={event => setIsChampionArena(event.target.checked)} /> チャンアリ戦績の入力対象にする</label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={hasMatchData} onChange={event => setHasMatchData(event.target.checked)} /> 対戦・統計データあり</label>
+                  <p className="text-xs leading-5 text-amber-300">※OFFにすると通常大会一覧・統計の対象から除外されます。</p>
+                </fieldset>
+              )}
               <div>
                 <label htmlFor="provider-game-start-date" className="block text-sm font-medium text-slate-300">データ提供者のゲーム開始日</label>
                 <p id="provider-game-start-date-help" className="mt-1 text-xs leading-5 text-slate-400">この大会をシステムへ登録する人ではなく、大会データやスクリーンショットを提供した人のゲーム開始日です。代理登録の場合は変更してください。</p>

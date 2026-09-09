@@ -1941,6 +1941,14 @@ def update_tournament(
         # 省略時は保存値を維持し、明示 null もそのまま保存する。
         if "provider_game_start_date" in tournament.model_fields_set:
             db_tournament.provider_game_start_date = tournament.provider_game_start_date
+        if "game_start_date" in tournament.model_fields_set:
+            db_tournament.game_start_date = tournament.game_start_date
+        if "display_order" in tournament.model_fields_set:
+            db_tournament.display_order = tournament.display_order
+        if "is_champion_arena" in tournament.model_fields_set:
+            db_tournament.is_champion_arena = tournament.is_champion_arena
+        if "has_match_data" in tournament.model_fields_set:
+            db_tournament.has_match_data = tournament.has_match_data
 
         db.commit()
         db.refresh(db_tournament)
