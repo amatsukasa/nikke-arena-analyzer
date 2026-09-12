@@ -29,3 +29,19 @@ export function tournamentResultClass(result?: string | null) {
     ? TOURNAMENT_RESULT_COLORS[label] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50"
     : "bg-slate-800/60 text-slate-500 ring-slate-700/50";
 }
+
+const TRANSLATION_KEYS: Record<string, string> = {
+  "優勝": "result.champion", champion: "result.champion",
+  "準優勝": "result.runnerUp", runner_up: "result.runnerUp",
+  "ベスト64": "result.best64", best64: "result.best64",
+  "ベスト32": "result.best32", best32: "result.best32",
+  "ベスト16": "result.best16", best16: "result.best16",
+  "ベスト8": "result.best8", best8: "result.best8",
+  "ベスト4": "result.semifinal", best4: "result.semifinal",
+  FINAL: "result.final", "決勝": "result.final",
+};
+
+export function localizedTournamentResult(result: string | null | undefined, t: (key: string) => string) {
+  if (!result) return null;
+  return t(TRANSLATION_KEYS[result] ?? result);
+}

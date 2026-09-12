@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import TeamDisplay from "./TeamDisplay";
+import { useI18n } from "@/i18n/I18nProvider";
+import { localizedTournamentResult } from "@/lib/tournamentResult";
 
 interface PaginatedTeamListProps {
   tournamentIds?: number[];
@@ -39,6 +41,7 @@ export default function PaginatedTeamList({
   onTeamClick,
   selectedTeam
 }: PaginatedTeamListProps) {
+  const { t } = useI18n();
 
   const [teams, setTeams] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -209,14 +212,14 @@ export default function PaginatedTeamList({
                 <div className="flex flex-col items-end gap-1 shrink-0 text-right">
                   {team.best_result && (
                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ${resultColor}`}>
-                      {team.best_result}
+                      {localizedTournamentResult(team.best_result, t)}
                     </span>
                   )}
                   <span className="text-xs text-slate-400">
-                    採用 <span className="text-slate-200 font-semibold">{team.count}</span> 回
+                    {t('stats.usageCount')} <span className="text-slate-200 font-semibold">{team.count}</span>
                   </span>
                   <span className="text-xs text-slate-400">
-                    対戦 <span className="text-slate-200 font-semibold">{team.total_matches ?? "-"}</span> 回
+                    {t('stats.matches')} <span className="text-slate-200 font-semibold">{team.total_matches ?? "-"}</span>
                   </span>
                 </div>
 
@@ -236,14 +239,14 @@ export default function PaginatedTeamList({
                     <span className="text-slate-400 font-bold text-base">#{idx + 1}</span>
                     {team.best_result && (
                       <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultColor}`}>
-                        {team.best_result}
+                        {localizedTournamentResult(team.best_result, t)}
                       </span>
                     )}
                   </div>
                   <div className={`px-3 py-1 rounded-lg font-black text-base text-center shrink-0 ${
                     team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
                   }`}>
-                    勝率: {team.win_rate}%
+                    {t('stats.winRate')}: {team.win_rate}%
                   </div>
                 </div>
 
@@ -255,11 +258,11 @@ export default function PaginatedTeamList({
                 {/* 3段目：採用数・対戦数・勝敗 */}
                 <div className="flex items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
                   <div>
-                    採用数: <span className="font-bold text-slate-100">{team.count}</span> 人
+                    {t('stats.usageCount')}: <span className="font-bold text-slate-100">{team.count}</span>
                   </div>
                   <div className="w-px h-3 bg-white/10" />
                   <div>
-                    対戦数: <span className="font-bold text-slate-100">{team.total_matches ?? "-"}</span> 戦
+                    {t('stats.matches')}: <span className="font-bold text-slate-100">{team.total_matches ?? "-"}</span>
                   </div>
                   {team.win_count != null && (
                     <>
@@ -285,7 +288,7 @@ export default function PaginatedTeamList({
           disabled={loading}
           className="w-full py-4 bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-bold rounded-xl ring-1 ring-white/10 transition-colors disabled:opacity-50"
         >
-          {loading ? "読み込み中..." : "もっと見る"}
+          {loading ? t('common.loading') : t('common.showMore')}
         </button>
       )}
     </div>

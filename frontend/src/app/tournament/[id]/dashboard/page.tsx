@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
-import Link from "next/link";
+import Link from "../../../../components/LocalizedLink";
 import PaginatedTeamList from "../../../../components/PaginatedTeamList";
 import SharedTeamDisplay from "../../../../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";

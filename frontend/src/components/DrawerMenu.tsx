@@ -1,9 +1,12 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import LocalizedLink from './LocalizedLink';
+import LanguageSwitcher from './LanguageSwitcher';
+import { stripLocale } from '@/i18n/config';
+import { useI18n } from '@/i18n/I18nProvider';
 
 type DrawerUser = {
   email: string;
@@ -37,6 +40,8 @@ const focusableSelector = [
 
 export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
   const pathname = usePathname();
+  const { t } = useI18n();
+  const routePath = stripLocale(pathname);
   const drawerId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -98,14 +103,14 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
   }, [close, pathname]);
 
   const isCurrent = (href: string) =>
-    href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`);
+    href === '/' ? routePath === '/' : routePath === href || routePath.startsWith(`${href}/`);
 
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        aria-label={isOpen ? 'メニューを閉じる' : 'メニューを開く'}
+        aria-label={isOpen ? t('menu.close') : t('menu.open')}
         aria-expanded={isOpen}
         aria-controls={drawerId}
         onClick={() => setIsOpen((current) => !current)}
@@ -128,7 +133,7 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
         id={drawerId}
         role="dialog"
         aria-modal="true"
-        aria-label="サイトメニュー"
+        aria-label={t('menu.dialog')}
         aria-hidden={!isOpen}
         inert={!isOpen}
         tabIndex={-1}
@@ -141,7 +146,7 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
           <button
             ref={closeButtonRef}
             type="button"
-            aria-label="メニューを閉じる"
+            aria-label={t('menu.close')}
             onClick={close}
             className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 motion-reduce:transition-none"
           >
@@ -150,13 +155,13 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-6">
-          <nav aria-label="メインメニュー">
+          <nav aria-label={t('menu.main')}>
             <ul className="space-y-2">
               {mainItems.map((item) => {
                 const current = isCurrent(item.href);
                 return (
                   <li key={item.href}>
-                    <Link
+                    <LocalizedLink
                       href={item.href}
                       onClick={close}
                       aria-current={current ? 'page' : undefined}
@@ -168,12 +173,16 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
                     >
                       {item.label}
                       {current && <span className="h-2 w-2 rounded-full bg-blue-400" aria-hidden="true" />}
-                    </Link>
+                    </LocalizedLink>
                   </li>
                 );
               })}
             </ul>
           </nav>
+
+          <div className="mt-6 border-t border-white/10 pt-6">
+            <LanguageSwitcher />
+          </div>
 
         </div>
       </aside>

@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Users } from "lucide-react";
 import React from "react";
-import Link from "next/link";
+import Link from "./LocalizedLink";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export interface CharacterDetailViewProps {
   mode: "cross" | "single";
@@ -29,15 +30,16 @@ export default function CharacterDetailView({
   title,
 }: CharacterDetailViewProps) {
   const router = useRouter();
+  const { t, href } = useI18n();
 
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
     } else {
       if (mode === "cross") {
-        router.push("/");
+        router.push(href("/"));
       } else {
-        router.push(`/tournament/${tournamentId || ""}`);
+        router.push(href(`/tournament/${tournamentId || ""}`));
       }
     }
   };
@@ -54,7 +56,7 @@ export default function CharacterDetailView({
             className="inline-flex items-center space-x-2 text-blue-400 hover:text-blue-300 font-bold transition-colors cursor-pointer"
           >
             <ChevronLeft size={18} />
-            <span>前のページに戻る</span>
+            <span>{t('common.back')}</span>
           </button>
         </div>
       </main>
@@ -104,7 +106,7 @@ export default function CharacterDetailView({
             ? `/character/${teamMemberCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
             : `/tournament/${tournamentId}/dashboard/character/${teamMemberCharacterId}`;
           return (
-            <Link
+              <Link
               key={i}
               href={href}
               className="flex flex-col items-center space-y-1 group"
@@ -118,7 +120,7 @@ export default function CharacterDetailView({
                 )}
               </div>
               <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={ch?.name || "不明"}>{ch?.name || "不明"}</span>
-            </Link>
+              </Link>
           );
         })}
       </div>
@@ -144,7 +146,7 @@ export default function CharacterDetailView({
           type="button"
           onClick={handleBack}
           className="p-2 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors cursor-pointer ring-1 ring-white/10 shadow-lg"
-          aria-label="前のページに戻る"
+          aria-label={t('common.back')}
         >
           <ChevronLeft size={24} className="text-slate-300" />
         </button>
@@ -176,7 +178,8 @@ export default function CharacterDetailView({
             )}
           </div>
           <div>
-            <h2 className="text-4xl font-black text-white mb-3">{c.name}</h2>
+          <h2 className="text-4xl font-black text-white mb-3">{c.name}</h2>
+          <p className="mt-2 text-xs text-slate-500">{t('character.officialNamesNotice')}</p>
             <div className="flex flex-wrap gap-2">
               <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-sm">
                 {c.rarity || "不明"}
@@ -542,7 +545,7 @@ export default function CharacterDetailView({
               );
             })}
           {relatedTeams.length === 0 && (
-            <p className="text-slate-500 text-sm text-center py-8">このキャラクターを含む編成データがありません</p>
+            <p className="text-slate-500 text-sm text-center py-8">{t('common.noData')}</p>
           )}
         </div>
       </div>
@@ -555,7 +558,7 @@ export default function CharacterDetailView({
           className="inline-flex items-center space-x-2 text-blue-400 hover:text-blue-300 font-bold transition-colors cursor-pointer"
         >
           <ChevronLeft size={18} />
-          <span>前のページに戻る</span>
+          <span>{t('common.back')}</span>
         </button>
       </div>
     </main>

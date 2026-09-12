@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, Globe } from "lucide-react";
-import Link from "next/link";
+import Link from "../components/LocalizedLink";
 import PaginatedTeamList from "../components/PaginatedTeamList";
 import SharedTeamDisplay from "../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../components/CharacterUsageByResultRanking";
@@ -15,6 +15,7 @@ import { emptySynergySelection } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const SERVER_LABELS: Record<string, string> = {
   KR: "韓国（KR）",
@@ -62,6 +63,7 @@ function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
 }
 
 function DashboardContent() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -632,7 +634,7 @@ function DashboardContent() {
 
   return (
     <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
-      <h1 className="sr-only">アリーナ分析ダッシュボード</h1>
+      <h1 className="sr-only">{t('dashboard.title')}</h1>
 
       <div className="flex flex-col xl:flex-row gap-4 xl:gap-8">
         {/* Sidebar for Filters */}
@@ -646,7 +648,7 @@ function DashboardContent() {
           >
             <SlidersHorizontal className="h-5 w-5 shrink-0 text-blue-400" />
             <span className="min-w-0 flex-1">
-              <span className="block text-sm font-bold text-slate-100">分析対象フィルタ</span>
+              <span className="block text-sm font-bold text-slate-100">{t('filter.title')}</span>
               <span className="block truncate text-xs text-slate-400">
                 分析対象: {SERVER_LABELS[filterServer] || filterServer} / {filterSeason} / 
                 {isAllTournamentsSelected ? `全${allTournaments.filter(t => t.play_server === filterServer && (t.season || "β30") === filterSeason).length}大会` : `${selectedTournamentIds.length}大会`}
@@ -664,12 +666,12 @@ function DashboardContent() {
           >
             <h3 className="hidden text-lg font-bold text-slate-100 mb-6 xl:flex items-center space-x-2">
               <Search size={18} className="text-blue-400" />
-              <span>分析対象フィルタ</span>
+              <span>{t('filter.title')}</span>
             </h3>
             
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 xl:block xl:space-y-6">
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">プレイサーバー</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.server')}</div>
                 <select 
                   value={filterServer}
                   onChange={(e) => {
@@ -697,7 +699,7 @@ function DashboardContent() {
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">開催期間 (シーズン)</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.season')}</div>
                 <select
                   value={filterSeason}
                   onChange={(e) => {
@@ -718,7 +720,7 @@ function DashboardContent() {
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">対象大会</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.tournaments')}</div>
                 <div className="flex items-center space-x-4 mb-3 px-1">
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
@@ -726,7 +728,7 @@ function DashboardContent() {
                       onChange={() => setIsAllTournamentsSelected(true)}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
-                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">すべて</span>
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('common.all')}</span>
                   </label>
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
@@ -734,7 +736,7 @@ function DashboardContent() {
                       onChange={() => setIsAllTournamentsSelected(false)}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
-                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">個別に選ぶ</span>
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('filter.individual')}</span>
                   </label>
                 </div>
                 
@@ -945,7 +947,7 @@ function DashboardContent() {
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-emerald-400" />
-                  <span>編成別勝率ランキング</span>
+                  <span>{t('stats.teamWinRateRanking')}</span>
                 </h2>
                 
                 {/* 編成フィルタコントロール群 */}
@@ -1025,7 +1027,7 @@ function DashboardContent() {
                   onClick={() => setMatchupsRetry(value => value + 1)}
                   className="mt-3 rounded-lg bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-400"
                 >
-                  再試行
+                  {t('action.retry')}
                 </button>
               </div>
             )}
@@ -1269,13 +1271,13 @@ function DashboardContent() {
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
-                  <option value="">レアリティ (すべて)</option>
+                  <option value="">{t('filter.rarity')} ({t('common.all')})</option>
                   <option value="SSR">SSR</option>
                   <option value="SR">SR</option>
                   <option value="R">R</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterManufacturer} onChange={e => setFilterManufacturer(e.target.value)}>
-                  <option value="">企業 (すべて)</option>
+                  <option value="">{t('filter.manufacturer')} ({t('common.all')})</option>
                   <option value="エリシオン">エリシオン</option>
                   <option value="ミシリス">ミシリス</option>
                   <option value="テトラ">テトラ</option>
@@ -1283,13 +1285,13 @@ function DashboardContent() {
                   <option value="アブノーマル">アブノーマル</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterBurst} onChange={e => setFilterBurst(e.target.value)}>
-                  <option value="">バースト (すべて)</option>
+                  <option value="">{t('filter.burst')} ({t('common.all')})</option>
                   <option value="1">1 (A含む)</option>
                   <option value="2">2 (A含む)</option>
                   <option value="3">3 (A含む)</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterElement} onChange={e => setFilterElement(e.target.value)}>
-                  <option value="">属性 (すべて)</option>
+                  <option value="">{t('filter.element')} ({t('common.all')})</option>
                   <option value="灼熱">灼熱</option>
                   <option value="水冷">水冷</option>
                   <option value="風圧">風圧</option>
@@ -1297,7 +1299,7 @@ function DashboardContent() {
                   <option value="電撃">電撃</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterWeapon} onChange={e => setFilterWeapon(e.target.value)}>
-                  <option value="">武器 (すべて)</option>
+                  <option value="">{t('filter.weapon')} ({t('common.all')})</option>
                   <option value="AR">アサルトライフル (AR)</option>
                   <option value="SG">ショットガン (SG)</option>
                   <option value="SMG">サブマシンガン (SMG)</option>
@@ -1320,19 +1322,19 @@ function DashboardContent() {
                 }}
               />
               <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">検索対象: {includedCharacterIds.length}/5　除外対象: {excludedCharacterIds.length}</span>
+                <span className="text-sm text-slate-400">{t('search.target')}: {includedCharacterIds.length}/5　{t('search.exclude')}: {excludedCharacterIds.length}</span>
                 {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
                   <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
-                    クリア
+                    {t('common.clear')}
                   </button>
                 )}
               </div>
             </div>
 
             <div className="space-y-4">
-              <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
+              <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
               {includedCharacterIds.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
+                <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
@@ -1745,13 +1747,14 @@ function DashboardContent() {
 
 // useSearchParams を使用するため Suspense でラップが必要（Next.js 15 要件）
 export default function Dashboard() {
+  const { t } = useI18n();
   return (
     <Suspense
       fallback={
         <main className="min-h-screen bg-[#0a0f1e] flex items-center justify-center">
           <div className="text-center space-y-4">
             <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-slate-400 font-bold">データを読み込んでいます...</p>
+            <p className="text-slate-400 font-bold">{t('common.loading')}</p>
           </div>
         </main>
       }
