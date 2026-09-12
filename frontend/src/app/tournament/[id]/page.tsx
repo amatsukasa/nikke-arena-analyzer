@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-react";
-import Link from "next/link";
+import Link from "../../../components/LocalizedLink";
 import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
 import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
 import DeckRegistrationViewport from "../../../components/DeckRegistrationViewport";

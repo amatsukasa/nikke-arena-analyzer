@@ -3,14 +3,15 @@
 import { useState } from "react";
 import { Users } from "lucide-react";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { useI18n } from "@/i18n/I18nProvider";
 
 const RESULT_FILTERS = [
-  { key: "all", label: "全体" },
-  { key: "best16", label: "ベスト16以上" },
-  { key: "best8", label: "ベスト8以上" },
-  { key: "best4", label: "ベスト4以上" },
-  { key: "runner_up", label: "準優勝以上" },
-  { key: "champion", label: "優勝" },
+  { key: "all", label: "common.all" },
+  { key: "best16", label: "result.best16" },
+  { key: "best8", label: "result.best8" },
+  { key: "best4", label: "result.semifinal" },
+  { key: "runner_up", label: "result.runnerUp" },
+  { key: "champion", label: "result.champion" },
 ] as const;
 
 type ResultFilterKey = (typeof RESULT_FILTERS)[number]["key"];
@@ -26,13 +27,12 @@ export default function CharacterUsageByResultRanking({
   allCharacters,
   onSelectCharacter,
 }: Props) {
+  const { t } = useI18n();
   const [resultFilter, setResultFilter] = useState<ResultFilterKey>("best8");
   const selected = stats?.character_usage_by_result?.[resultFilter];
   const denominator = selected?.denominator ?? 0;
   const characters = selected?.characters ?? [];
-  const label = selected?.label
-    ?? RESULT_FILTERS.find((filter) => filter.key === resultFilter)?.label
-    ?? "";
+  const label = t(RESULT_FILTERS.find((filter) => filter.key === resultFilter)?.label ?? "common.all");
   const groups: Array<{
     count: number;
     usageRate: number;
@@ -62,21 +62,21 @@ export default function CharacterUsageByResultRanking({
         <div>
           <h2 className="flex items-center space-x-2 text-xl font-bold text-white">
             <Users className="text-blue-400" />
-            <span>キャラクター登録データ内採用率ランキング</span>
+            <span>{t('stats.characterPickRanking')}</span>
           </h2>
           <p className="mt-2 text-sm font-medium text-slate-300">
             対象：{label} {denominator}人
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300">
-          <span className="whitespace-nowrap">最終成績</span>
+          <span className="whitespace-nowrap">{t('stats.finalResult')}</span>
           <select
             value={resultFilter}
             onChange={(event) => setResultFilter(event.target.value as ResultFilterKey)}
             className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-white outline-none focus:border-blue-500"
           >
             {RESULT_FILTERS.map((filter) => (
-              <option key={filter.key} value={filter.key}>{filter.label}</option>
+              <option key={filter.key} value={filter.key}>{t(filter.label)}</option>
             ))}
           </select>
         </label>
@@ -84,10 +84,10 @@ export default function CharacterUsageByResultRanking({
 
       <div className="overflow-hidden rounded-xl bg-slate-900/50 shadow-2xl ring-1 ring-white/10">
         <div className="hidden grid-cols-[4rem_7rem_8rem_minmax(0,1fr)] border-b border-white/10 bg-slate-800/80 text-sm text-slate-400 md:grid">
-          <div className="p-4 text-center font-medium">順位</div>
-          <div className="p-4 text-center font-medium">採用数</div>
-          <div className="p-4 text-center font-medium">登録データ内採用率</div>
-          <div className="p-4 font-medium">キャラクター名</div>
+          <div className="p-4 text-center font-medium">{t('stats.rank')}</div>
+          <div className="p-4 text-center font-medium">{t('stats.usageCount')}</div>
+          <div className="p-4 text-center font-medium">{t('stats.adoptionRate')}</div>
+          <div className="p-4 font-medium">{t('stats.character')}</div>
         </div>
 
         <div className="divide-y divide-white/5">
@@ -146,7 +146,7 @@ export default function CharacterUsageByResultRanking({
           ))}
 
           {groups.length === 0 && (
-            <div className="p-8 text-center text-slate-500">対象データがありません</div>
+            <div className="p-8 text-center text-slate-500">{t('common.noData')}</div>
           )}
         </div>
       </div>

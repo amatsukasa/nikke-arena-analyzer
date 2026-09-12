@@ -56,3 +56,13 @@ export function formatMatchStageForDisplay({
 
   return rawStage;
 }
+
+const STAGE_KEYS: Record<string, string> = {
+  "ベスト64": "result.best64", "ベスト32": "result.best32", "ベスト16": "result.best16",
+  "ベスト8": "result.best8", "ベスト4": "result.semifinal", FINAL: "result.final", "決勝": "result.final",
+};
+
+export function localizedMatchStage(stage: string | null | undefined, t: (key: string) => string) {
+  if (!stage) return t("common.unknown");
+  return t(STAGE_KEYS[stage] ?? stage);
+}

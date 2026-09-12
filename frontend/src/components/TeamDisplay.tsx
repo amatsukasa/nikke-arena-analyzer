@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { useI18n } from "@/i18n/I18nProvider";
 
 interface Character {
   id: number;
@@ -22,18 +23,19 @@ export default function TeamDisplay({
   collectionLevels?: Array<string | null>;
   onCharacterClick?: (characterId: number) => void;
 }) {
+  const { t } = useI18n();
   const collectionLabel = (value: string | null | undefined) => {
     const labels: Record<string, string> = {
-      none: "なし",
+      none: t("common.none"),
       r_0_14: "R 0-14",
       r_15: "R 15",
       sr_0_14: "SR 0-14",
       sr_15: "SR 15",
-      treasure_0_14: "宝物 0-14",
-      treasure_15: "宝物 15",
-      unknown: "判定不能",
+      treasure_0_14: t("collection.treasure", { level: "0-14" }),
+      treasure_15: t("collection.treasure", { level: "15" }),
+      unknown: t("common.unavailable"),
     };
-    return value ? labels[value] || "判定不能" : "未登録";
+    return value ? labels[value] || t("common.unavailable") : t("common.unregistered");
   };
 
   const collectionBadgeUrl = (value: string | null | undefined) => {
