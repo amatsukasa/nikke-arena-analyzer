@@ -4,7 +4,6 @@ import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import LocalizedLink from './LocalizedLink';
-import LanguageSwitcher from './LanguageSwitcher';
 import { stripLocale } from '@/i18n/config';
 import { useI18n } from '@/i18n/I18nProvider';
 
@@ -180,9 +179,6 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
             </ul>
           </nav>
 
-          <div className="mt-6 border-t border-white/10 pt-6">
-            <LanguageSwitcher />
-          </div>
 
         </div>
       </aside>

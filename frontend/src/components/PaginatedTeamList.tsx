@@ -107,9 +107,9 @@ export default function PaginatedTeamList({
       if (!res.ok) {
         console.error("API error in PaginatedTeamList:", res.status);
         if (res.status === 401) {
-          setError("データを取得できませんでした（認証が必要です）");
+          setError(t('error.authRequired'));
         } else {
-          setError("データを取得できませんでした");
+          setError(t('common.error'));
         }
         if (reset) setTeams([]);
         setTotal(0);
@@ -131,7 +131,7 @@ export default function PaginatedTeamList({
       if (e instanceof DOMException && e.name === "AbortError") return;
       if (generation !== requestGenerationRef.current) return;
       console.error("Failed to fetch teams", e);
-      setError("データを取得できませんでした");
+      setError(t('common.error'));
     } finally {
       if (generation === requestGenerationRef.current) setLoading(false);
     }
@@ -165,7 +165,7 @@ export default function PaginatedTeamList({
   if (teams.length === 0 && !loading) {
     return (
       <div className="text-center py-12 bg-slate-800/30 rounded-2xl ring-1 ring-white/5">
-        <p className="text-slate-400 text-lg">{error || (characterIds.length > 0 ? "指定した条件に一致する編成はありません" : "該当する編成はありません")}</p>
+        <p className="text-slate-400 text-lg">{error || t('common.noData')}</p>
       </div>
     );
   }
@@ -268,7 +268,7 @@ export default function PaginatedTeamList({
                     <>
                       <div className="w-px h-3 bg-white/10" />
                       <div>
-                        勝敗: <span className="font-bold text-emerald-400">{team.win_count}W</span>
+                        {t('stats.resultRecord')}: <span className="font-bold text-emerald-400">{team.win_count}W</span>
                         {team.total_matches != null && (
                           <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
                         )}

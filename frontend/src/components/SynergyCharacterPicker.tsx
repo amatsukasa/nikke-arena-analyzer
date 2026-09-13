@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type UsageState = "loading" | "ready" | "error";
 
@@ -21,17 +22,18 @@ export function useResetSynergyOnAnalysisChange(analysisKey: string | null, rese
 }
 
 export function SynergyPickerInstructions() {
+  const { t } = useI18n();
   return (
     <div className="mb-4 space-y-1">
       <p className="text-sm font-bold leading-relaxed text-slate-100">
-        タップするたびに切り替わります
-        <span className="ml-2 inline-block text-emerald-400">✅ 検索対象</span>
+        {t('synergy.instructions')}
+        <span className="ml-2 inline-block text-emerald-400">✅ {t('search.target')}</span>
         <span className="mx-1 text-slate-400">→</span>
-        <span className="inline-block text-red-400">✖ 除外対象</span>
+        <span className="inline-block text-red-400">✖ {t('search.exclude')}</span>
         <span className="mx-1 text-slate-400">→</span>
-        <span className="inline-block">選択解除</span>
+        <span className="inline-block">{t('synergy.clearSelection')}</span>
       </p>
-      <p className="text-xs leading-relaxed text-slate-400">選択した大会で採用実績のあるキャラクターのみ表示しています</p>
+      <p className="text-xs leading-relaxed text-slate-400">{t('synergy.availableOnly')}</p>
     </div>
   );
 }
@@ -51,6 +53,7 @@ export default function SynergyCharacterPicker({
   excludedIds: number[];
   onChange: (selection: { includedIds: number[]; excludedIds: number[] }) => void;
 }) {
+  const { t } = useI18n();
   const [notice, setNotice] = useState("");
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -81,7 +84,7 @@ export default function SynergyCharacterPicker({
   if (usageState === "ready" && options.length === 0) {
     return (
       <p className="rounded-lg bg-slate-900/40 px-4 py-6 text-center text-sm text-slate-400">
-        選択した大会には、検索できるキャラクターの採用データがありません
+        {t('synergy.noAvailable')}
       </p>
     );
   }
@@ -94,15 +97,15 @@ export default function SynergyCharacterPicker({
       {groupOptions.map(({ character, unavailable }) => {
         const isIncluded = includedIds.includes(character.id);
         const isExcluded = excludedIds.includes(character.id);
-        const unavailableReason = "選択した大会では採用実績がありません";
+        const unavailableReason = t('synergy.unavailable');
         const unavailableByState = usageState !== "ready";
         const disabled = unavailable || unavailableByState;
         const title = unavailable
           ? unavailableReason
           : usageState === "loading"
-            ? "採用実績を読み込み中です"
+            ? t('synergy.loading')
             : usageState === "error"
-              ? "採用実績を取得できませんでした"
+              ? t('synergy.error')
               : character.name || "";
 
         return (
@@ -112,17 +115,17 @@ export default function SynergyCharacterPicker({
             disabled={disabled}
             data-state={unavailable ? "unavailable" : isIncluded ? "include" : isExcluded ? "exclude" : "none"}
             aria-label={unavailable
-              ? `${character.name}、選択した大会では採用実績なし、選択不可`
+              ? t('synergy.ariaUnavailable', { name: character.name })
               : isIncluded
-                ? `${character.name}、検索対象`
+                ? t('synergy.ariaIncluded', { name: character.name })
                 : isExcluded
-                  ? `${character.name}、除外対象`
+                  ? t('synergy.ariaExcluded', { name: character.name })
                   : character.name || ""}
             onClick={() => {
               if (disabled) return;
               const next = transitionSynergySelection(character.id, includedIds, excludedIds);
               onChange(next);
-              setNotice(next.addedAsExclusionDueToLimit ? "検索対象は5人までのため、除外条件として追加しました" : "");
+              setNotice(next.addedAsExclusionDueToLimit ? t('synergy.limitNotice') : "");
             }}
             className={`relative h-12 w-12 overflow-hidden rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
               isIncluded

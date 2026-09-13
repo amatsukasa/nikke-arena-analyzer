@@ -14,6 +14,9 @@ import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAna
 import { emptySynergySelection } from "../../../../lib/synergyCharacters";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
+import { useI18n } from "@/i18n/I18nProvider";
+import { localizedTournamentResult } from "@/lib/tournamentResult";
+import { localizedMatchStage } from "@/lib/matchStageDisplay";
 
 type DashboardTab = "review" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
 const TOURNAMENT_TABS = new Set<DashboardTab>([
@@ -28,6 +31,7 @@ const TOURNAMENT_TABS = new Set<DashboardTab>([
 ]);
 
 export default function Dashboard() {
+  const { t } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
   const id = params.id;
@@ -427,9 +431,9 @@ export default function Dashboard() {
           🔒
         </div>
         <div className="space-y-2">
-          <h2 className="text-2xl font-black text-white">ログインが必要です</h2>
+          <h2 className="text-2xl font-black text-white">{t('dashboard.loginRequired')}</h2>
           <p className="text-slate-400 text-sm">
-            メンバー専用ダッシュボードを閲覧するには、アカウントへのログイン（または権限の認証）が必要です。
+            {t('dashboard.loginDescription')}
           </p>
         </div>
         <div className="flex flex-col gap-3">
@@ -437,13 +441,13 @@ export default function Dashboard() {
             href="/secret-login"
             className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all text-center"
           >
-            ログインページへ
+            {t('dashboard.loginAction')}
           </Link>
           <Link
             href={`/tournament/${id}`}
             className="w-full py-3 px-4 bg-white/5 hover:bg-white/10 text-slate-300 font-bold rounded-xl transition-all text-center text-sm"
           >
-            トーナメント表に戻る
+            {t('dashboard.backBracket')}
           </Link>
         </div>
       </div>
@@ -505,7 +509,7 @@ export default function Dashboard() {
                 <div className="w-10 h-10 rounded-lg bg-slate-800/50 ring-1 ring-white/5 overflow-hidden flex items-center justify-center">
                   <div className="text-slate-600 text-xs">-</div>
                 </div>
-                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title="空枠">空枠</span>
+                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title={t('character.emptySlot')}>{t('character.emptySlot')}</span>
               </div>
             );
           }
@@ -513,9 +517,9 @@ export default function Dashboard() {
             <div key={i} className="flex flex-col items-center space-y-1 cursor-pointer group" onClick={(e) => { e.stopPropagation(); setSelectedCharId(c.id); }}>
               <div className="relative w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                 {getCharIconUrl(c) ? (
-                  <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
+                  <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || t('common.unknown')} className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
+                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || t('common.unknown')}</span>
                 )}
                 {collectionLevels && (
                   <img
@@ -526,7 +530,7 @@ export default function Dashboard() {
                   />
                 )}
               </div>
-              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={c?.name || "不明"}>{c?.name || "不明"}</span>
+              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={c?.name || t('common.unknown')}>{c?.name || t('common.unknown')}</span>
             </div>
           );
         })}
@@ -628,15 +632,15 @@ export default function Dashboard() {
         </Link>
         <div className="flex-1">
           <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-            大会分析
+            {t('dashboard.analysis')}
           </h1>
-          <p className="text-slate-400 text-sm mt-1">{tournament?.name} の分析</p>
+          <p className="text-slate-400 text-sm mt-1">{t('dashboard.analysisSubtitle', { tournament: tournament?.name || '' })}</p>
         </div>
         
         <div className="bg-slate-900/80 backdrop-blur-xl p-4 rounded-2xl ring-2 ring-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.3)] flex items-center space-x-4">
            <div className="text-right hidden md:block">
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">分析対象プレイヤー</p>
-              <p className="text-sm font-bold text-slate-200">シード {selectedSeed}</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{t('dashboard.targetPlayer')}</p>
+              <p className="text-sm font-bold text-slate-200">{t('dashboard.seed', { seed: selectedSeed })}</p>
            </div>
            <select 
              value={selectedSeed}
@@ -644,7 +648,7 @@ export default function Dashboard() {
              className="bg-slate-800 border border-white/20 rounded-lg px-3 py-2 text-sm font-bold text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer hover:bg-slate-700 transition-all"
            >
              {seeds.map(s => (
-                <option key={s} value={s}>シード {s} を表示</option>
+                <option key={s} value={s}>{t('dashboard.showSeed', { seed: s })}</option>
              ))}
            </select>
         </div>
@@ -694,21 +698,21 @@ export default function Dashboard() {
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "winrate" ? "bg-red-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Trophy size={18} />
-          <span>キャラ別勝率</span>
+          <span>{t('dashboard.characterWinRateTab')}</span>
         </button>
         <button
           onClick={() => setActiveTab("my_dashboard")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "my_dashboard" ? "bg-amber-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <UserIcon size={18} />
-          <span>個人成績</span>
+          <span>{t('dashboard.playerStatsTab')}</span>
         </button>
         <button
           onClick={() => setActiveTab("best8")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "best8" ? "bg-indigo-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Trophy size={18} />
-          <span>Best8編成（大会別）</span>
+          <span>{t('dashboard.best8Tab')}</span>
         </button>
       </div>
 
@@ -934,7 +938,7 @@ export default function Dashboard() {
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-blue-400" />
-                <span>キャラクター採用率ランキング</span>
+                <span>{t('stats.characterPickRanking')}</span>
               </h2>
               <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 {(() => {
@@ -954,9 +958,9 @@ export default function Dashboard() {
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                          <th className="p-4 font-medium text-center w-16">順位</th>
-                          <th className="p-4 font-medium text-center w-24">採用数</th>
-                          <th className="p-4 font-medium">キャラクター</th>
+                          <th className="p-4 font-medium text-center w-16">{t('stats.rank')}</th>
+                          <th className="p-4 font-medium text-center w-24">{t('stats.usageCount')}</th>
+                          <th className="p-4 font-medium">{t('stats.character')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -1011,7 +1015,7 @@ export default function Dashboard() {
                         })}
                         {stats.character_usage.length === 0 && (
                           <tr>
-                            <td colSpan={3} className="p-8 text-center text-slate-500">データがありません</td>
+                            <td colSpan={3} className="p-8 text-center text-slate-500">{t('common.noData')}</td>
                           </tr>
                         )}
                       </tbody>
@@ -1039,7 +1043,7 @@ export default function Dashboard() {
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-amber-400" />
-                  <span>キャラクター別勝率ランキング</span>
+                  <span>{t('dashboard.characterWinRateRanking')}</span>
                 </h2>
                 
                 {/* フィルタコントロール群 */}
@@ -1049,28 +1053,22 @@ export default function Dashboard() {
                     onChange={(e) => setWinrateMinMatches(Number(e.target.value))}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value={1}>1戦以上</option>
-                    <option value={10}>10戦以上</option>
-                    <option value={30}>30戦以上</option>
-                    <option value={50}>50戦以上</option>
-                    <option value={100}>100戦以上</option>
+                    {[1, 10, 30, 50, 100].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
                   </select>
                   <select
                     value={winrateBurstPhase}
                     onChange={(e) => setWinrateBurstPhase(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">全バースト</option>
-                    <option value="1">バースト1</option>
-                    <option value="2">バースト2</option>
-                    <option value="3">バースト3</option>
+                    <option value="">{t('filter.allBurst')}</option>
+                    {[1, 2, 3].map((value) => <option key={value} value={value}>{t('filter.burstValue', { value })}</option>)}
                   </select>
                   <select
                     value={winrateWeapon}
                     onChange={(e) => setWinrateWeapon(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">全武器種</option>
+                    <option value="">{t('filter.allWeapons')}</option>
                     <option value="AR">AR</option>
                     <option value="SMG">SMG</option>
                     <option value="SG">SG</option>
@@ -1083,24 +1081,24 @@ export default function Dashboard() {
                     onChange={(e) => setWinrateElement(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">全属性</option>
-                    <option value="灼熱">灼熱</option>
-                    <option value="水冷">水冷</option>
-                    <option value="風圧">風圧</option>
-                    <option value="電撃">電撃</option>
-                    <option value="鉄甲">鉄甲</option>
+                    <option value="">{t('filter.allElements')}</option>
+                    <option value="灼熱">{t('element.fire')}</option>
+                    <option value="水冷">{t('element.water')}</option>
+                    <option value="風圧">{t('element.wind')}</option>
+                    <option value="電撃">{t('element.electric')}</option>
+                    <option value="鉄甲">{t('element.iron')}</option>
                   </select>
                   <select
                     value={winrateManufacturer}
                     onChange={(e) => setWinrateManufacturer(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">全企業</option>
-                    <option value="エリシオン">エリシオン</option>
-                    <option value="ミシリス">ミシリス</option>
-                    <option value="テトラ">テトラ</option>
-                    <option value="ピルグリム">ピルグリム</option>
-                    <option value="アブノーマル">アブノーマル</option>
+                    <option value="">{t('filter.allManufacturers')}</option>
+                    <option value="エリシオン">{t('manufacturer.elysion')}</option>
+                    <option value="ミシリス">{t('manufacturer.missilis')}</option>
+                    <option value="テトラ">{t('manufacturer.tetra')}</option>
+                    <option value="ピルグリム">{t('manufacturer.pilgrim')}</option>
+                    <option value="アブノーマル">{t('manufacturer.abnormal')}</option>
                   </select>
                 </div>
               </div>
@@ -1110,12 +1108,12 @@ export default function Dashboard() {
                 <table className="w-full text-left border-collapse min-w-[900px]">
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                      <th className="p-4 font-medium text-center w-16">順位</th>
-                      <th className="p-4 font-medium">キャラクター</th>
-                      <th className="p-4 font-medium text-right w-32">勝率</th>
-                      <th className="p-4 font-medium text-right w-32">戦績 (勝/敗)</th>
-                      <th className="p-4 font-medium text-center w-32">最終成績</th>
-                      <th className="p-4 font-medium text-right w-24">採用数</th>
+                      <th className="p-4 font-medium text-center w-16">{t('stats.rank')}</th>
+                      <th className="p-4 font-medium">{t('stats.character')}</th>
+                      <th className="p-4 font-medium text-right w-32">{t('stats.winRate')}</th>
+                      <th className="p-4 font-medium text-right w-32">{t('stats.recordWinsLosses')}</th>
+                      <th className="p-4 font-medium text-center w-32">{t('stats.finalResult')}</th>
+                      <th className="p-4 font-medium text-right w-24">{t('stats.usageCount')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -1196,7 +1194,7 @@ export default function Dashboard() {
                       })}
                     {stats.character_usage.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="p-8 text-center text-slate-500">データがありません</td>
+                        <td colSpan={6} className="p-8 text-center text-slate-500">{t('common.noData')}</td>
                       </tr>
                     )}
                   </tbody>
@@ -1259,7 +1257,7 @@ export default function Dashboard() {
                                   {entry.best_result}
                                 </span>
                               )}
-                              <span className="text-xs text-slate-400">採用: <span className="font-bold text-slate-200">{entry.count}</span></span>
+                              <span className="text-xs text-slate-400">{t('stats.pickShort', { count: entry.count })}</span>
                             </div>
                           </div>
                         </div>
@@ -1278,7 +1276,7 @@ export default function Dashboard() {
                     );
                   })}
                 {stats.character_usage.length === 0 && (
-                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">データがありません</div>
+                  <div className="p-8 text-center text-slate-500 bg-slate-900/50 rounded-xl">{t('common.noData')}</div>
                 )}
               </div>
             </section>
@@ -1293,7 +1291,7 @@ export default function Dashboard() {
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-emerald-400" />
-                  <span>編成別勝率ランキング</span>
+                  <span>{t('stats.teamWinRateRanking')}</span>
                 </h2>
                 
                 {/* 編成フィルタコントロール群 */}
@@ -1303,10 +1301,7 @@ export default function Dashboard() {
                     onChange={(e) => setTeamMinMatches(Number(e.target.value))}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={1}>対戦数：1戦以上</option>
-                    <option value={10}>対戦数：10戦以上</option>
-                    <option value={30}>対戦数：30戦以上</option>
-                    <option value={50}>対戦数：50戦以上</option>
+                    {[1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
                   </select>
 
                   <select
@@ -1314,11 +1309,8 @@ export default function Dashboard() {
                     onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={0}>勝率：指定なし</option>
-                    <option value={50}>勝率：50%以上</option>
-                    <option value={60}>勝率：60%以上</option>
-                    <option value={70}>勝率：70%以上</option>
-                    <option value={80}>勝率：80%以上</option>
+                    <option value={0}>{t('filter.winRateAny')}</option>
+                    {[50, 60, 70, 80].map((rate) => <option key={rate} value={rate}>{t('filter.winRateAtLeast', { rate })}</option>)}
                   </select>
 
                   <select
@@ -1326,13 +1318,9 @@ export default function Dashboard() {
                     onChange={(e) => setTeamBestResult(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value="">最終成績：すべて</option>
-                    <option value="優勝">最終成績：優勝のみ</option>
-                    <option value="準優勝">最終成績：準優勝以上</option>
-                    <option value="ベスト4">最終成績：ベスト4以上</option>
-                    <option value="ベスト8">最終成績：ベスト8以上</option>
-                    <option value="ベスト16">最終成績：ベスト16以上</option>
-                    <option value="ベスト32">最終成績：ベスト32以上</option>
+                    <option value="">{t('filter.resultAll')}</option>
+                    <option value="優勝">{t('filter.resultOnly', { result: t('result.champion') })}</option>
+                    {['準優勝', 'ベスト4', 'ベスト8', 'ベスト16', 'ベスト32'].map((result) => <option key={result} value={result}>{t('filter.resultAtLeast', { result: localizedTournamentResult(result, t) || result })}</option>)}
                   </select>
                 </div>
               </div>
@@ -1360,7 +1348,7 @@ export default function Dashboard() {
         {activeTab === "matchups" && hasFullStats && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="bg-purple-500/10 p-6 rounded-2xl ring-1 ring-purple-500/20">
-              <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>
+              <label className="block text-sm font-bold text-purple-400 mb-3">{t('stats.selectTeam')}</label>
               <select 
                 className="w-full bg-slate-900 border border-purple-500/30 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4"
                 value={selectedTeam}
@@ -1368,14 +1356,14 @@ export default function Dashboard() {
               >
                 {stats.team_usage.map((team: any, idx: number) => (
                   <option key={idx} value={team.canonical_id}>
-                    [{team.count}回採用] {team.characters.map((c:any) => c.id === 9999 ? '空枠' : c.name).join(" / ")}
+                    [{t('stats.teamPick', { count: team.count })}] {team.characters.map((c:any) => c.id === 9999 ? t('character.emptySlot') : c.name).join(" / ")}
                   </option>
                 ))}
               </select>
               
               {selectedTeam && (
                 <div className="pt-4 border-t border-purple-500/20 flex flex-col space-y-2">
-                  <span className="text-xs font-bold text-purple-400">選択中の編成:</span>
+                  <span className="text-xs font-bold text-purple-400">{t('stats.selectedTeam')}</span>
                   <TeamDisplay charIds={stats.team_usage.find((t:any) => t.canonical_id === selectedTeam)?.character_ids || []} allCharacters={allCharacters} />
                 </div>
               )}
@@ -1384,29 +1372,29 @@ export default function Dashboard() {
             {selectedTeam ? (
               <div className="grid md:grid-cols-3 gap-6">
                 <div className="bg-slate-800/50 p-6 rounded-2xl ring-1 ring-white/5 flex flex-col items-center justify-center">
-                  <p className="text-slate-400 text-sm mb-2">総合勝率</p>
+                  <p className="text-slate-400 text-sm mb-2">{t('stats.overallWinRate')}</p>
                   <p className="text-4xl font-black text-white">
                     {totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-slate-500 mt-2">{totalWins}勝 {totalLosses}敗</p>
+                  <p className="text-sm text-slate-500 mt-2">{t('stats.winsLosses', { wins: totalWins, losses: totalLosses })}</p>
                 </div>
                 <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-                  <p className="text-blue-400 text-sm mb-2">攻撃側での勝率</p>
+                  <p className="text-blue-400 text-sm mb-2">{t('stats.attackWinRate')}</p>
                   <p className="text-4xl font-black text-blue-400">
                     {attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-blue-500/60 mt-2">{attackWins}勝 {attackLosses}敗</p>
+                  <p className="text-sm text-blue-500/60 mt-2">{t('stats.winsLosses', { wins: attackWins, losses: attackLosses })}</p>
                 </div>
                 <div className="bg-red-500/10 p-6 rounded-2xl ring-1 ring-red-500/20 flex flex-col items-center justify-center">
-                  <p className="text-red-400 text-sm mb-2">防衛側での勝率</p>
+                  <p className="text-red-400 text-sm mb-2">{t('stats.defenseWinRate')}</p>
                   <p className="text-4xl font-black text-red-400">
                     {defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-red-500/60 mt-2">{defenseWins}勝 {defenseLosses}敗</p>
+                  <p className="text-sm text-red-500/60 mt-2">{t('stats.winsLosses', { wins: defenseWins, losses: defenseLosses })}</p>
                 </div>
               </div>
             ) : (
-              <p className="text-slate-500 text-center py-12">編成データがありません</p>
+              <p className="text-slate-500 text-center py-12">{t('stats.teamDataEmpty')}</p>
             )}
 
             {selectedTeam && <TeamPositionAnalysis positionStats={stats?.team_usage?.find((team: any) => team.canonical_id === selectedTeam)?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
@@ -1423,7 +1411,7 @@ export default function Dashboard() {
 
             {false && selectedTeam && matchupDetails.length > 0 && (
               <div className="space-y-4 mt-8">
-                <h3 className="font-bold text-white mb-4">この編成の対戦履歴</h3>
+                <h3 className="font-bold text-white mb-4">{t('match.history')}</h3>
                 <div className="space-y-2">
                   {matchupDetails.map((m: any, idx: number) => (
                     <div key={idx} 
@@ -1433,7 +1421,7 @@ export default function Dashboard() {
                       {/* 大会名 & プレイヤー対戦情報 */}
                       <div className="flex items-center space-x-2 text-xs">
                         <span className="font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
-                          {m.tournamentName || "不明"}
+                          {m.tournamentName || t('common.unknown')}
                         </span>
                         <span className="text-slate-400">
                           {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
@@ -1447,14 +1435,14 @@ export default function Dashboard() {
                             m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
                             "bg-slate-700/50 text-slate-400 ring-slate-600/50"
                           }`}>
-                            {m.stage || "不明"}
+                            {localizedMatchStage(m.stage, t)}
                           </div>
                         </div>
                         <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:justify-center">
                             <div className={`rounded-xl p-2 ring-1 ${m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
                             <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                              <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
-                              {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                              <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">{t('match.attack')}</span>
+                              {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">{t('match.target')}</span>}
                               {m.isAttacker && (
                                 <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
                                   {m.isWin ? "WIN" : "LOSE"}
@@ -1471,8 +1459,8 @@ export default function Dashboard() {
                           <div className="shrink-0 text-sm font-black text-slate-500">VS</div>
                           <div className={`rounded-xl p-2 ring-1 ${!m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
                             <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                              <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
-                              {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                              <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">{t('match.defense')}</span>
+                              {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">{t('match.target')}</span>}
                               {!m.isAttacker && (
                                 <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
                                   {m.isWin ? "WIN" : "LOSE"}
@@ -1502,9 +1490,9 @@ export default function Dashboard() {
             <div className="text-center mb-6">
                <h2 className="text-2xl font-black text-slate-100 flex items-center justify-center space-x-3">
                  <Trophy className="text-amber-400" size={28} />
-                 <span>ベスト8進出者 編成一覧</span>
+                 <span>{t('dashboard.best8Teams')}</span>
                </h2>
-               <p className="text-slate-500 mt-2 text-sm italic">※ 編成をタップすると詳細分析へ遷移します</p>
+               <p className="text-slate-500 mt-2 text-sm italic">{t('dashboard.tapTeamHint')}</p>
             </div>
 
               {/* 画面幅に合わせてPCは2列、スマホは1列で表示 */}
@@ -1556,7 +1544,7 @@ export default function Dashboard() {
                                   onCharacterClick={setSelectedCharId}
                                 />
                               ) : (
-                                <span className="text-xs italic">未登録</span>
+                                <span className="text-xs italic">{t('common.unregistered')}</span>
                               )}
                             </div>
                             {deck && (
@@ -1750,41 +1738,39 @@ export default function Dashboard() {
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
-                  <option value="">レアリティ (すべて)</option>
+                  <option value="">{t('filter.rarity')} ({t('common.all')})</option>
                   <option value="SSR">SSR</option>
                   <option value="SR">SR</option>
                   <option value="R">R</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterManufacturer} onChange={e => setFilterManufacturer(e.target.value)}>
-                  <option value="">企業 (すべて)</option>
-                  <option value="エリシオン">エリシオン</option>
-                  <option value="ミシリス">ミシリス</option>
-                  <option value="テトラ">テトラ</option>
-                  <option value="ピルグリム">ピルグリム</option>
-                  <option value="アブノーマル">アブノーマル</option>
+                  <option value="">{t('filter.manufacturer')} ({t('common.all')})</option>
+                  <option value="エリシオン">{t('manufacturer.elysion')}</option>
+                  <option value="ミシリス">{t('manufacturer.missilis')}</option>
+                  <option value="テトラ">{t('manufacturer.tetra')}</option>
+                  <option value="ピルグリム">{t('manufacturer.pilgrim')}</option>
+                  <option value="アブノーマル">{t('manufacturer.abnormal')}</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterBurst} onChange={e => setFilterBurst(e.target.value)}>
-                  <option value="">バースト (すべて)</option>
-                  <option value="1">1 (A含む)</option>
-                  <option value="2">2 (A含む)</option>
-                  <option value="3">3 (A含む)</option>
+                  <option value="">{t('filter.burst')} ({t('common.all')})</option>
+                  {[1, 2, 3].map((value) => <option key={value} value={value}>{t('filter.includesAlternate', { value })}</option>)}
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterElement} onChange={e => setFilterElement(e.target.value)}>
-                  <option value="">属性 (すべて)</option>
-                  <option value="灼熱">灼熱</option>
-                  <option value="水冷">水冷</option>
-                  <option value="風圧">風圧</option>
-                  <option value="鉄甲">鉄甲</option>
-                  <option value="電撃">電撃</option>
+                  <option value="">{t('filter.element')} ({t('common.all')})</option>
+                  <option value="灼熱">{t('element.fire')}</option>
+                  <option value="水冷">{t('element.water')}</option>
+                  <option value="風圧">{t('element.wind')}</option>
+                  <option value="鉄甲">{t('element.iron')}</option>
+                  <option value="電撃">{t('element.electric')}</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterWeapon} onChange={e => setFilterWeapon(e.target.value)}>
-                  <option value="">武器 (すべて)</option>
-                  <option value="AR">アサルトライフル (AR)</option>
-                  <option value="SG">ショットガン (SG)</option>
-                  <option value="SMG">サブマシンガン (SMG)</option>
-                  <option value="MG">マシンガン (MG)</option>
-                  <option value="SR">スナイパーライフル (SR)</option>
-                  <option value="RL">ロケットランチャー (RL)</option>
+                  <option value="">{t('filter.weapon')} ({t('common.all')})</option>
+                  <option value="AR">{t('weapon.ar')}</option>
+                  <option value="SG">{t('weapon.sg')}</option>
+                  <option value="SMG">{t('weapon.smg')}</option>
+                  <option value="MG">{t('weapon.mg')}</option>
+                  <option value="SR">{t('weapon.sr')}</option>
+                  <option value="RL">{t('weapon.rl')}</option>
                 </select>
               </div>
 
@@ -1811,9 +1797,9 @@ export default function Dashboard() {
             </div>
 
             <div className="space-y-4">
-              <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
+              <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
               {includedCharacterIds.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
+                <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
@@ -1850,7 +1836,7 @@ export default function Dashboard() {
               <button
                 onClick={() => setSelectedCharId(null)}
                 className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-slate-900/90 text-slate-300 ring-1 ring-white/20 shadow-xl backdrop-blur hover:bg-slate-800 hover:text-white transition-all"
-                aria-label="閉じる"
+                aria-label={t('common.close')}
               >
                 <X size={20} />
               </button>
@@ -1902,7 +1888,7 @@ export default function Dashboard() {
                       <div>
                         <h2 className="text-2xl sm:text-3xl font-black text-white mb-2">{c.name}</h2>
                         <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-xs sm:text-sm">
-                          レアリティ: {c.rarity || "不明"}
+                          {t('character.rarity', { rarity: c.rarity || t('common.unknown') })}
                         </span>
                       </div>
                     </div>
@@ -1913,20 +1899,20 @@ export default function Dashboard() {
                         onClick={() => setSelectedCharId(null)}
                       >
                         <span>📄</span>
-                        <span>フルページで詳細を見る</span>
+                        <span>{t('action.viewFullDetails')}</span>
                       </Link>
                     </div>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-                      <p className="text-blue-400 text-sm font-bold mb-1">大会採用数</p>
-                      <p className="text-3xl font-black text-blue-400">{usageCount} 回</p>
+                      <p className="text-blue-400 text-sm font-bold mb-1">{t('stats.tournamentPicks')}</p>
+                      <p className="text-3xl font-black text-blue-400">{t('stats.countTimes', { count: usageCount })}</p>
                     </div>
                     <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
-                      <p className="text-emerald-400 text-sm font-bold mb-1">勝率 (非ミラー戦)</p>
+                      <p className="text-emerald-400 text-sm font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
                       <p className="text-3xl font-black text-emerald-400">{winRate}%</p>
-                      <p className="text-xs text-emerald-500/60 mt-1">{charWins}勝 {charLosses}敗</p>
+                      <p className="text-xs text-emerald-500/60 mt-1">{t('stats.winsLosses', { wins: charWins, losses: charLosses })}</p>
                     </div>
                   </div>
 
@@ -1935,7 +1921,7 @@ export default function Dashboard() {
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>
-                        <span>部隊内の配置傾向</span>
+                        <span>{t('character.positionTrend')}</span>
                       </h3>
                       <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
@@ -1952,7 +1938,7 @@ export default function Dashboard() {
                               {usageData.position_stats.map((ps: any) => (
                                 <td key={ps.position} className="py-3 px-2">
                                   <span className="text-white font-bold text-lg">{ps.count}</span>
-                                  <span className="text-slate-500 text-xs ml-0.5">回</span>
+                                  <span className="text-slate-500 text-xs ml-0.5">{t('unit.times')}</span>
                                   <br />
                                   <span className="text-slate-400 text-xs">({ps.pct}%)</span>
                                 </td>
@@ -1979,8 +1965,8 @@ export default function Dashboard() {
                           </tbody>
                         </table>
                         <div className="px-4 py-2 bg-slate-900/50 border-t border-white/5 flex justify-between text-[10px] text-slate-500">
-                          <span>上段: 配置回数（割合）</span>
-                          <span>下段: そのポジションでの勝率</span>
+                          <span>{t('character.positionLegendTop')}</span>
+                          <span>{t('character.positionLegendBottom')}</span>
                         </div>
                       </div>
                     </div>
@@ -1991,16 +1977,16 @@ export default function Dashboard() {
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>
-                        <span>編成の配置傾向</span>
+                        <span>{t('character.teamPositionTrend')}</span>
                       </h3>
                       <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10 bg-slate-900/50">
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">〇番目</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">採用数</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">勝率</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">最終成績</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('team.position')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.usageCount')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.winRate')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.finalResult')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2008,10 +1994,10 @@ export default function Dashboard() {
                               const ps = usageData.team_position_stats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
                               return (
                                 <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                                  <td className="py-2 px-2 text-white font-bold text-sm">{pos}番目</td>
+                                  <td className="py-2 px-2 text-white font-bold text-sm">{t('team.positionValue', { position: pos })}</td>
                                   <td className="py-2 px-2">
                                     <span className="text-white font-bold text-sm">{ps.count}</span>
-                                    <span className="text-slate-500 text-[10px] ml-0.5">人</span>
+                                    <span className="text-slate-500 text-[10px] ml-0.5">{t('unit.people')}</span>
                                     <br />
                                     <span className="text-slate-400 text-[10px]">({ps.pct}%)</span>
                                   </td>
@@ -2025,7 +2011,7 @@ export default function Dashboard() {
                                         <span className="text-slate-500 text-[10px]">{ps.wins}W {ps.total - ps.wins}L</span>
                                       </>
                                     ) : (
-                                      <span className="text-slate-600 text-xs">対戦なし</span>
+                                      <span className="text-slate-600 text-xs">{t('stats.noMatches')}</span>
                                     )}
                                   </td>
                                   <td className="py-2 px-2">
@@ -2058,7 +2044,7 @@ export default function Dashboard() {
                   <div className="space-y-3">
                     <h3 className="font-bold text-white flex items-center space-x-2">
                       <Users size={18} className="text-slate-400" />
-                      <span>よく一緒に編成されるキャラクター</span>
+                      <span>{t('character.synergy')}</span>
                     </h3>
                     <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden divide-y divide-white/5">
                       {/* Burst 1 */}
@@ -2078,11 +2064,11 @@ export default function Dashboard() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst1Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst1Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                       {/* Burst 2 */}
@@ -2102,11 +2088,11 @@ export default function Dashboard() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst2Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst2Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                       {/* Burst 3 */}
@@ -2126,11 +2112,11 @@ export default function Dashboard() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst3Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst3Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                     </div>
@@ -2139,7 +2125,7 @@ export default function Dashboard() {
                   <div className="space-y-4">
                     <h3 className="font-bold text-white flex items-center space-x-2">
                       <Users size={18} className="text-slate-400" />
-                      <span>採用されている編成リスト</span>
+                      <span>{t('character.relatedTeams')}</span>
                     </h3>
 
                     <div className="space-y-3">
@@ -2174,7 +2160,7 @@ export default function Dashboard() {
                                   </span>
                                 )}
                                 <span className="text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-lg ring-1 ring-white/10 text-xs">
-                                  {team.count} 採用
+                                  {t('stats.teamPick', { count: team.count })}
                                 </span>
                               </div>
                             </div>
@@ -2182,15 +2168,14 @@ export default function Dashboard() {
                             {team.total_matches > 0 && (
                               <div className="flex items-center space-x-4 pt-2 border-t border-white/5">
                                 <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] text-slate-500 font-bold uppercase">勝率</span>
+                                  <span className="text-[10px] text-slate-500 font-bold uppercase">{t('stats.winRate')}</span>
                                   <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                     {team.win_rate}%
                                   </span>
                                 </div>
                                 <div className="h-4 w-px bg-white/10"></div>
                                 <div className="flex items-center space-x-2 text-xs font-bold">
-                                  <span className="text-emerald-400">{team.win_count}勝</span>
-                                  <span className="text-slate-500">{team.total_matches - team.win_count}敗</span>
+                                  <span className="text-emerald-400">{t('stats.winsLosses', { wins: team.win_count, losses: team.total_matches - team.win_count })}</span>
                                 </div>
                               </div>
                             )}
@@ -2198,7 +2183,7 @@ export default function Dashboard() {
                         );
                       })}
                       {relatedTeams.length === 0 && (
-                        <p className="text-slate-500 text-sm text-center py-4">データがありません</p>
+                        <p className="text-slate-500 text-sm text-center py-4">{t('common.noData')}</p>
                       )}
                     </div>
                   </div>

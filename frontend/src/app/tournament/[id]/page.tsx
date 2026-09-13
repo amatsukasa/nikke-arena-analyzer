@@ -19,8 +19,10 @@ import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } f
 import { usePlayerIconCropSettings } from "../../../hooks/usePlayerIconCropSettings";
 import { useCharacterCatalog } from "../../../hooks/useCharacterCatalog";
 import { playerIconUrl } from "../../../lib/playerIconUrl";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export default function TournamentDetailRouter() {
+  const { t } = useI18n();
   const params = useParams();
   const { user, isLoading: authLoading } = useAuth();
   const tournamentId = Number(params.id);
@@ -30,7 +32,7 @@ export default function TournamentDetailRouter() {
 
   useEffect(() => {
     if (!Number.isInteger(tournamentId) || tournamentId <= 0) {
-      setLoadError("大会IDが正しくありません。");
+      setLoadError(t('tournament.invalidId'));
       setLoading(false);
       return;
     }
@@ -41,7 +43,7 @@ export default function TournamentDetailRouter() {
     fetch(`/api/tournaments/${tournamentId}`, { cache: "no-store", signal: controller.signal })
       .then(async response => {
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(apiErrorMessage(data, "大会情報の取得に失敗しました。"));
+        if (!response.ok) throw new Error(apiErrorMessage(data, t('tournament.loadError')));
         setTournament(normalizeTournament(data));
       })
       .catch(error => {
@@ -49,7 +51,7 @@ export default function TournamentDetailRouter() {
         // Individual tournament access deliberately returns 404 for both a
         // missing tournament and an unauthorised viewer. Keep that boundary
         // opaque in the UI as well.
-        setLoadError("大会詳細を表示できません。");
+        setLoadError(t('tournament.unavailable'));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -58,10 +60,10 @@ export default function TournamentDetailRouter() {
   }, [tournamentId]);
 
   if (loading || authLoading) {
-    return <div className="loading-screen min-h-[50vh]"><div className="spinner" /><p>大会情報を読み込み中...</p></div>;
+    return <div className="loading-screen min-h-[50vh]"><div className="spinner" /><p>{t('tournament.loading')}</p></div>;
   }
   if (loadError || !tournament) {
-    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{loadError || "大会情報が見つかりません。"}</div></main>;
+    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{loadError || t('tournament.notFound')}</div></main>;
   }
   if (tournament.registration_scope === "champion_8") {
     const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));

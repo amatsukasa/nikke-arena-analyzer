@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import { Trophy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import DrawerMenu from './DrawerMenu';
+import LanguageSwitcher from './LanguageSwitcher';
 import LocalizedLink from './LocalizedLink';
 import { stripLocale } from '@/i18n/config';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -39,7 +40,10 @@ export default function Navbar() {
           </span>
         </LocalizedLink>
 
-        <DrawerMenu user={user} onLogout={logout} />
+        <div className="flex shrink-0 items-center gap-2">
+          <LanguageSwitcher />
+          <DrawerMenu user={user} onLogout={logout} />
+        </div>
       </nav>
     </header>
   );

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 // Node executes this TypeScript test directly via --experimental-strip-types.
 // @ts-expect-error The explicit extension is required by that runtime mode.
 import { locales, localizePath, stripLocale } from '../src/i18n/config.ts';
@@ -23,4 +24,17 @@ test('localized paths preserve routes and keep Japanese URLs unprefixed', () => 
   assert.equal(localizePath('/zh-CN/tournament/7', 'ja'), '/tournament/7');
   assert.equal(stripLocale('/en/tournament/12'), '/tournament/12');
   assert.equal(localizePath('/api/characters', 'ko'), '/api/characters');
+});
+
+test('navbar owns the compact language switcher before the menu', async () => {
+  const [navbar, drawer, switcher] = await Promise.all([
+    readFile(new URL('../src/components/Navbar.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/DrawerMenu.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/LanguageSwitcher.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.ok(navbar.indexOf('<LanguageSwitcher />') < navbar.indexOf('<DrawerMenu'));
+  assert.doesNotMatch(drawer, /LanguageSwitcher/);
+  assert.match(switcher, /aria-haspopup="menu"/);
+  assert.match(switcher, /max-age=31536000/);
+  assert.match(switcher, /searchParams\.toString\(\)/);
 });

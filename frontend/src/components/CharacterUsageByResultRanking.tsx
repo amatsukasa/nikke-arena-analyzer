@@ -65,7 +65,7 @@ export default function CharacterUsageByResultRanking({
             <span>{t('stats.characterPickRanking')}</span>
           </h2>
           <p className="mt-2 text-sm font-medium text-slate-300">
-            対象：{label} {denominator}人
+            {t('stats.targetByResult', { result: label, count: denominator })}
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -108,7 +108,7 @@ export default function CharacterUsageByResultRanking({
               </div>
 
               <div className="flex items-center gap-2 text-sm md:contents">
-                <span className="font-bold text-slate-200 md:p-4 md:text-center">{group.count}回</span>
+                <span className="font-bold text-slate-200 md:p-4 md:text-center">{t('stats.countTimes', { count: group.count })}</span>
                 <span className="text-slate-600 md:hidden">・</span>
                 <span className="font-bold text-blue-300 md:p-4 md:text-center">{group.usageRate.toFixed(1)}%</span>
               </div>

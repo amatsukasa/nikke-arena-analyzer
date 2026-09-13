@@ -1,11 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import { Trophy, ShieldAlert, User as UserIcon, ChevronLeft, Share2 } from "lucide-react";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export default function PlayerStatsPage() {
+  const { t, href } = useI18n();
   const params = useParams();
   const id = params.id as string;
   const seed = parseInt(params.seed as string);
@@ -15,7 +16,7 @@ export default function PlayerStatsPage() {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
     } else {
-      router.push(`/tournament/${id}`);
+      router.push(href(`/tournament/${id}`));
     }
   };
 
@@ -30,7 +31,7 @@ export default function PlayerStatsPage() {
 
   useEffect(() => {
     if (!Number.isInteger(tournamentId) || tournamentId <= 0) {
-      setError("大会IDが正しくありません。");
+      setError(t('tournament.invalidId'));
       setLoading(false);
       return;
     }
@@ -42,7 +43,7 @@ export default function PlayerStatsPage() {
         // Verify private tournament access before asking for any individual
         // Player or bracket data.
         const tournRes = await fetch(`/api/tournaments/${tournamentId}?t=${timestamp}`);
-        if (!tournRes.ok) throw new Error("個人成績を表示できません。");
+        if (!tournRes.ok) throw new Error(t('player.unavailable'));
         const [detailsRes, bracketRes, charsRes] = await Promise.all([
           fetch(`/api/tournaments/${tournamentId}/players/${seed}/details?t=${timestamp}`),
           fetch(`/api/tournaments/${tournamentId}/bracket?t=${timestamp}`),
@@ -51,7 +52,7 @@ export default function PlayerStatsPage() {
 
         const responses = [detailsRes, bracketRes, charsRes];
         if (responses.some(response => !response.ok)) {
-          throw new Error("個人成績データを取得できませんでした。");
+          throw new Error(t('player.loadError'));
         }
         
         setTournament(await tournRes.json());
@@ -60,7 +61,7 @@ export default function PlayerStatsPage() {
         setAllCharacters(await charsRes.json());
       } catch (e) {
         console.error(e);
-        setError(e instanceof Error ? e.message : "個人成績データを取得できませんでした。");
+        setError(e instanceof Error ? e.message : t('player.loadError'));
       } finally {
         setLoading(false);
       }
@@ -78,14 +79,14 @@ export default function PlayerStatsPage() {
     return (
       <div className="min-h-screen bg-slate-950 p-6 flex flex-col items-center justify-center text-center">
         <UserIcon size={64} className="text-slate-700 mb-4" />
-        <h1 className="text-2xl font-bold text-slate-300">個人成績を表示できません</h1>
+        <h1 className="text-2xl font-bold text-slate-300">{t('player.unavailable')}</h1>
         <p className="text-slate-500 mt-2">{error}</p>
         <button
           type="button"
           onClick={handleBack}
           className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors cursor-pointer"
         >
-          前のページに戻る
+          {t('common.back')}
         </button>
       </div>
     );
@@ -95,14 +96,14 @@ export default function PlayerStatsPage() {
     return (
       <div className="min-h-screen bg-slate-950 p-6 flex flex-col items-center justify-center">
         <UserIcon size={64} className="text-slate-700 mb-4" />
-        <h1 className="text-2xl font-bold text-slate-300">データが見つかりません</h1>
-        <p className="text-slate-500 mt-2">指定されたシード({seed})のプレイヤー情報は登録されていません。</p>
+        <h1 className="text-2xl font-bold text-slate-300">{t('common.noData')}</h1>
+        <p className="text-slate-500 mt-2">{t('player.seedNotFound', { seed })}</p>
         <button
           type="button"
           onClick={handleBack}
           className="mt-8 px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-full font-bold text-white transition-colors cursor-pointer"
         >
-          前のページに戻る
+          {t('common.back')}
         </button>
       </div>
     );
@@ -114,9 +115,7 @@ export default function PlayerStatsPage() {
     (deck: any) => (deck.wins || 0) + (deck.losses || 0) > 0
   );
 
-  let myTournamentResult = hasRecordedMatches
-    ? "グループ1回戦出場 (Best 64)"
-    : "対戦成績未登録";
+  let myTournamentResult = hasRecordedMatches ? t('player.result.best64') : t('player.result.unregistered');
   if (hasRecordedMatches && bracketData && bracketData.groups) {
      bracketData.groups.forEach((g: any) => {
         const found = g.players.find((p:any) => (p.original_seed || p.seed) === seed && p.id !== null);
@@ -125,10 +124,10 @@ export default function PlayerStatsPage() {
            const reached_sf = g.sf_winners?.includes(myPlayer.id);
            const reached_f = g.winner === myPlayer.id;
            
-           if (reached_f) myTournamentResult = "グループ優勝 (Best 8 進出)";
-           else if (reached_sf) myTournamentResult = "グループ決勝進出 (Best 16)";
-           else if (reached_qf) myTournamentResult = "グループ準決勝進出 (Best 32)";
-           else myTournamentResult = "グループ1回戦出場 (Best 64)";
+           if (reached_f) myTournamentResult = t('player.result.best8');
+           else if (reached_sf) myTournamentResult = t('player.result.best16');
+           else if (reached_qf) myTournamentResult = t('player.result.best32');
+           else myTournamentResult = t('player.result.best64');
         }
      });
      
@@ -139,10 +138,10 @@ export default function PlayerStatsPage() {
            const reached_cf_f = cf.sf_winners?.includes(myPlayer.id);
            const is_champ = cf.winner === myPlayer.id;
 
-           if (is_champ) myTournamentResult = "🏆 チャンピオン 🏆";
-           else if (reached_cf_f) myTournamentResult = "準優勝 (2位)";
-           else if (reached_cf_sf) myTournamentResult = "ベスト4";
-           else myTournamentResult = "チャンピオン対抗戦出場 (Best 8)";
+           if (is_champ) myTournamentResult = `🏆 ${t('result.champion')} 🏆`;
+           else if (reached_cf_f) myTournamentResult = t('result.runnerUp');
+           else if (reached_cf_sf) myTournamentResult = t('result.semifinal');
+           else myTournamentResult = t('player.result.best8Appearance');
         }
      }
   }
@@ -173,11 +172,11 @@ export default function PlayerStatsPage() {
   const handleShare = () => {
     if (navigator.share) {
       navigator.share({
-        title: `${myPlayer.name} の成績 - NIKKE Arena Analyzer`,
+        title: t('player.shareTitle', { name: myPlayer.name }),
         url: window.location.href
       });
     } else {
-      alert("共有機能がサポートされていません");
+      alert(t('player.shareUnsupported'));
     }
   };
 
@@ -193,11 +192,11 @@ export default function PlayerStatsPage() {
             className="flex items-center space-x-2 text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
             <ChevronLeft size={20} />
-            <span className="font-bold text-sm">前のページに戻る</span>
+            <span className="font-bold text-sm">{t('common.back')}</span>
           </button>
           <button onClick={handleShare} className="flex items-center space-x-2 px-4 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white rounded-full font-bold transition-all ring-1 ring-blue-500/50">
             <Share2 size={16} />
-            <span className="text-sm">結果をシェア</span>
+            <span className="text-sm">{t('player.share')}</span>
           </button>
         </div>
 
@@ -226,7 +225,7 @@ export default function PlayerStatsPage() {
                     {myTournamentResult}
                  </div>
                  <div className="mt-4 text-slate-400 text-sm font-medium">
-                   {tournament?.name} (シード {seed})
+                   {t('player.tournamentSeed', { tournament: tournament?.name || '', seed })}
                  </div>
               </div>
             </div>
@@ -236,7 +235,7 @@ export default function PlayerStatsPage() {
           <div className="p-8 md:p-12">
             <h2 className="text-2xl font-black text-slate-100 mb-8 flex items-center space-x-3">
                <ShieldAlert className="text-blue-400" size={28} />
-               <span>登録編成と戦績</span>
+               <span>{t('player.teamsAndRecord')}</span>
             </h2>
 
             <div className="space-y-6">
@@ -282,7 +281,7 @@ export default function PlayerStatsPage() {
             
             {myDecks.length === 0 && (
               <div className="text-center py-12 text-slate-500 font-bold bg-slate-800/30 rounded-3xl border border-dashed border-slate-700">
-                編成データが登録されていません
+                {t('stats.teamDataEmpty')}
               </div>
             )}
           </div>
