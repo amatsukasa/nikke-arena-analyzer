@@ -746,20 +746,20 @@ function DashboardContent() {
                     {allTournaments
                       .filter(t => (t.play_server || "") === filterServer && (t.season || "β30") === filterSeason)
                       .sort((a, b) => new Date(a.provider_game_start_date || 0).getTime() - new Date(b.provider_game_start_date || 0).getTime())
-                      .map(t => (
-                      <label key={t.id} className="flex items-center space-x-3 cursor-pointer group">
-                        <input type="checkbox" checked={selectedSpecificTournamentIds.includes(t.id)}
+                      .map(tournament => (
+                      <label key={tournament.id} className="flex items-center space-x-3 cursor-pointer group">
+                        <input type="checkbox" checked={selectedSpecificTournamentIds.includes(tournament.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
-                              setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, t.id]);
+                              setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, tournament.id]);
                             } else {
-                              setSelectedSpecificTournamentIds(selectedSpecificTournamentIds.filter(id => id !== t.id));
+                              setSelectedSpecificTournamentIds(selectedSpecificTournamentIds.filter(id => id !== tournament.id));
                             }
                           }}
                           className="w-4 h-4 rounded bg-slate-800 border-white/20 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
                         />
                         <span className="text-xs font-medium text-slate-300 group-hover:text-white transition-colors truncate">
-                          {t.provider_game_start_date ? t('filter.startedAt', { date: t.provider_game_start_date }) : (t.name || t('filter.tournamentFallback', { id: t.id }))}
+                          {tournament.provider_game_start_date ? t('filter.startedAt', { date: tournament.provider_game_start_date }) : (tournament.name || t('filter.tournamentFallback', { id: tournament.id }))}
                         </span>
                       </label>
                     ))}

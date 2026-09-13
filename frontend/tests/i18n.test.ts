@@ -51,3 +51,20 @@ test('champion arena public UI uses localized labels without changing stored res
   assert.doesNotMatch(page, /大会一覧を取得できませんでした|出場回数|最高成績|最新成績/);
   assert.match(results, /champion: "優勝"/);
 });
+
+test('tournament option callbacks do not shadow the translation function', async () => {
+  const page = await readFile(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /\.map\(t\s*=>\s*\([\s\S]{0,1000}t\('filter\./);
+  assert.match(page, /\.map\(tournament\s*=>/);
+  assert.match(page, /tournament\.provider_game_start_date\s*\?\s*t\('filter\.startedAt'/);
+});
+
+test('locale restoration bypasses static and machine-readable paths', async () => {
+  const proxy = await readFile(new URL('../src/proxy.ts', import.meta.url), 'utf8');
+  for (const path of ['/ads.txt', '/robots.txt', '/favicon.ico', '/sitemap.xml']) {
+    assert.ok(proxy.includes(`"${path}"`), path);
+  }
+  assert.match(proxy, /pathname\.startsWith\("\/_next\/"\)/);
+  assert.match(proxy, /pathname\.startsWith\("\/images\/"\)/);
+  assert.match(proxy, /if \(isStaticAsset\) return NextResponse\.next\(\)/);
+});

@@ -12,6 +12,12 @@ import { defaultLocale, isLocale, localeCookie, type Locale } from "./i18n/confi
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const isStaticAsset = pathname.startsWith("/_next/")
+    || pathname.startsWith("/images/")
+    || ["/ads.txt", "/robots.txt", "/favicon.ico", "/sitemap.xml"].includes(pathname)
+    || (!pathname.startsWith("/api/") && /\/[^/]+\.[^/]+$/.test(pathname));
+  if (isStaticAsset) return NextResponse.next();
+
   const firstSegment = pathname.split("/")[1];
   const pathLocale: Locale = isLocale(firstSegment) ? firstSegment : defaultLocale;
   const unprefixedPath = pathLocale === defaultLocale
