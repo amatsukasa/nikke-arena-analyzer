@@ -14,8 +14,8 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isStaticAsset = pathname.startsWith("/_next/")
     || pathname.startsWith("/images/")
-    || ["/ads.txt", "/robots.txt", "/favicon.ico", "/sitemap.xml"].includes(pathname)
-    || (!pathname.startsWith("/api/") && /\/[^/]+\.[^/]+$/.test(pathname));
+    || pathname.startsWith("/collection-badges/")
+    || ["/ads.txt", "/robots.txt", "/favicon.ico", "/sitemap.xml"].includes(pathname);
   if (isStaticAsset) return NextResponse.next();
 
   const firstSegment = pathname.split("/")[1];

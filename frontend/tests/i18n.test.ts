@@ -66,5 +66,7 @@ test('locale restoration bypasses static and machine-readable paths', async () =
   }
   assert.match(proxy, /pathname\.startsWith\("\/_next\/"\)/);
   assert.match(proxy, /pathname\.startsWith\("\/images\/"\)/);
+  assert.match(proxy, /pathname\.startsWith\("\/collection-badges\/"\)/);
   assert.match(proxy, /if \(isStaticAsset\) return NextResponse\.next\(\)/);
+  assert.doesNotMatch(proxy, /!pathname\.startsWith\("\/api\/"\).*test\(pathname\)/);
 });
