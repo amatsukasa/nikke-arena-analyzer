@@ -38,3 +38,16 @@ test('navbar owns the compact language switcher before the menu', async () => {
   assert.match(switcher, /max-age=31536000/);
   assert.match(switcher, /searchParams\.toString\(\)/);
 });
+
+test('champion arena public UI uses localized labels without changing stored result values', async () => {
+  const [drawer, page, results] = await Promise.all([
+    readFile(new URL('../src/components/DrawerMenu.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/app/champion-arena/results/page.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/championArenaResults.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(drawer, /nav\.championArenaResults/);
+  assert.doesNotMatch(drawer, /label: 'チャンアリ戦績'/);
+  assert.match(page, /championArena\.result\.champion/);
+  assert.doesNotMatch(page, /大会一覧を取得できませんでした|出場回数|最高成績|最新成績/);
+  assert.match(results, /champion: "優勝"/);
+});

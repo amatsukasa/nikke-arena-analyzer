@@ -21,7 +21,7 @@ const mainItems = [
   { href: '/', label: 'TOP' },
   { href: '/about', label: 'ABOUT' },
   { href: '/guide', label: 'GUIDE' },
-  { href: '/champion-arena/results', label: 'チャンアリ戦績' },
+  { href: '/champion-arena/results', labelKey: 'nav.championArenaResults' },
   { href: '/links', label: 'LINK' },
   { href: '/updates', label: 'UPDATE' },
   { href: '/contact', label: 'CONTACT' },
@@ -170,7 +170,7 @@ export default function DrawerMenu({ user, onLogout }: DrawerMenuProps) {
                           : 'text-slate-300 hover:bg-white/5 hover:text-white'
                       }`}
                     >
-                      {item.label}
+                      {'labelKey' in item ? t(item.labelKey) : item.label}
                       {current && <span className="h-2 w-2 rounded-full bg-blue-400" aria-hidden="true" />}
                     </LocalizedLink>
                   </li>
