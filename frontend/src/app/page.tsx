@@ -202,9 +202,15 @@ function DashboardContent() {
     const fetchTournaments = async () => {
       try {
         const res = await fetch(`/api/tournaments?t=${Date.now()}`, { cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
         const data: any[] = await res.json();
-        if (!Array.isArray(data)) return;
+        if (!Array.isArray(data)) {
+          setLoading(false);
+          return;
+        }
         setAllTournaments(data);
         
         if (data.length > 0) {

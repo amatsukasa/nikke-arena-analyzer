@@ -59,6 +59,12 @@ test('tournament option callbacks do not shadow the translation function', async
   assert.match(page, /tournament\.provider_game_start_date\s*\?\s*t\('filter\.startedAt'/);
 });
 
+test('dashboard stops loading when the tournament request cannot provide a list', async () => {
+  const page = await readFile(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /if \(!res\.ok\) \{\s*setLoading\(false\);\s*return;/);
+  assert.match(page, /if \(!Array\.isArray\(data\)\) \{\s*setLoading\(false\);\s*return;/);
+});
+
 test('locale restoration bypasses static and machine-readable paths', async () => {
   const proxy = await readFile(new URL('../src/proxy.ts', import.meta.url), 'utf8');
   for (const path of ['/ads.txt', '/robots.txt', '/favicon.ico', '/sitemap.xml']) {
