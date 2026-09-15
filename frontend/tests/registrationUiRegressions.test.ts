@@ -114,3 +114,13 @@ test("both registration modes refresh the shared Character catalog after saving"
   assert.match(hook, /current !== generation\.current/);
   assert.doesNotMatch(hook, /setCharacters\(\[\]\)/);
 });
+
+test("both registration modes refresh match availability immediately after saving teams", () => {
+  const full64 = readFileSync(new URL("../src/app/tournament/[id]/page.tsx", import.meta.url), "utf8");
+  const champion = readFileSync(new URL("../src/components/ChampionTournamentRegistrationShell.tsx", import.meta.url), "utf8");
+
+  assert.match(full64, /fetchBracket\(\);/);
+  assert.match(champion, /await loadMatches\(\);/);
+  assert.match(champion, /setMatches\(Array\.isArray\(data\.matches\)\?data\.matches:\[\]\)/);
+  assert.doesNotMatch(champion, /setInterval|window\.location\.reload/);
+});
