@@ -86,6 +86,12 @@ export default function CharacterTemplatesAdmin({
   const { characters } = useCharacterCatalog<SearchCharacter>(() =>
     setError("Character候補を取得できませんでした。"),
   );
+  const characterNameById = useMemo(
+    () => new Map(characters.map((character) => [character.id, character.name])),
+    [characters],
+  );
+  const reviewCharacterLabel = (characterId: number) =>
+    `${characterNameById.get(characterId) ?? "Character名を取得できません"}（ID: ${characterId}）`;
 
   const load = useCallback(async () => {
     loadController.current?.abort();
@@ -270,7 +276,7 @@ export default function CharacterTemplatesAdmin({
                 <div className="grid gap-4 sm:grid-cols-[1fr_auto_1fr]">
                   <TemplateThumb
                     url={`/api/admin/character-templates/assets/active/${review.matched_template_filename}`}
-                    label={`予測 Character ${review.predicted_character_id}`}
+                    label={`予測 ${reviewCharacterLabel(review.predicted_character_id)}`}
                   />
                   <div className="self-center text-center">→</div>
                   <TemplateThumb
@@ -279,7 +285,7 @@ export default function CharacterTemplatesAdmin({
                         ? `/api/admin/character-templates/assets/active/${review.corrected_template_filename}`
                         : ""
                     }
-                    label={`修正 Character ${review.corrected_character_id}`}
+                    label={`修正 ${reviewCharacterLabel(review.corrected_character_id)}`}
                   />
                 </div>
                 <p className="mt-3 text-sm text-slate-400">
@@ -296,7 +302,7 @@ export default function CharacterTemplatesAdmin({
                     className="rounded bg-emerald-700 px-3 py-2"
                     onClick={() =>
                       window.confirm(
-                        `この画像を予測Character ${review.predicted_character_id} のまま維持しますか？\n\n解析結果が正しく、利用者による修正が誤りだった場合に選びます。元のテンプレートは移動・無効化されません。`,
+                        `この画像を予測 ${reviewCharacterLabel(review.predicted_character_id)} のまま維持しますか？\n\n解析結果が正しく、利用者による修正が誤りだった場合に選びます。元のテンプレートは移動・無効化されません。`,
                       ) &&
                       void run(
                         `keep-${review.id}`,
@@ -315,7 +321,7 @@ export default function CharacterTemplatesAdmin({
                     className="rounded bg-indigo-700 px-3 py-2"
                     onClick={() =>
                       window.confirm(
-                        `Character ${review.predicted_character_id} から修正先Character ${review.corrected_character_id} へ移しますか？\n同じ画像が既にある場合は重複登録しません。`,
+                        `${reviewCharacterLabel(review.predicted_character_id)} から修正先 ${reviewCharacterLabel(review.corrected_character_id)} へ移しますか？\n同じ画像が既にある場合は重複登録しません。`,
                       ) &&
                       void run(
                         `move-${review.id}`,
