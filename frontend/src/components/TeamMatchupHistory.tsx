@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import TeamDisplay from "./TeamDisplay";
-import { formatMatchStageForDisplay, sortUniqueMatchStageDisplays } from "@/lib/matchStageDisplay";
+import { formatMatchStageForDisplay, localizedMatchStage, sortUniqueMatchStageDisplays } from "@/lib/matchStageDisplay";
 import { matchupSideResults, type MatchupResult } from "@/lib/teamMatchupPerspective";
 import type { RegistrationScope } from "@/lib/tournaments";
 import { tournamentResultClass } from "@/lib/tournamentResult";
+import { useI18n } from "@/i18n/I18nProvider";
 
 type MatchupFilterResult = "ALL" | "WIN" | "LOSE";
 type MatchupFilterSide = "ALL" | "ATTACK" | "DEFENSE";
@@ -20,13 +21,14 @@ type Props = {
 };
 
 export function MatchStageBadge({ stage }: { stage?: string | null }) {
+  const { t } = useI18n();
   const label = stage || "不明";
   const colorClass = label === "FINAL"
     ? "bg-amber-400/20 text-amber-300 ring-amber-400/50"
     : tournamentResultClass(label);
   return (
     <div className={`self-start rounded px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ring-1 ${colorClass}`}>
-      {label}
+      {localizedMatchStage(label, t)}
     </div>
   );
 }
@@ -39,6 +41,7 @@ export default function TeamMatchupHistory({
   registrationScope,
   registrationScopeByTournamentId,
 }: Props) {
+  const { t } = useI18n();
   const [resultFilter, setResultFilter] = useState<MatchupFilterResult>("ALL");
   const [sideFilter, setSideFilter] = useState<MatchupFilterSide>("ALL");
   const [stageFilter, setStageFilter] = useState("ALL");
@@ -73,7 +76,7 @@ export default function TeamMatchupHistory({
 
   const resultBadge = (result: MatchupResult, emphasized: boolean, sideLabel: string) => (
     <span
-      aria-label={`${sideLabel}結果: ${result}${emphasized ? "（分析対象）" : ""}`}
+      aria-label={t('match.resultAria', { side: sideLabel, result: result === 'WIN' ? t('match.win') : t('match.loss'), target: emphasized ? t('match.targetSuffix') : '' })}
       className={`shrink-0 rounded-md tracking-wider ring-1 ${
         emphasized
           ? "px-1 py-2 text-center text-sm font-black xl:min-w-16 xl:px-3 xl:text-lg"
@@ -90,34 +93,34 @@ export default function TeamMatchupHistory({
   return (
     <div className="mt-8 space-y-4">
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-        <h3 className="font-bold text-white">この編成の対戦履歴</h3>
+        <h3 className="font-bold text-white">{t('match.history')}</h3>
         <div className="flex flex-wrap gap-2">
           <select
             className="rounded-lg border border-white/10 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
             value={resultFilter}
             onChange={(event) => setResultFilter(event.target.value as MatchupFilterResult)}
           >
-            <option value="ALL">勝敗：すべて</option>
-            <option value="WIN">WIN</option>
-            <option value="LOSE">LOSE</option>
+            <option value="ALL">{t('match.result')}：{t('common.all')}</option>
+            <option value="WIN">{t('match.win')}</option>
+            <option value="LOSE">{t('match.loss')}</option>
           </select>
           <select
             className="rounded-lg border border-white/10 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
             value={sideFilter}
             onChange={(event) => setSideFilter(event.target.value as MatchupFilterSide)}
           >
-            <option value="ALL">攻防：すべて</option>
-            <option value="ATTACK">攻撃</option>
-            <option value="DEFENSE">防衛</option>
+            <option value="ALL">{t('match.side')}：{t('common.all')}</option>
+            <option value="ATTACK">{t('match.attack')}</option>
+            <option value="DEFENSE">{t('match.defense')}</option>
           </select>
           <select
             className="rounded-lg border border-white/10 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
             value={stageFilter}
             onChange={(event) => setStageFilter(event.target.value)}
           >
-            <option value="ALL">ラウンド：すべて</option>
+            <option value="ALL">{t('match.round')}：{t('common.all')}</option>
             {availableStages.map((stage) => (
-              <option key={stage} value={stage}>{stage}</option>
+              <option key={stage} value={stage}>{localizedMatchStage(stage, t)}</option>
             ))}
           </select>
         </div>
@@ -138,7 +141,7 @@ export default function TeamMatchupHistory({
               >
                 <div className="flex min-w-0 items-center space-x-2 text-xs">
                   <span className="shrink-0 whitespace-nowrap rounded bg-indigo-500/10 px-2 py-0.5 font-bold text-indigo-400 ring-1 ring-indigo-500/20">
-                    {match.tournamentName || "不明"}
+                    {match.tournamentName || t('common.unknown')}
                   </span>
                   <span className="min-w-0 truncate text-slate-400">
                     {match.attackerName} <span className="text-slate-600">vs</span> {match.defenderName}
@@ -151,15 +154,15 @@ export default function TeamMatchupHistory({
                 <div className="grid min-w-0 flex-1 grid-cols-[2.5rem_auto] items-center justify-center gap-x-1 gap-y-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:justify-stretch xl:gap-3">
                   <div className="contents xl:col-start-1 xl:row-start-1 xl:flex xl:min-w-0 xl:items-center xl:justify-center xl:gap-2">
                     <div className="col-start-1 row-start-1 justify-self-center xl:block">
-                      {resultBadge(sideResults.attacker, match.isAttacker, "攻撃側")}
+                      {resultBadge(sideResults.attacker, match.isAttacker, t('match.attack'))}
                     </div>
                     <div
                       data-matchup-side="attacker"
                       className={`col-start-2 row-start-1 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}
                     >
                       <div className="mb-2 flex items-center justify-center gap-2">
-                        <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
-                        {match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">分析対象</span>}
+                        <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">{t('match.attack')}</span>
+                        {match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
                       </div>
                       <div data-matchup-characters="attacker" className="flex min-w-0 justify-center [&>div]:justify-center">
                         <TeamDisplay
@@ -181,8 +184,8 @@ export default function TeamMatchupHistory({
                       className={`col-start-2 row-start-3 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${!match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}
                     >
                       <div className="mb-2 flex items-center justify-center gap-2">
-                        <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
-                        {!match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">分析対象</span>}
+                        <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">{t('match.defense')}</span>
+                        {!match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
                       </div>
                       <div data-matchup-characters="defender" className="flex min-w-0 justify-center [&>div]:justify-center">
                         <TeamDisplay
@@ -194,7 +197,7 @@ export default function TeamMatchupHistory({
                       </div>
                     </div>
                     <div className="col-start-1 row-start-3 justify-self-center xl:block">
-                      {resultBadge(sideResults.defender, !match.isAttacker, "防衛側")}
+                      {resultBadge(sideResults.defender, !match.isAttacker, t('match.defense'))}
                     </div>
                   </div>
                 </div>
@@ -205,7 +208,7 @@ export default function TeamMatchupHistory({
         </div>
       ) : (
         <div className="rounded-xl bg-slate-800/30 p-8 text-center text-slate-400 ring-1 ring-white/5">
-          条件に一致する対戦履歴がありません
+          {t('common.noData')}
         </div>
       )}
     </div>

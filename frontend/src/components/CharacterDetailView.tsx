@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Users } from "lucide-react";
 import React from "react";
-import Link from "next/link";
+import Link from "./LocalizedLink";
 import { getCharIconUrl } from "@/utils/charIcon";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export interface CharacterDetailViewProps {
   mode: "cross" | "single";
@@ -29,15 +30,16 @@ export default function CharacterDetailView({
   title,
 }: CharacterDetailViewProps) {
   const router = useRouter();
+  const { t, href } = useI18n();
 
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
     } else {
       if (mode === "cross") {
-        router.push("/");
+        router.push(href("/"));
       } else {
-        router.push(`/tournament/${tournamentId || ""}`);
+        router.push(href(`/tournament/${tournamentId || ""}`));
       }
     }
   };
@@ -46,7 +48,7 @@ export default function CharacterDetailView({
   if (!c) {
     return (
       <main className="p-6 md:p-12 max-w-4xl mx-auto">
-        <p className="text-slate-400 text-center py-12">キャラクターが見つかりません (ID: {characterId})</p>
+        <p className="text-slate-400 text-center py-12">{t('character.notFound', { id: characterId })}</p>
         <div className="text-center">
           <button
             type="button"
@@ -54,7 +56,7 @@ export default function CharacterDetailView({
             className="inline-flex items-center space-x-2 text-blue-400 hover:text-blue-300 font-bold transition-colors cursor-pointer"
           >
             <ChevronLeft size={18} />
-            <span>前のページに戻る</span>
+            <span>{t('common.back')}</span>
           </button>
         </div>
       </main>
@@ -104,7 +106,7 @@ export default function CharacterDetailView({
             ? `/character/${teamMemberCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
             : `/tournament/${tournamentId}/dashboard/character/${teamMemberCharacterId}`;
           return (
-            <Link
+              <Link
               key={i}
               href={href}
               className="flex flex-col items-center space-y-1 group"
@@ -112,13 +114,13 @@ export default function CharacterDetailView({
             >
               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                 {getCharIconUrl(ch) ? (
-                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch?.name || "不明"} className="w-full h-full object-cover" />
+                  <img src={getCharIconUrl(ch)} loading="lazy" decoding="async" alt={ch?.name || t('common.unknown')} className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{ch?.name?.slice(0, 3) || "不明"}</span>
+                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{ch?.name?.slice(0, 3) || t('common.unknown')}</span>
                 )}
               </div>
-              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={ch?.name || "不明"}>{ch?.name || "不明"}</span>
-            </Link>
+              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={ch?.name || t('common.unknown')}>{ch?.name || t('common.unknown')}</span>
+              </Link>
           );
         })}
       </div>
@@ -144,7 +146,7 @@ export default function CharacterDetailView({
           type="button"
           onClick={handleBack}
           className="p-2 bg-slate-800 hover:bg-slate-700 rounded-full transition-colors cursor-pointer ring-1 ring-white/10 shadow-lg"
-          aria-label="前のページに戻る"
+          aria-label={t('common.back')}
         >
           <ChevronLeft size={24} className="text-slate-300" />
         </button>
@@ -161,7 +163,7 @@ export default function CharacterDetailView({
       {/* 横断モードバッジ */}
       {mode === "cross" && tournamentIds && (
         <div className="bg-cyan-500/10 px-4 py-2 rounded-xl ring-1 ring-cyan-500/30 flex items-center space-x-2">
-          <span className="text-[10px] font-black text-cyan-400">横断モード: {tournamentIds.length}大会の統合データ</span>
+          <span className="text-[10px] font-black text-cyan-400">{t('character.crossMode', { count: tournamentIds.length })}</span>
         </div>
       )}
 
@@ -176,10 +178,11 @@ export default function CharacterDetailView({
             )}
           </div>
           <div>
-            <h2 className="text-4xl font-black text-white mb-3">{c.name}</h2>
+          <h2 className="text-4xl font-black text-white mb-3">{c.name}</h2>
+          <p className="mt-2 text-xs text-slate-500">{t('character.officialNamesNotice')}</p>
             <div className="flex flex-wrap gap-2">
               <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-sm">
-                {c.rarity || "不明"}
+                {c.rarity || t('common.unknown')}
               </span>
               {c.element && (
                 <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-sm">
@@ -208,19 +211,19 @@ export default function CharacterDetailView({
         {/* 統計カード */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-blue-500/10 p-5 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-            <p className="text-blue-400 text-xs font-bold mb-1">大会採用数</p>
-            <p className="text-3xl font-black text-blue-400">{usageCount} <span className="text-lg">回</span></p>
+            <p className="text-blue-400 text-xs font-bold mb-1">{t('stats.tournamentPicks')}</p>
+            <p className="text-3xl font-black text-blue-400">{t('stats.countTimes', { count: usageCount })}</p>
           </div>
           <div className="bg-emerald-500/10 p-5 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
-            <p className="text-emerald-400 text-xs font-bold mb-1">勝率 (非ミラー)</p>
+            <p className="text-emerald-400 text-xs font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
             <p className="text-3xl font-black text-emerald-400">{winRate}<span className="text-lg">%</span></p>
           </div>
           <div className="bg-green-500/10 p-5 rounded-2xl ring-1 ring-green-500/20 flex flex-col items-center justify-center">
-            <p className="text-green-400 text-xs font-bold mb-1">勝利数</p>
+            <p className="text-green-400 text-xs font-bold mb-1">{t('match.win')}</p>
             <p className="text-3xl font-black text-green-400">{charWins}</p>
           </div>
           <div className="bg-slate-700/30 p-5 rounded-2xl ring-1 ring-white/10 flex flex-col items-center justify-center">
-            <p className="text-slate-400 text-xs font-bold mb-1">敗北数</p>
+            <p className="text-slate-400 text-xs font-bold mb-1">{t('match.loss')}</p>
             <p className="text-3xl font-black text-slate-400">{charLosses}</p>
           </div>
         </div>
@@ -230,7 +233,7 @@ export default function CharacterDetailView({
       <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-8 rounded-3xl shadow-2xl space-y-4">
         <h3 className="text-xl font-black text-white flex items-center space-x-2">
           <Users size={20} className="text-slate-400" />
-          <span>よく一緒に編成されるキャラクター</span>
+          <span>{t('character.synergy')}</span>
         </h3>
         
         <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden divide-y divide-white/5">
@@ -261,13 +264,13 @@ export default function CharacterDetailView({
                     <div className="flex flex-col items-center">
                       <span className="text-[10px] text-slate-300 w-16 truncate text-center font-bold" title={synergyChar.name}>{synergyChar.name}</span>
                       <span className="text-[10px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded-full mt-1">
-                        {synergyChar.synergyCount}回 ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
+                        {t('stats.countTimes', { count: synergyChar.synergyCount })} ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
                       </span>
                     </div>
                   </Link>
                 );
               })}
-              {burst1Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">該当なし</span>}
+              {burst1Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">{t('character.noMatch')}</span>}
             </div>
           </div>
 
@@ -298,13 +301,13 @@ export default function CharacterDetailView({
                     <div className="flex flex-col items-center">
                       <span className="text-[10px] text-slate-300 w-16 truncate text-center font-bold" title={synergyChar.name}>{synergyChar.name}</span>
                       <span className="text-[10px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded-full mt-1">
-                        {synergyChar.synergyCount}回 ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
+                        {t('stats.countTimes', { count: synergyChar.synergyCount })} ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
                       </span>
                     </div>
                   </Link>
                 );
               })}
-              {burst2Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">該当なし</span>}
+              {burst2Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">{t('character.noMatch')}</span>}
             </div>
           </div>
 
@@ -335,13 +338,13 @@ export default function CharacterDetailView({
                     <div className="flex flex-col items-center">
                       <span className="text-[10px] text-slate-300 w-16 truncate text-center font-bold" title={synergyChar.name}>{synergyChar.name}</span>
                       <span className="text-[10px] text-emerald-400 font-bold bg-emerald-400/10 px-1.5 py-0.5 rounded-full mt-1">
-                        {synergyChar.synergyCount}回 ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
+                        {t('stats.countTimes', { count: synergyChar.synergyCount })} ({usageCount > 0 ? Math.round((synergyChar.synergyCount / usageCount) * 100) : 0}%)
                       </span>
                     </div>
                   </Link>
                 );
               })}
-              {burst3Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">該当なし</span>}
+              {burst3Chars.length === 0 && <span className="text-slate-500 text-sm p-2 flex items-center">{t('character.noMatch')}</span>}
             </div>
           </div>
         </div>
@@ -352,7 +355,7 @@ export default function CharacterDetailView({
         <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-4">
           <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
             <span className="text-lg">📊</span>
-            <span>部隊内の配置傾向</span>
+            <span>{t('character.positionTrend')}</span>
           </h3>
           <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
             <table className="w-full text-center">
@@ -369,7 +372,7 @@ export default function CharacterDetailView({
                   {usageData.position_stats.map((ps: any) => (
                     <td key={ps.position} className="py-3 sm:py-4 px-1 sm:px-4">
                       <span className="text-white font-bold text-lg sm:text-2xl">{ps.count}</span>
-                      <span className="text-slate-500 text-xs sm:text-sm ml-0.5">回</span>
+                      <span className="text-slate-500 text-xs sm:text-sm ml-0.5">{t('unit.times')}</span>
                       <br />
                       <span className="text-slate-400 text-xs sm:text-sm">({ps.pct}%)</span>
                     </td>
@@ -396,8 +399,8 @@ export default function CharacterDetailView({
               </tbody>
             </table>
             <div className="px-4 py-3 bg-slate-900/50 border-t border-white/5 flex justify-between text-[10px] sm:text-xs text-slate-500">
-              <span>上段: 配置回数（割合）</span>
-              <span>下段: そのポジションでの勝率</span>
+              <span>{t('character.positionLegendTop')}</span>
+              <span>{t('character.positionLegendBottom')}</span>
             </div>
           </div>
         </div>
@@ -408,16 +411,16 @@ export default function CharacterDetailView({
         <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-4">
           <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
             <span className="text-lg">📊</span>
-            <span>編成の配置傾向</span>
+            <span>{t('character.teamPositionTrend')}</span>
           </h3>
           <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
             <table className="w-full text-center">
               <thead>
                 <tr className="border-b border-white/10 bg-slate-900/50">
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">〇番目</th>
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">採用数</th>
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">勝率</th>
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">最終成績</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('team.position')}</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.usageCount')}</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.winRate')}</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.finalResult')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -425,10 +428,10 @@ export default function CharacterDetailView({
                   const ps = usageData.team_position_stats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
                   return (
                     <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                      <td className="py-3 sm:py-4 px-2 sm:px-4 text-white font-black text-sm sm:text-lg">{pos}番目</td>
+                      <td className="py-3 sm:py-4 px-2 sm:px-4 text-white font-black text-sm sm:text-lg">{t('team.positionValue', { position: pos })}</td>
                       <td className="py-3 sm:py-4 px-2 sm:px-4">
                         <span className="text-white font-bold text-base sm:text-xl">{ps.count}</span>
-                        <span className="text-slate-500 text-xs sm:text-sm ml-0.5">人</span>
+                        <span className="text-slate-500 text-xs sm:text-sm ml-0.5">{t('unit.people')}</span>
                         <br />
                         <span className="text-slate-400 text-xs sm:text-sm">({ps.pct}%)</span>
                       </td>
@@ -442,7 +445,7 @@ export default function CharacterDetailView({
                             <span className="text-slate-500 text-[10px] sm:text-xs">{ps.wins}W {ps.total - ps.wins}L</span>
                           </>
                         ) : (
-                          <span className="text-slate-600 text-xs sm:text-sm">対戦なし</span>
+                          <span className="text-slate-600 text-xs sm:text-sm">{t('stats.noMatches')}</span>
                         )}
                       </td>
                       <td className="py-3 sm:py-4 px-2 sm:px-4">
@@ -475,8 +478,8 @@ export default function CharacterDetailView({
       <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-4 sm:p-8 rounded-3xl shadow-2xl space-y-6">
         <h3 className="text-lg sm:text-xl font-black text-white flex items-center space-x-2">
           <Users size={20} className="text-slate-400" />
-          <span>採用されている編成リスト</span>
-          <span className="text-sm font-bold text-slate-500 ml-2">({relatedTeams.length}件)</span>
+          <span>{t('character.relatedTeams')}</span>
+          <span className="text-sm font-bold text-slate-500 ml-2">({t('stats.countItems', { count: relatedTeams.length })})</span>
         </h3>
 
         <div className="space-y-3">
@@ -518,7 +521,7 @@ export default function CharacterDetailView({
                         </span>
                       )}
                       <span className="text-slate-400 font-bold bg-slate-900 px-2.5 py-1 rounded-lg ring-1 ring-white/10 text-xs">
-                        {team.count} 採用
+                        {t('stats.teamPick', { count: team.count })}
                       </span>
                     </div>
                   </div>
@@ -526,15 +529,14 @@ export default function CharacterDetailView({
                   {team.total_matches > 0 && (
                     <div className="flex items-center justify-around sm:justify-start space-x-0 sm:space-x-4 pt-2 border-t border-white/5">
                       <div className="flex items-center space-x-2">
-                        <span className="text-[10px] text-slate-500 font-bold uppercase">勝率</span>
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">{t('stats.winRate')}</span>
                         <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                           {team.win_rate}%
                         </span>
                       </div>
                       <div className="h-4 w-px bg-white/10"></div>
                       <div className="flex items-center space-x-2 text-xs font-bold">
-                        <span className="text-emerald-400">{team.win_count}勝</span>
-                        <span className="text-slate-500">{team.total_matches - team.win_count}敗</span>
+                        <span className="text-emerald-400">{t('stats.winsLosses', { wins: team.win_count, losses: team.total_matches - team.win_count })}</span>
                       </div>
                     </div>
                   )}
@@ -542,7 +544,7 @@ export default function CharacterDetailView({
               );
             })}
           {relatedTeams.length === 0 && (
-            <p className="text-slate-500 text-sm text-center py-8">このキャラクターを含む編成データがありません</p>
+            <p className="text-slate-500 text-sm text-center py-8">{t('common.noData')}</p>
           )}
         </div>
       </div>
@@ -555,7 +557,7 @@ export default function CharacterDetailView({
           className="inline-flex items-center space-x-2 text-blue-400 hover:text-blue-300 font-bold transition-colors cursor-pointer"
         >
           <ChevronLeft size={18} />
-          <span>前のページに戻る</span>
+          <span>{t('common.back')}</span>
         </button>
       </div>
     </main>

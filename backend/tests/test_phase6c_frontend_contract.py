@@ -74,7 +74,7 @@ class Phase6CFrontendContractTest(unittest.TestCase):
             self.assertIn("<TeamAdoptionRanking",source)
         ranking=self.read("frontend/src/components/TeamAdoptionRanking.tsx")
         self.assertIn("adoptionDisplay(team, totalRegisteredPlayers)",ranking)
-        self.assertIn("登録データ内採用率",ranking)
+        self.assertIn("t('team.rankingTitle')",ranking)
 
     def test_mirror_matchup_history_expands_both_participation_sides(self):
         helper=self.read("frontend/src/lib/teamMatchupPerspective.ts")
@@ -115,7 +115,7 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         positions=self.read("frontend/src/components/TeamPositionAnalysis.tsx")
         self.assertIn("stat.best_result",positions)
         self.assertIn("tournamentResultLabel",positions)
-        self.assertIn("データなし",positions)
+        self.assertIn("t('common.noData')",positions)
 
         results=self.read("frontend/src/lib/tournamentResult.ts")
         for code,label in (("best64","ベスト64"),("best32","ベスト32"),("best16","ベスト16"),("best8","ベスト8"),("best4","ベスト4"),("runner_up","準優勝"),("champion","優勝")):
@@ -141,8 +141,8 @@ class Phase6CFrontendContractTest(unittest.TestCase):
     def test_matchup_history_displays_both_side_results_responsively(self):
         history=self.read("frontend/src/components/TeamMatchupHistory.tsx")
         self.assertIn("matchupSideResults(match)",history)
-        self.assertIn('resultBadge(sideResults.attacker, match.isAttacker, "攻撃側")',history)
-        self.assertIn('resultBadge(sideResults.defender, !match.isAttacker, "防衛側")',history)
+        self.assertIn("resultBadge(sideResults.attacker, match.isAttacker, t('match.attack'))",history)
+        self.assertIn("resultBadge(sideResults.defender, !match.isAttacker, t('match.defense'))",history)
         self.assertIn("xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]",history)
         self.assertIn("grid-cols-[2.5rem_auto] items-center justify-center",history)
         self.assertIn('data-matchup-side="attacker"',history)
@@ -154,8 +154,7 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertIn("row-start-1 justify-self-center xl:block",history)
         self.assertIn("row-start-3 justify-self-center xl:block",history)
         self.assertIn("bg-purple-500/10 ring-2 ring-purple-400/60",history)
-        self.assertNotIn("検索対象",history)
-        self.assertEqual(history.count(">分析対象</span>"),2)
+        self.assertEqual(history.count("t('match.target')"),2)
         self.assertNotIn("overflow-x-auto",history)
 
     def test_matchup_history_formats_champion_stages_without_changing_match_identity(self):
@@ -187,7 +186,7 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertIn("disabled={disabled}",picker)
         self.assertIn("cursor-not-allowed",picker)
         self.assertIn("grayscale",picker)
-        self.assertIn("選択した大会では採用実績がありません",picker)
+        self.assertIn("t('synergy.unavailable')",picker)
         self.assertNotIn("player_count ??",helper)
         self.assertIn("entry.count ?? 0",helper)
         self.assertIn('Intl.Collator("ja"',helper)
@@ -198,18 +197,18 @@ class Phase6CFrontendContractTest(unittest.TestCase):
         self.assertIn("excluded_character_ids",pagination)
         self.assertIn("transitionSynergySelection",picker)
         self.assertIn('usageState === "ready" && options.length === 0',picker)
-        self.assertIn("選択した大会には、検索できるキャラクターの採用データがありません",picker)
+        self.assertIn("t('synergy.noAvailable')",picker)
         self.assertIn("reconcileSynergySelection",picker)
         self.assertIn('data-state={unavailable ? "unavailable" : isIncluded ? "include" : isExcluded ? "exclude" : "none"}',picker)
-        self.assertIn("検索対象は5人までのため、除外条件として追加しました",picker)
+        self.assertIn("t('synergy.limitNotice')",picker)
         self.assertIn("✅",picker)
         self.assertIn("✕",picker)
         self.assertIn("focus-visible:ring-2",picker)
-        self.assertEqual(picker.count("タップするたびに切り替わります"),1)
-        self.assertIn("✅ 検索対象",picker)
-        self.assertIn("✖ 除外対象",picker)
-        self.assertIn("選択解除",picker)
-        self.assertIn("選択した大会で採用実績のあるキャラクターのみ表示しています",picker)
+        self.assertEqual(picker.count("t('synergy.instructions')"),1)
+        self.assertIn("t('search.target')",picker)
+        self.assertIn("t('search.exclude')",picker)
+        self.assertIn("t('synergy.clearSelection')",picker)
+        self.assertIn("t('synergy.availableOnly')",picker)
         self.assertNotIn("includedCount === 1",picker)
         self.assertNotIn("※検索対象が1人だけの場合は、もう一度タップすると選択解除されます",picker)
         for path in ("frontend/src/app/page.tsx", "frontend/src/app/tournament/[id]/dashboard/page.tsx"):
@@ -218,7 +217,7 @@ class Phase6CFrontendContractTest(unittest.TestCase):
             self.assertIn("<SynergyPickerInstructions />",source)
             self.assertIn("useResetSynergyOnAnalysisChange",source)
             self.assertIn("excludedCharacterIds={excludedCharacterIds}",source)
-            self.assertIn("検索対象に含めるキャラクターを1人以上選択してください",source)
+            self.assertIn("t('search.selectOne')",source)
             self.assertNotIn("キャラクターを選択して編成を逆引き",source)
 
 if __name__=="__main__": unittest.main()

@@ -3,8 +3,10 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import CharacterDetailView from "../../../../../../components/CharacterDetailView";
+import { useI18n } from "@/i18n/I18nProvider";
 
 export default function SingleTournamentCharacterDetailPage() {
+  const { t, href } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -14,7 +16,7 @@ export default function SingleTournamentCharacterDetailPage() {
 
   useEffect(() => {
     if (tournamentsParam) {
-      router.replace(`/character/${charId}?tournaments=${tournamentsParam}`);
+      router.replace(href(`/character/${charId}?tournaments=${tournamentsParam}`));
     }
   }, [tournamentsParam, charId, router]);
 
@@ -41,7 +43,7 @@ export default function SingleTournamentCharacterDetailPage() {
         // confirmed owner/admin access to this tournament.
         const tRes = await fetch(`/api/tournaments/${tournamentId}`);
         if (!tRes.ok) {
-          setError("大会の詳細を表示できません。");
+          setError(t('tournament.unavailable'));
           return;
         }
         const [cRes, sRes] = await Promise.all([
@@ -61,7 +63,7 @@ export default function SingleTournamentCharacterDetailPage() {
         }
       } catch (err) {
         console.error("Failed to fetch character detail:", err);
-        setError("大会の詳細を表示できません。");
+        setError(t('tournament.unavailable'));
       } finally {
         setLoading(false);
       }
@@ -79,7 +81,7 @@ export default function SingleTournamentCharacterDetailPage() {
   }
 
   if (error || !tournament) {
-    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{error || "大会の詳細を表示できません。"}</div></main>;
+    return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{error || t('tournament.unavailable')}</div></main>;
   }
 
   return (
@@ -89,7 +91,7 @@ export default function SingleTournamentCharacterDetailPage() {
       tournamentId={tournamentId}
       stats={stats}
       allCharacters={allCharacters}
-      title={`${tournament?.name || `大会 ${tournamentId}`} — キャラクター詳細`}
+      title={t('character.singleDetailTitle', { tournament: tournament?.name || t('filter.tournamentFallback', { id: tournamentId }) })}
     />
   );
 }

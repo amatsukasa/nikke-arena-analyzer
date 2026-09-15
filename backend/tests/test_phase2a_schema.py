@@ -100,6 +100,10 @@ class Phase2AModelAndSchemaTest(unittest.TestCase):
             "championship_id": None,
             "registration_scope": "full_64",
             "provider_game_start_date": None,
+            "game_start_date": None,
+            "display_order": None,
+            "is_champion_arena": False,
+            "has_match_data": True,
         })
         self.assertNotIn("registration_scope", tournament_input.model_fields_set)
         self.assertNotIn(

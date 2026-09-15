@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, Globe } from "lucide-react";
-import Link from "next/link";
+import Link from "../components/LocalizedLink";
 import PaginatedTeamList from "../components/PaginatedTeamList";
 import SharedTeamDisplay from "../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../components/CharacterUsageByResultRanking";
@@ -15,13 +15,16 @@ import { emptySynergySelection } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
+import { useI18n } from "@/i18n/I18nProvider";
+import { localizedTournamentResult } from "@/lib/tournamentResult";
+import { localizedMatchStage } from "@/lib/matchStageDisplay";
 
 const SERVER_LABELS: Record<string, string> = {
-  KR: "韓国（KR）",
-  JP: "日本（JP）",
-  GLOBAL: "グローバル（ヨーロッパ）",
-  NA: "北米",
-  SEA: "東南アジア",
+  KR: "server.kr",
+  JP: "server.jp",
+  GLOBAL: "server.global",
+  NA: "server.na",
+  SEA: "server.sea",
 };
 
 type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
@@ -62,6 +65,7 @@ function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
 }
 
 function DashboardContent() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -198,9 +202,15 @@ function DashboardContent() {
     const fetchTournaments = async () => {
       try {
         const res = await fetch(`/api/tournaments?t=${Date.now()}`, { cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
         const data: any[] = await res.json();
-        if (!Array.isArray(data)) return;
+        if (!Array.isArray(data)) {
+          setLoading(false);
+          return;
+        }
         setAllTournaments(data);
         
         if (data.length > 0) {
@@ -415,12 +425,12 @@ function DashboardContent() {
             setSelectedTeam(firstKey || firstTeam.canonical_id);
           }
         } else {
-          throw new Error(`集計データを取得できませんでした（HTTP ${statsRes.status}）`);
+          throw new Error(t('error.statsHttp', { status: statsRes.status }));
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
-        setStatsError(e instanceof Error ? e.message : "集計データを取得できませんでした。");
+        setStatsError(e instanceof Error ? e.message : t('error.stats'));
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -474,7 +484,7 @@ function DashboardContent() {
           signal: controller.signal,
         });
         if (!res.ok) {
-          throw new Error(`対戦履歴を取得できませんでした（HTTP ${res.status}）`);
+          throw new Error(t('error.matchHistoryHttp', { status: res.status }));
         }
         const data = await res.json();
         setMatchups(data.matchups || data);
@@ -482,7 +492,7 @@ function DashboardContent() {
       } catch(e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         console.error(e);
-        setMatchupsError(e instanceof Error ? e.message : "対戦履歴を取得できませんでした。");
+        setMatchupsError(e instanceof Error ? e.message : t('error.matchHistory'));
       } finally {
         if (matchupsRequestRef.current === controller) {
           setMatchupsLoading(false);
@@ -507,14 +517,14 @@ function DashboardContent() {
             <span className="text-4xl">📊</span>
           </div>
           <h1 className="text-3xl font-black mb-4 tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-            にけあり！へようこそ
+            {t('empty.welcome')}
           </h1>
           <p className="text-slate-400 text-base max-w-md mb-8 leading-relaxed">
-            現在、システムに大会データが登録されていません。<br />
-            まずは右上の「大会データ登録」ボタンから、対戦結果データをインポートしてください。
+            {t('empty.noTournaments')}<br />
+            {t('empty.registerHint')}
           </p>
           <a href="/tournaments/manage" className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-xl shadow-blue-500/20">
-            <span>大会データ登録へ移動</span>
+            <span>{t('empty.registerAction')}</span>
           </a>
         </main>
       </div>
@@ -534,7 +544,7 @@ function DashboardContent() {
                 <div className="w-10 h-10 rounded-lg bg-slate-800/50 ring-1 ring-white/5 overflow-hidden flex items-center justify-center">
                   <div className="text-slate-600 text-xs">-</div>
                 </div>
-                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title="空枠">空枠</span>
+                <span className="text-[9px] text-slate-500 w-10 truncate text-center" title={t('character.emptySlot')}>{t('character.emptySlot')}</span>
               </div>
             );
           }
@@ -542,12 +552,12 @@ function DashboardContent() {
             <div key={i} className="flex flex-col items-center space-y-1 cursor-pointer group" onClick={(e) => { e.stopPropagation(); setSelectedCharId(c.id); }}>
               <div className="w-10 h-10 rounded-lg bg-slate-800 ring-1 ring-white/10 group-hover:ring-blue-500 overflow-hidden flex items-center justify-center transition-all">
                 {getCharIconUrl(c) ? (
-                  <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || "不明"} className="w-full h-full object-cover" />
+                  <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c?.name || t('common.unknown')} className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || "不明"}</span>
+                  <span className="text-[10px] text-slate-500 font-bold leading-tight text-center">{c?.name?.slice(0, 3) || t('common.unknown')}</span>
                 )}
               </div>
-              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={c?.name || "不明"}>{c?.name || "不明"}</span>
+              <span className="text-[9px] text-slate-400 w-10 truncate text-center" title={c?.name || t('common.unknown')}>{c?.name || t('common.unknown')}</span>
             </div>
           );
         })}
@@ -632,7 +642,7 @@ function DashboardContent() {
 
   return (
     <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
-      <h1 className="sr-only">アリーナ分析ダッシュボード</h1>
+      <h1 className="sr-only">{t('dashboard.title')}</h1>
 
       <div className="flex flex-col xl:flex-row gap-4 xl:gap-8">
         {/* Sidebar for Filters */}
@@ -646,14 +656,13 @@ function DashboardContent() {
           >
             <SlidersHorizontal className="h-5 w-5 shrink-0 text-blue-400" />
             <span className="min-w-0 flex-1">
-              <span className="block text-sm font-bold text-slate-100">分析対象フィルタ</span>
+              <span className="block text-sm font-bold text-slate-100">{t('filter.title')}</span>
               <span className="block truncate text-xs text-slate-400">
-                分析対象: {SERVER_LABELS[filterServer] || filterServer} / {filterSeason} / 
-                {isAllTournamentsSelected ? `全${allTournaments.filter(t => t.play_server === filterServer && (t.season || "β30") === filterSeason).length}大会` : `${selectedTournamentIds.length}大会`}
+                {t('filter.analysisTarget', { server: SERVER_LABELS[filterServer] ? t(SERVER_LABELS[filterServer]) : filterServer, season: filterSeason, tournaments: isAllTournamentsSelected ? t('filter.allTournaments', { count: allTournaments.filter(item => item.play_server === filterServer && (item.season || "β30") === filterSeason).length }) : t('filter.tournamentCount', { count: selectedTournamentIds.length }) })}
               </span>
             </span>
             <span className="shrink-0 rounded bg-blue-500/15 px-2 py-1 text-xs font-bold text-blue-300">
-              {selectedTournamentIds.length}大会
+              {t('filter.tournamentCount', { count: selectedTournamentIds.length })}
             </span>
             <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition-transform ${isMobileFiltersOpen ? "rotate-180" : ""}`} />
           </button>
@@ -664,12 +673,12 @@ function DashboardContent() {
           >
             <h3 className="hidden text-lg font-bold text-slate-100 mb-6 xl:flex items-center space-x-2">
               <Search size={18} className="text-blue-400" />
-              <span>分析対象フィルタ</span>
+              <span>{t('filter.title')}</span>
             </h3>
             
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 xl:block xl:space-y-6">
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">プレイサーバー</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.server')}</div>
                 <select 
                   value={filterServer}
                   onChange={(e) => {
@@ -688,7 +697,7 @@ function DashboardContent() {
                 >
                   {playServers.map(server => (
                     <option key={server} value={server} disabled={!availableServers.has(server)}>
-                      {SERVER_LABELS[server] || server}
+                      {SERVER_LABELS[server] ? t(SERVER_LABELS[server]) : server}
                     </option>
                   ))}
                 </select>
@@ -697,7 +706,7 @@ function DashboardContent() {
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">開催期間 (シーズン)</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.season')}</div>
                 <select
                   value={filterSeason}
                   onChange={(e) => {
@@ -718,7 +727,7 @@ function DashboardContent() {
               <div className="hidden h-px w-full bg-white/10 xl:block"></div>
 
               <div>
-                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">対象大会</div>
+                <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.tournaments')}</div>
                 <div className="flex items-center space-x-4 mb-3 px-1">
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
@@ -726,7 +735,7 @@ function DashboardContent() {
                       onChange={() => setIsAllTournamentsSelected(true)}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
-                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">すべて</span>
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('common.all')}</span>
                   </label>
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
@@ -734,7 +743,7 @@ function DashboardContent() {
                       onChange={() => setIsAllTournamentsSelected(false)}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
-                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">個別に選ぶ</span>
+                    <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('filter.individual')}</span>
                   </label>
                 </div>
                 
@@ -743,20 +752,20 @@ function DashboardContent() {
                     {allTournaments
                       .filter(t => (t.play_server || "") === filterServer && (t.season || "β30") === filterSeason)
                       .sort((a, b) => new Date(a.provider_game_start_date || 0).getTime() - new Date(b.provider_game_start_date || 0).getTime())
-                      .map(t => (
-                      <label key={t.id} className="flex items-center space-x-3 cursor-pointer group">
-                        <input type="checkbox" checked={selectedSpecificTournamentIds.includes(t.id)}
+                      .map(tournament => (
+                      <label key={tournament.id} className="flex items-center space-x-3 cursor-pointer group">
+                        <input type="checkbox" checked={selectedSpecificTournamentIds.includes(tournament.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
-                              setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, t.id]);
+                              setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, tournament.id]);
                             } else {
-                              setSelectedSpecificTournamentIds(selectedSpecificTournamentIds.filter(id => id !== t.id));
+                              setSelectedSpecificTournamentIds(selectedSpecificTournamentIds.filter(id => id !== tournament.id));
                             }
                           }}
                           className="w-4 h-4 rounded bg-slate-800 border-white/20 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 transition-colors cursor-pointer"
                         />
                         <span className="text-xs font-medium text-slate-300 group-hover:text-white transition-colors truncate">
-                          {t.provider_game_start_date ? `${t.provider_game_start_date}開始` : (t.name || `大会 #${t.id}`)}
+                          {tournament.provider_game_start_date ? t('filter.startedAt', { date: tournament.provider_game_start_date }) : (tournament.name || t('filter.tournamentFallback', { id: tournament.id }))}
                         </span>
                       </label>
                     ))}
@@ -766,7 +775,7 @@ function DashboardContent() {
             </div>
             
             <div className="hidden mt-8 p-4 rounded-xl bg-blue-500/10 ring-1 ring-blue-500/20 xl:block">
-              <div className="text-xs text-blue-400 font-bold mb-1">対象大会数</div>
+              <div className="text-xs text-blue-400 font-bold mb-1">{t('filter.targetTournamentCount')}</div>
               <div className="text-2xl font-black text-slate-100">{selectedTournamentIds.length}</div>
             </div>
           </div>
@@ -823,8 +832,7 @@ function DashboardContent() {
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
             {stats?.registration_breakdown && (
               <div className="rounded-xl bg-slate-800/50 p-4 text-sm text-slate-300 ring-1 ring-white/10">
-                集計対象 {stats.registration_breakdown.total_registered_players}人
-                （64人モード {stats.registration_breakdown.full_64_registered_players}人／8人モード {stats.registration_breakdown.champion_8_registered_players}人）
+                {t('stats.analysisPopulation', { total: stats.registration_breakdown.total_registered_players, full64: stats.registration_breakdown.full_64_registered_players, champion8: stats.registration_breakdown.champion_8_registered_players })}
               </div>
             )}
             <CharacterUsageByResultRanking
@@ -836,13 +844,13 @@ function DashboardContent() {
             <section>
               <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
                 <Users className="text-blue-400" />
-                <span>キャラクター採用率ランキング</span>
+                <span>{t('stats.characterPickRanking')}</span>
               </h2>
               <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
                 {(() => {
                   // 採用数でグループ化
                   const grouped: { count: number; entries: any[] }[] = [];
-                  if (!stats) return <div className="py-12 text-center text-slate-500">データ読み込み中...</div>;
+                  if (!stats) return <div className="py-12 text-center text-slate-500">{t('common.loading')}</div>;
                   const charList = stats?.character_usage ?? stats?.character_stats ?? [];
                   const sorted = [...charList].sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
                   sorted.forEach((entry: any) => {
@@ -858,9 +866,9 @@ function DashboardContent() {
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                          <th className="p-4 font-medium text-center w-16">順位</th>
-                          <th className="p-4 font-medium text-center w-24">採用数</th>
-                          <th className="p-4 font-medium">キャラクター</th>
+                          <th className="p-4 font-medium text-center w-16">{t('stats.rank')}</th>
+                          <th className="p-4 font-medium text-center w-24">{t('stats.usageCount')}</th>
+                          <th className="p-4 font-medium">{t('stats.character')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
@@ -915,7 +923,7 @@ function DashboardContent() {
                         })}
                         {charList.length === 0 && (
                           <tr>
-                            <td colSpan={3} className="p-8 text-center text-slate-500">データがありません</td>
+                            <td colSpan={3} className="p-8 text-center text-slate-500">{t('common.noData')}</td>
                           </tr>
                         )}
                       </tbody>
@@ -945,7 +953,7 @@ function DashboardContent() {
               <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-emerald-400" />
-                  <span>編成別勝率ランキング</span>
+                  <span>{t('stats.teamWinRateRanking')}</span>
                 </h2>
                 
                 {/* 編成フィルタコントロール群 */}
@@ -955,10 +963,7 @@ function DashboardContent() {
                     onChange={(e) => setTeamMinMatches(Number(e.target.value))}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={1}>対戦数：1戦以上</option>
-                    <option value={10}>対戦数：10戦以上</option>
-                    <option value={30}>対戦数：30戦以上</option>
-                    <option value={50}>対戦数：50戦以上</option>
+                    {[1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
                   </select>
 
                   <select
@@ -966,11 +971,8 @@ function DashboardContent() {
                     onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value={0}>勝率：指定なし</option>
-                    <option value={50}>勝率：50%以上</option>
-                    <option value={60}>勝率：60%以上</option>
-                    <option value={70}>勝率：70%以上</option>
-                    <option value={80}>勝率：80%以上</option>
+                    <option value={0}>{t('filter.winRateAny')}</option>
+                    {[50, 60, 70, 80].map((rate) => <option key={rate} value={rate}>{t('filter.winRateAtLeast', { rate })}</option>)}
                   </select>
 
                   <select
@@ -978,13 +980,9 @@ function DashboardContent() {
                     onChange={(e) => setTeamBestResult(e.target.value)}
                     className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    <option value="">最終成績：すべて</option>
-                    <option value="優勝">最終成績：優勝のみ</option>
-                    <option value="準優勝">最終成績：準優勝以上</option>
-                    <option value="ベスト4">最終成績：ベスト4以上</option>
-                    <option value="ベスト8">最終成績：ベスト8以上</option>
-                    <option value="ベスト16">最終成績：ベスト16以上</option>
-                    <option value="ベスト32">最終成績：ベスト32以上</option>
+                    <option value="">{t('filter.resultAll')}</option>
+                    <option value="優勝">{t('filter.resultOnly', { result: t('result.champion') })}</option>
+                    {['準優勝', 'ベスト4', 'ベスト8', 'ベスト16', 'ベスト32'].map((result) => <option key={result} value={result}>{t('filter.resultAtLeast', { result: localizedTournamentResult(result, t) || result })}</option>)}
                   </select>
                 </div>
               </div>
@@ -1014,7 +1012,7 @@ function DashboardContent() {
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             {matchupsLoading && (
               <div role="status" className="rounded-xl bg-purple-500/10 p-4 text-center text-sm font-bold text-purple-300 ring-1 ring-purple-500/20">
-                対戦履歴を読み込んでいます…
+                {t('common.loading')}
               </div>
             )}
             {matchupsError && (
@@ -1025,12 +1023,12 @@ function DashboardContent() {
                   onClick={() => setMatchupsRetry(value => value + 1)}
                   className="mt-3 rounded-lg bg-red-500 px-4 py-2 font-bold text-white hover:bg-red-400"
                 >
-                  再試行
+                  {t('action.retry')}
                 </button>
               </div>
             )}
             <div className="bg-purple-500/10 p-6 rounded-2xl ring-1 ring-purple-500/20">
-              <label className="block text-sm font-bold text-purple-400 mb-3">分析する編成を選択</label>
+              <label className="block text-sm font-bold text-purple-400 mb-3">{t('stats.selectTeam')}</label>
               <select 
                 className="w-full bg-slate-900 border border-purple-500/30 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4"
                 value={makeTeamKey(selectedTeam) || selectedTeam}
@@ -1047,7 +1045,7 @@ function DashboardContent() {
                   const optionKey = team.teamKey || makeTeamKey(team.canonical_id);
                   return (
                     <option key={idx} value={optionKey}>
-                      [{team.count}回採用] {team.characters?.map((c:any) => c.id === 9999 ? '空枠' : c.name).join(" / ")}
+                      [{t('stats.teamPick', { count: team.count })}] {team.characters?.map((c:any) => c.id === 9999 ? t('character.emptySlot') : c.name).join(" / ")}
                     </option>
                   );
                 })}
@@ -1055,7 +1053,7 @@ function DashboardContent() {
               
               {selectedTeam && (
                 <div className="pt-4 border-t border-purple-500/20 flex flex-col space-y-2">
-                  <span className="text-xs font-bold text-purple-400">選択中の編成:</span>
+                  <span className="text-xs font-bold text-purple-400">{t('stats.selectedTeam')}</span>
                   <TeamDisplay charIds={currentSelectedTeamData?.character_ids || currentSelectedTeamData?.characters?.map((c:any)=>c.id) || []} allCharacters={allCharacters} />
                 </div>
               )}
@@ -1064,29 +1062,29 @@ function DashboardContent() {
             {selectedTeam ? (
               <div className="grid md:grid-cols-3 gap-6">
                 <div className="bg-slate-800/50 p-6 rounded-2xl ring-1 ring-white/5 flex flex-col items-center justify-center">
-                  <p className="text-slate-400 text-sm mb-2">総合勝率</p>
+                  <p className="text-slate-400 text-sm mb-2">{t('stats.overallWinRate')}</p>
                   <p className="text-4xl font-black text-white">
                     {totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-slate-500 mt-2">{totalWins}勝 {totalLosses}敗</p>
+                  <p className="text-sm text-slate-500 mt-2">{t('stats.winsLosses', { wins: totalWins, losses: totalLosses })}</p>
                 </div>
                 <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-                  <p className="text-blue-400 text-sm mb-2">攻撃側での勝率</p>
+                  <p className="text-blue-400 text-sm mb-2">{t('stats.attackWinRate')}</p>
                   <p className="text-4xl font-black text-blue-400">
                     {attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-blue-500/60 mt-2">{attackWins}勝 {attackLosses}敗</p>
+                  <p className="text-sm text-blue-500/60 mt-2">{t('stats.winsLosses', { wins: attackWins, losses: attackLosses })}</p>
                 </div>
                 <div className="bg-red-500/10 p-6 rounded-2xl ring-1 ring-red-500/20 flex flex-col items-center justify-center">
-                  <p className="text-red-400 text-sm mb-2">防衛側での勝率</p>
+                  <p className="text-red-400 text-sm mb-2">{t('stats.defenseWinRate')}</p>
                   <p className="text-4xl font-black text-red-400">
                     {defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : 0}%
                   </p>
-                  <p className="text-sm text-red-500/60 mt-2">{defenseWins}勝 {defenseLosses}敗</p>
+                  <p className="text-sm text-red-500/60 mt-2">{t('stats.winsLosses', { wins: defenseWins, losses: defenseLosses })}</p>
                 </div>
               </div>
             ) : (
-              <p className="text-slate-500 text-center py-12">編成データがありません</p>
+              <p className="text-slate-500 text-center py-12">{t('stats.teamDataEmpty')}</p>
             )}
 
             {selectedTeam && <TeamPositionAnalysis positionStats={currentSelectedTeamData?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
@@ -1131,14 +1129,14 @@ function DashboardContent() {
               return (
               <div className="space-y-4 mt-8">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 space-y-3 sm:space-y-0">
-                  <h3 className="font-bold text-white">この編成の対戦履歴</h3>
+                  <h3 className="font-bold text-white">{t('match.history')}</h3>
                   <div className="flex flex-wrap gap-2">
                     <select
                       className="bg-slate-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
                       value={matchupFilterResult}
                       onChange={e => setMatchupFilterResult(e.target.value as any)}
                     >
-                      <option value="ALL">勝敗: すべて</option>
+                      <option value="ALL">{t('match.result')}: {t('common.all')}</option>
                       <option value="WIN">WIN</option>
                       <option value="LOSE">LOSE</option>
                     </select>
@@ -1147,16 +1145,16 @@ function DashboardContent() {
                       value={matchupFilterSide}
                       onChange={e => setMatchupFilterSide(e.target.value as any)}
                     >
-                      <option value="ALL">攻防: すべて</option>
-                      <option value="ATTACK">攻撃</option>
-                      <option value="DEFENSE">防衛</option>
+                      <option value="ALL">{t('match.side')}: {t('common.all')}</option>
+                      <option value="ATTACK">{t('match.attack')}</option>
+                      <option value="DEFENSE">{t('match.defense')}</option>
                     </select>
                     <select
                       className="bg-slate-900 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500"
                       value={matchupFilterStage}
                       onChange={e => setMatchupFilterStage(e.target.value)}
                     >
-                      <option value="ALL">ラウンド: すべて</option>
+                      <option value="ALL">{t('match.round')}: {t('common.all')}</option>
                       {availableStages.map(stage => (
                         <option key={stage} value={stage}>{stage}</option>
                       ))}
@@ -1174,7 +1172,7 @@ function DashboardContent() {
                         {/* 大会名 & プレイヤー対戦情報 */}
                         <div className="flex items-center space-x-2 text-xs">
                           <span className="font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded ring-1 ring-indigo-500/20 whitespace-nowrap">
-                            {m.tournamentName || "不明"}
+                            {m.tournamentName || t('common.unknown')}
                           </span>
                           <span className="text-slate-400">
                             {m.attackerName} <span className="text-slate-600">vs</span> {m.defenderName}
@@ -1188,14 +1186,14 @@ function DashboardContent() {
                               m.stage?.includes("準決勝") ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
                               "bg-slate-700/50 text-slate-400 ring-slate-600/50"
                             }`}>
-                              {m.stage || "不明"}
+                              {localizedMatchStage(m.stage, t)}
                             </div>
                           </div>
                           <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:justify-center">
                             <div className={`rounded-xl p-2 ring-1 ${m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
                               <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                                <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">攻撃側</span>
-                                {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                                <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">{t('match.attack')}</span>
+                                {m.isAttacker && <span className="text-[10px] font-bold text-purple-300">{t('match.target')}</span>}
                                 {m.isAttacker && (
                                   <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
                                     {m.isWin ? "WIN" : "LOSE"}
@@ -1212,8 +1210,8 @@ function DashboardContent() {
                             <div className="shrink-0 text-sm font-black text-slate-500">VS</div>
                             <div className={`rounded-xl p-2 ring-1 ${!m.isAttacker ? "bg-purple-500/10 ring-purple-500/40" : "ring-white/5"}`}>
                               <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
-                                <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">防衛側</span>
-                                {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">検索対象</span>}
+                                <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">{t('match.defense')}</span>
+                                {!m.isAttacker && <span className="text-[10px] font-bold text-purple-300">{t('match.target')}</span>}
                                 {!m.isAttacker && (
                                   <span className={`text-xs font-black ${m.isWin ? "text-emerald-400" : "text-slate-500"}`}>
                                     {m.isWin ? "WIN" : "LOSE"}
@@ -1234,7 +1232,7 @@ function DashboardContent() {
                   </div>
                 ) : (
                   <div className="bg-slate-800/30 rounded-xl ring-1 ring-white/5 p-8 text-center text-slate-400">
-                    条件に一致する対戦履歴がありません
+                    {t('match.noFilteredHistory')}
                   </div>
                 )}
               </div>
@@ -1269,41 +1267,39 @@ function DashboardContent() {
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
-                  <option value="">レアリティ (すべて)</option>
+                  <option value="">{t('filter.rarity')} ({t('common.all')})</option>
                   <option value="SSR">SSR</option>
                   <option value="SR">SR</option>
                   <option value="R">R</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterManufacturer} onChange={e => setFilterManufacturer(e.target.value)}>
-                  <option value="">企業 (すべて)</option>
-                  <option value="エリシオン">エリシオン</option>
-                  <option value="ミシリス">ミシリス</option>
-                  <option value="テトラ">テトラ</option>
-                  <option value="ピルグリム">ピルグリム</option>
-                  <option value="アブノーマル">アブノーマル</option>
+                  <option value="">{t('filter.manufacturer')} ({t('common.all')})</option>
+                  <option value="エリシオン">{t('manufacturer.elysion')}</option>
+                  <option value="ミシリス">{t('manufacturer.missilis')}</option>
+                  <option value="テトラ">{t('manufacturer.tetra')}</option>
+                  <option value="ピルグリム">{t('manufacturer.pilgrim')}</option>
+                  <option value="アブノーマル">{t('manufacturer.abnormal')}</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterBurst} onChange={e => setFilterBurst(e.target.value)}>
-                  <option value="">バースト (すべて)</option>
-                  <option value="1">1 (A含む)</option>
-                  <option value="2">2 (A含む)</option>
-                  <option value="3">3 (A含む)</option>
+                  <option value="">{t('filter.burst')} ({t('common.all')})</option>
+                  {[1, 2, 3].map((value) => <option key={value} value={value}>{t('filter.includesAlternate', { value })}</option>)}
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterElement} onChange={e => setFilterElement(e.target.value)}>
-                  <option value="">属性 (すべて)</option>
-                  <option value="灼熱">灼熱</option>
-                  <option value="水冷">水冷</option>
-                  <option value="風圧">風圧</option>
-                  <option value="鉄甲">鉄甲</option>
-                  <option value="電撃">電撃</option>
+                  <option value="">{t('filter.element')} ({t('common.all')})</option>
+                  <option value="灼熱">{t('element.fire')}</option>
+                  <option value="水冷">{t('element.water')}</option>
+                  <option value="風圧">{t('element.wind')}</option>
+                  <option value="鉄甲">{t('element.iron')}</option>
+                  <option value="電撃">{t('element.electric')}</option>
                 </select>
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterWeapon} onChange={e => setFilterWeapon(e.target.value)}>
-                  <option value="">武器 (すべて)</option>
-                  <option value="AR">アサルトライフル (AR)</option>
-                  <option value="SG">ショットガン (SG)</option>
-                  <option value="SMG">サブマシンガン (SMG)</option>
-                  <option value="MG">マシンガン (MG)</option>
-                  <option value="SR">スナイパーライフル (SR)</option>
-                  <option value="RL">ロケットランチャー (RL)</option>
+                  <option value="">{t('filter.weapon')} ({t('common.all')})</option>
+                  <option value="AR">{t('weapon.ar')}</option>
+                  <option value="SG">{t('weapon.sg')}</option>
+                  <option value="SMG">{t('weapon.smg')}</option>
+                  <option value="MG">{t('weapon.mg')}</option>
+                  <option value="SR">{t('weapon.sr')}</option>
+                  <option value="RL">{t('weapon.rl')}</option>
                 </select>
               </div>
 
@@ -1320,19 +1316,19 @@ function DashboardContent() {
                 }}
               />
               <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">検索対象: {includedCharacterIds.length}/5　除外対象: {excludedCharacterIds.length}</span>
+                <span className="text-sm text-slate-400">{t('search.target')}: {includedCharacterIds.length}/5　{t('search.exclude')}: {excludedCharacterIds.length}</span>
                 {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
                   <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
-                    クリア
+                    {t('common.clear')}
                   </button>
                 )}
               </div>
             </div>
 
             <div className="space-y-4">
-              <h3 className="font-bold text-white mb-4">該当する編成一覧</h3>
+              <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
               {includedCharacterIds.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">検索対象に含めるキャラクターを1人以上選択してください</p>
+                <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
               ) : (
                 <div className="space-y-3">
                   <PaginatedTeamList 
@@ -1371,7 +1367,7 @@ function DashboardContent() {
               <button
                 onClick={() => setSelectedCharId(null)}
                 className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-slate-900/90 text-slate-300 ring-1 ring-white/20 shadow-xl backdrop-blur hover:bg-slate-800 hover:text-white transition-all"
-                aria-label="閉じる"
+                aria-label={t('common.close')}
               >
                 <X size={20} />
               </button>
@@ -1379,7 +1375,7 @@ function DashboardContent() {
             {selectedCharacterDetailLoading ? (
               <div className="p-16 flex flex-col items-center justify-center space-y-4">
                 <div className="animate-spin w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full" />
-                <p className="text-slate-400 text-sm font-bold">キャラクター詳細を取得中...</p>
+                <p className="text-slate-400 text-sm font-bold">{t('character.loadingDetails')}</p>
               </div>
             ) : (() => {
               const c = allCharacters.find(x => x.id === selectedCharId);
@@ -1433,7 +1429,7 @@ function DashboardContent() {
                       <div>
                         <h2 className="text-2xl sm:text-3xl font-black text-white mb-2">{c.name}</h2>
                         <span className="px-3 py-1 bg-slate-800 text-slate-300 font-bold rounded-lg ring-1 ring-white/10 text-xs sm:text-sm">
-                          レアリティ: {c.rarity || "不明"}
+                          {t('character.rarity', { rarity: c.rarity || t('common.unknown') })}
                         </span>
                       </div>
                     </div>
@@ -1444,20 +1440,20 @@ function DashboardContent() {
                         onClick={() => setSelectedCharId(null)}
                       >
                         <span>📄</span>
-                        <span>フルページで詳細を見る</span>
+                        <span>{t('action.viewFullDetails')}</span>
                       </Link>
                     </div>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
-                      <p className="text-blue-400 text-sm font-bold mb-1">大会採用数</p>
-                      <p className="text-3xl font-black text-blue-400">{usageCount} 回</p>
+                      <p className="text-blue-400 text-sm font-bold mb-1">{t('stats.tournamentPicks')}</p>
+                      <p className="text-3xl font-black text-blue-400">{t('stats.countTimes', { count: usageCount })}</p>
                     </div>
                     <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
-                      <p className="text-emerald-400 text-sm font-bold mb-1">勝率 (非ミラー戦)</p>
+                      <p className="text-emerald-400 text-sm font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
                       <p className="text-3xl font-black text-emerald-400">{winRate}%</p>
-                      <p className="text-xs text-emerald-500/60 mt-1">{charWins}勝 {charLosses}敗</p>
+                      <p className="text-xs text-emerald-500/60 mt-1">{t('stats.winsLosses', { wins: charWins, losses: charLosses })}</p>
                     </div>
                   </div>
 
@@ -1466,7 +1462,7 @@ function DashboardContent() {
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>
-                        <span>部隊内の配置傾向</span>
+                        <span>{t('character.positionTrend')}</span>
                       </h3>
                       <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
@@ -1483,7 +1479,7 @@ function DashboardContent() {
                               {usageData.position_stats.map((ps: any) => (
                                 <td key={ps.position} className="py-3 px-2">
                                   <span className="text-white font-bold text-lg">{ps.count}</span>
-                                  <span className="text-slate-500 text-xs ml-0.5">回</span>
+                                  <span className="text-slate-500 text-xs ml-0.5">{t('unit.times')}</span>
                                   <br />
                                   <span className="text-slate-400 text-xs">({ps.pct}%)</span>
                                 </td>
@@ -1510,8 +1506,8 @@ function DashboardContent() {
                           </tbody>
                         </table>
                         <div className="px-4 py-2 bg-slate-900/50 border-t border-white/5 flex justify-between text-[10px] text-slate-500">
-                          <span>上段: 配置回数（割合）</span>
-                          <span>下段: そのポジションでの勝率</span>
+                          <span>{t('character.positionLegendTop')}</span>
+                          <span>{t('character.positionLegendBottom')}</span>
                         </div>
                       </div>
                     </div>
@@ -1522,16 +1518,16 @@ function DashboardContent() {
                     <div className="space-y-3">
                       <h3 className="font-bold text-white flex items-center space-x-2">
                         <span className="text-lg">📊</span>
-                        <span>編成の配置傾向</span>
+                        <span>{t('character.teamPositionTrend')}</span>
                       </h3>
                       <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-x-auto">
                         <table className="w-full text-center">
                           <thead>
                             <tr className="border-b border-white/10 bg-slate-900/50">
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">〇番目</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">採用数</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">勝率</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">最終成績</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('team.position')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.usageCount')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.winRate')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.finalResult')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1539,10 +1535,10 @@ function DashboardContent() {
                               const ps = usageData.team_position_stats.find((p:any) => p.position === pos) || { count: 0, pct: 0, wins: 0, total: 0, win_rate: null, best_result: null };
                               return (
                                 <tr key={pos} className="border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors">
-                                  <td className="py-2 px-2 text-white font-bold text-sm">{pos}番目</td>
+                                  <td className="py-2 px-2 text-white font-bold text-sm">{t('team.positionValue', { position: pos })}</td>
                                   <td className="py-2 px-2">
                                     <span className="text-white font-bold text-sm">{ps.count}</span>
-                                    <span className="text-slate-500 text-[10px] ml-0.5">人</span>
+                                    <span className="text-slate-500 text-[10px] ml-0.5">{t('team.people')}</span>
                                     <br />
                                     <span className="text-slate-400 text-[10px]">({ps.pct}%)</span>
                                   </td>
@@ -1556,7 +1552,7 @@ function DashboardContent() {
                                         <span className="text-slate-500 text-[10px]">{ps.wins}W {ps.total - ps.wins}L</span>
                                       </>
                                     ) : (
-                                      <span className="text-slate-600 text-xs">対戦なし</span>
+                                      <span className="text-slate-600 text-xs">{t('stats.noMatches')}</span>
                                     )}
                                   </td>
                                   <td className="py-2 px-2">
@@ -1589,7 +1585,7 @@ function DashboardContent() {
                   <div className="space-y-3">
                     <h3 className="font-bold text-white flex items-center space-x-2">
                       <Users size={18} className="text-slate-400" />
-                      <span>よく一緒に編成されるキャラクター</span>
+                      <span>{t('character.synergy')}</span>
                     </h3>
                     <div className="bg-slate-800/50 rounded-xl ring-1 ring-white/10 overflow-hidden divide-y divide-white/5">
                       {/* Burst 1 */}
@@ -1609,11 +1605,11 @@ function DashboardContent() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst1Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst1Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                       {/* Burst 2 */}
@@ -1633,11 +1629,11 @@ function DashboardContent() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst2Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst2Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                       {/* Burst 3 */}
@@ -1657,11 +1653,11 @@ function DashboardContent() {
                               </div>
                               <span className="text-[9px] text-slate-300 w-12 truncate text-center" title={ch.name}>{ch.name}</span>
                               <span className="text-[9px] text-emerald-400 font-bold bg-emerald-400/10 px-1 rounded-full">
-                                {ch.synergyCount}回 ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
+                                {t('stats.countTimes', { count: ch.synergyCount })} ({usageCount > 0 ? Math.round((ch.synergyCount / usageCount) * 100) : 0}%)
                               </span>
                             </div>
                           ))}
-                          {burst3Chars.length === 0 && <span className="text-slate-500 text-xs p-2">該当なし</span>}
+                          {burst3Chars.length === 0 && <span className="text-slate-500 text-xs p-2">{t('character.noMatch')}</span>}
                         </div>
                       </div>
                     </div>
@@ -1670,7 +1666,7 @@ function DashboardContent() {
                   <div className="space-y-4">
                     <h3 className="font-bold text-white flex items-center space-x-2">
                       <Users size={18} className="text-slate-400" />
-                      <span>採用されている編成リスト</span>
+                      <span>{t('character.relatedTeams')}</span>
                     </h3>
 
                     <div className="space-y-3">
@@ -1705,7 +1701,7 @@ function DashboardContent() {
                                   </span>
                                 )}
                                 <span className="text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-lg ring-1 ring-white/10 text-xs">
-                                  {team.count} 採用
+                                  {t('stats.teamPick', { count: team.count })}
                                 </span>
                               </div>
                             </div>
@@ -1713,15 +1709,14 @@ function DashboardContent() {
                             {team.total_matches > 0 && (
                               <div className="flex items-center space-x-4 pt-2 border-t border-white/5">
                                 <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] text-slate-500 font-bold uppercase">勝率</span>
+                                  <span className="text-[10px] text-slate-500 font-bold uppercase">{t('stats.winRate')}</span>
                                   <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                     {team.win_rate}%
                                   </span>
                                 </div>
                                 <div className="h-4 w-px bg-white/10"></div>
                                 <div className="flex items-center space-x-2 text-xs font-bold">
-                                  <span className="text-emerald-400">{team.win_count}勝</span>
-                                  <span className="text-slate-500">{team.total_matches - team.win_count}敗</span>
+                                  <span className="text-emerald-400">{t('stats.winsLosses', { wins: team.win_count, losses: team.total_matches - team.win_count })}</span>
                                 </div>
                               </div>
                             )}
@@ -1729,7 +1724,7 @@ function DashboardContent() {
                         );
                       })}
                       {relatedTeams.length === 0 && (
-                        <p className="text-slate-500 text-sm text-center py-4">データがありません</p>
+                        <p className="text-slate-500 text-sm text-center py-4">{t('common.noData')}</p>
                       )}
                     </div>
                   </div>
@@ -1745,13 +1740,14 @@ function DashboardContent() {
 
 // useSearchParams を使用するため Suspense でラップが必要（Next.js 15 要件）
 export default function Dashboard() {
+  const { t } = useI18n();
   return (
     <Suspense
       fallback={
         <main className="min-h-screen bg-[#0a0f1e] flex items-center justify-center">
           <div className="text-center space-y-4">
             <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-slate-400 font-bold">データを読み込んでいます...</p>
+            <p className="text-slate-400 font-bold">{t('common.loading')}</p>
           </div>
         </main>
       }

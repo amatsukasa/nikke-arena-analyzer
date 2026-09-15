@@ -4,8 +4,10 @@ import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import CharacterDetailView from "../../../components/CharacterDetailView";
+import { useI18n } from "@/i18n/I18nProvider";
 
 function CrossTournamentCharacterDetailContent() {
+  const { t, href } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -63,16 +65,16 @@ function CrossTournamentCharacterDetailContent() {
   if (tournamentIds.length === 0) {
     return (
       <main className="p-6 md:p-12 max-w-4xl mx-auto text-center space-y-6 py-24">
-        <p className="text-slate-400 text-lg font-bold">分析対象大会が指定されていません</p>
-        <p className="text-slate-500 text-sm">有効な大会IDが含まれていないか、パラメータが指定されていません。</p>
+        <p className="text-slate-400 text-lg font-bold">{t('character.noTournamentSelected')}</p>
+        <p className="text-slate-500 text-sm">{t('character.invalidTournamentSelection')}</p>
         <div>
           <button
             type="button"
-            onClick={() => router.push("/")}
+            onClick={() => router.push(href("/"))}
             className="inline-flex items-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-colors shadow-lg cursor-pointer"
           >
             <ChevronLeft size={18} />
-            <span>トップページへ戻る</span>
+            <span>{t('character.backHome')}</span>
           </button>
         </div>
       </main>
@@ -94,7 +96,7 @@ function CrossTournamentCharacterDetailContent() {
       tournamentIds={tournamentIds}
       stats={stats}
       allCharacters={allCharacters}
-      title="複数大会横断 — キャラクター詳細"
+      title={t('character.crossDetailTitle')}
     />
   );
 }
