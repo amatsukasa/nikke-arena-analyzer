@@ -7,6 +7,8 @@ import { normalizeAnalyzedRegistrationTeams, normalizeSavedRegistrationTeams, re
 import { createInitialPlayerIconCropSettings } from "../src/lib/playerIconCrop.ts";
 // @ts-expect-error Node's type-stripping test runner requires the extension.
 import { getCharIconUrl } from "../src/utils/charIcon.ts";
+// @ts-expect-error Node's type-stripping test runner requires the extension.
+import { championPostSaveRefreshError } from "../src/lib/championPostSave.ts";
 
 test("full_64 analysis accepts numeric and numeric-string Character IDs", () => {
   const teams = normalizeAnalyzedRegistrationTeams({
@@ -123,4 +125,20 @@ test("both registration modes refresh match availability immediately after savin
   assert.match(champion, /await loadMatches\(\);/);
   assert.match(champion, /setMatches\(Array\.isArray\(data\.matches\)\?data\.matches:\[\]\)/);
   assert.doesNotMatch(champion, /setInterval|window\.location\.reload/);
+});
+
+test("champion team save keeps refresh failures separate from save failures", () => {
+  const champion = readFileSync(new URL("../src/components/ChampionTournamentRegistrationShell.tsx", import.meta.url), "utf8");
+
+  assert.match(champion, /let matchesRefreshed=true;try\{await loadMatches\(\);\}catch\{matchesRefreshed=false;\}/);
+  assert.match(champion, /championPostSaveRefreshError\(catalogUpdated,matchesRefreshed\)/);
+  assert.equal(championPostSaveRefreshError(true, true), "");
+  assert.equal(
+    championPostSaveRefreshError(true, false),
+    "編成は保存されましたが、試合情報を更新できませんでした。ページを再読み込みしてください。",
+  );
+  assert.equal(
+    championPostSaveRefreshError(false, false),
+    "編成は保存されましたが、Character画像情報と試合情報を更新できませんでした。ページを再読み込みしてください。",
+  );
 });
