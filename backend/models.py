@@ -46,6 +46,7 @@ class Character(Base):
     manufacturer = Column(String, nullable=True)
     rarity = Column(String)  # SSR, SR, R
     class_type = Column(String, nullable=True) # "火力型", "支援型", "防御型"
+    is_arena_relevant = Column(Boolean, nullable=False, default=False, server_default="false")
     is_template_available = Column(Boolean, default=False)
     template_filename = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

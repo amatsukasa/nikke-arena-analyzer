@@ -10,6 +10,7 @@ class CharacterBase(BaseModel):
     manufacturer: Optional[str] = None
     rarity: Optional[str] = None
     class_type: Optional[str] = None
+    is_arena_relevant: bool = False
     is_template_available: bool = False
     template_filename: Optional[str] = None
     icon_url: Optional[str] = None

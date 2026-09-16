@@ -131,10 +131,33 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
             {
                 "id", "name", "weapon", "element", "burst_phase",
                 "manufacturer", "rarity", "class_type",
+                "is_arena_relevant",
                 "is_template_available", "template_filename", "icon_url",
                 "created_at", "usage_count",
             },
         )
+
+    def test_arena_relevance_defaults_false_and_is_returned_without_extra_selects(self):
+        marked = self.db.get(models.Character, 1)
+        marked.is_arena_relevant = True
+        self.db.commit()
+
+        statements = []
+
+        def record_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            rows = main.get_characters(self.db)
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+        by_id = {row.id: row for row in rows}
+        self.assertTrue(by_id[1].is_arena_relevant)
+        self.assertFalse(by_id[2].is_arena_relevant)
+        self.assertEqual(len(statements), 2)
 
 
 class CharactersFrontendFetchContractTest(unittest.TestCase):
@@ -151,6 +174,20 @@ class CharactersFrontendFetchContractTest(unittest.TestCase):
         self.assertNotIn("/api/characters?t=", source)
         self.assertIn("}, [isFirstLoad, tournamentId]);", source)
         self.assertNotIn("`/api/characters", source[source.index("const urls = ["):source.index("];", source.index("const urls = ["))])
+
+    def test_dashboard_has_all_arena_display_modes_without_an_extra_fetch(self):
+        source = (BACKEND_DIR.parent / "frontend/src/app/tournament/[id]/dashboard/page.tsx").read_text(encoding="utf-8")
+        self.assertIn('useState<ArenaCharacterDisplayMode>("priority")', source)
+        self.assertIn('<option value="priority">アリーナ優先</option>', source)
+        self.assertIn('<option value="only">アリーナのみ</option>', source)
+        self.assertIn('<option value="all">全キャラ</option>', source)
+        self.assertIn("if (hasFullStats) {\n      setAnalysisLoading(false);", source)
+        self.assertEqual(source.count('fetch("/api/characters"'), 1)
+
+    def test_admin_can_edit_arena_relevance(self):
+        source = (BACKEND_DIR.parent / "frontend/src/app/admin/page.tsx").read_text(encoding="utf-8")
+        self.assertIn("is_arena_relevant: formIsArenaRelevant", source)
+        self.assertIn("アリーナ向けキャラクター", source)
 
 
 if __name__ == "__main__":

@@ -886,6 +886,8 @@ def create_character(
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="名前は必須です")
+    if "is_arena_relevant" in body and not isinstance(body["is_arena_relevant"], bool):
+        raise HTTPException(status_code=422, detail="is_arena_relevant must be a boolean")
     # 重複チェック
     existing = db.query(models.Character).filter(models.Character.name == name).first()
     if existing:
@@ -898,6 +900,7 @@ def create_character(
         burst_phase=body.get("burst_phase"),
         weapon=body.get("weapon"),
         class_type=body.get("class_type"),
+        is_arena_relevant=body.get("is_arena_relevant", False),
         is_template_available=False
     )
     db.add(new_char)
@@ -933,6 +936,10 @@ def update_character(
         char.weapon = body["weapon"]
     if "class_type" in body:
         char.class_type = body["class_type"]
+    if "is_arena_relevant" in body:
+        if not isinstance(body["is_arena_relevant"], bool):
+            raise HTTPException(status_code=422, detail="is_arena_relevant must be a boolean")
+        char.is_arena_relevant = body["is_arena_relevant"]
     db.commit()
     db.refresh(char)
     return {"ok": True, "character": {"id": char.id, "name": char.name}}
@@ -1393,6 +1400,7 @@ def get_all_characters_admin(
             "burst_phase": c.burst_phase,
             "weapon": c.weapon,
             "class_type": c.class_type,
+            "is_arena_relevant": c.is_arena_relevant,
             "has_template": has_tpl,
             "template_count": tpl_count,
             "image_url": (

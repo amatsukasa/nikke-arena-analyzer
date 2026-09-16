@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
-import { CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
+import { ArenaCharacterDisplayMode, CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
 import { useI18n } from "@/i18n/I18nProvider";
 
 type UsageState = "loading" | "ready" | "error";
@@ -44,6 +44,7 @@ export default function SynergyCharacterPicker({
   usageState,
   includedIds,
   excludedIds,
+  displayMode = "priority",
   onChange,
 }: {
   characters: SynergyCharacter[];
@@ -51,6 +52,7 @@ export default function SynergyCharacterPicker({
   usageState: UsageState;
   includedIds: number[];
   excludedIds: number[];
+  displayMode?: ArenaCharacterDisplayMode;
   onChange: (selection: { includedIds: number[]; excludedIds: number[] }) => void;
 }) {
   const { t } = useI18n();
@@ -58,11 +60,11 @@ export default function SynergyCharacterPicker({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const options = usageState === "ready"
-    ? mapAndSortSelectableSynergyCharacters(characters, characterUsage)
+    ? mapAndSortSelectableSynergyCharacters(characters, characterUsage, displayMode)
     : characters
       .filter((character) => Number(character.id) !== 9999)
       .map((character) => ({ character, count: 0, unavailable: false }));
-  const groups = groupSynergyCharacterOptions(options);
+  const groups = groupSynergyCharacterOptions(options, displayMode === "priority");
 
   const selectableIdsKey = usageState === "ready"
     ? options.map((option) => option.character.id).join(",")

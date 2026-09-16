@@ -28,6 +28,7 @@ interface AdminCharacter {
   has_template: boolean;
   template_count: number;
   image_url: string | null;
+  is_arena_relevant: boolean;
 }
 
 const CHARACTER_PAGE_SIZE = 30;
@@ -103,6 +104,7 @@ export default function AdminPage() {
   const [formManufacturer, setFormManufacturer] = useState('エリシオン');
   const [formBurstPhase, setFormBurstPhase] = useState('3');
   const [formWeapon, setFormWeapon] = useState('AR');
+  const [formIsArenaRelevant, setFormIsArenaRelevant] = useState(false);
 
   const rarities = ['SSR', 'SR', 'R'];
   const classTypes = ['火力型', '支援型', '防御型'];
@@ -395,6 +397,7 @@ export default function AdminPage() {
       setFormManufacturer(char.manufacturer || 'エリシオン');
       setFormBurstPhase(char.burst_phase || '3');
       setFormWeapon(char.weapon || 'AR');
+      setFormIsArenaRelevant(char.is_arena_relevant);
     } else {
       setEditingCharId(null);
       setFormName('');
@@ -404,6 +407,7 @@ export default function AdminPage() {
       setFormManufacturer('エリシオン');
       setFormBurstPhase('3');
       setFormWeapon('AR');
+      setFormIsArenaRelevant(false);
     }
     setIsModalOpen(true);
   };
@@ -423,6 +427,7 @@ export default function AdminPage() {
       manufacturer: formManufacturer,
       burst_phase: formBurstPhase,
       weapon: formWeapon,
+      is_arena_relevant: formIsArenaRelevant,
     };
 
     try {
@@ -755,6 +760,7 @@ export default function AdminPage() {
                     <th className="p-4">属性</th>
                     <th className="p-4">メーカー</th>
                     <th className="p-4">武器</th>
+                    <th className="p-4">アリーナ向け</th>
                     <th className="p-4">テンプレート数</th>
                     <th className="p-4 text-right">操作</th>
                   </tr>
@@ -762,7 +768,7 @@ export default function AdminPage() {
                 <tbody className="divide-y divide-slate-800 text-slate-300">
                   {characters.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-slate-500">
+                      <td colSpan={11} className="p-8 text-center text-slate-500">
                         該当するキャラクターが見つかりません。
                       </td>
                     </tr>
@@ -797,6 +803,11 @@ export default function AdminPage() {
                         <td className="p-4 text-slate-400">{c.element || '-'}</td>
                         <td className="p-4 text-slate-400 text-xs">{c.manufacturer || '-'}</td>
                         <td className="p-4 text-slate-400">{c.weapon || '-'}</td>
+                        <td className="p-4">
+                          <span className={c.is_arena_relevant ? 'text-emerald-400 font-bold' : 'text-slate-600'}>
+                            {c.is_arena_relevant ? '対象' : '対象外'}
+                          </span>
+                        </td>
                         <td className="p-4">
                           {c.template_count > 0 ? (
                             <button
@@ -1109,6 +1120,16 @@ export default function AdminPage() {
                   </select>
                 </div>
               </div>
+
+              <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 px-4 py-3 text-sm font-semibold text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={formIsArenaRelevant}
+                  onChange={(e) => setFormIsArenaRelevant(e.target.checked)}
+                  className="h-4 w-4 accent-emerald-500"
+                />
+                アリーナ向けキャラクター
+              </label>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
                 <button
