@@ -57,10 +57,10 @@ const japaneseCollator = new Intl.Collator("ja", {
 });
 
 const SYNERGY_BURST_GROUPS: Array<Pick<SynergyCharacterGroup, "key" | "label">> = [
-  { key: "1", label: "バースト1" },
-  { key: "2", label: "バースト2" },
-  { key: "3", label: "バースト3" },
-  { key: "A", label: "バーストA" },
+  { key: "1", label: "Burst: I" },
+  { key: "2", label: "Burst: II" },
+  { key: "3", label: "Burst: III" },
+  { key: "A", label: "Burst: A" },
   { key: "other", label: "その他" },
 ];
 
@@ -190,4 +190,14 @@ export function mapAndSortSelectableSynergyCharacters<T extends SynergyCharacter
     const byName = japaneseCollator.compare(left.character.name ?? "", right.character.name ?? "");
     return byName || Number(left.character.id) - Number(right.character.id);
   });
+}
+
+export function mapSynergyCharactersWithoutUsage<T extends SynergyCharacter>(
+  characters: T[],
+  displayMode: ArenaCharacterDisplayMode = "priority",
+): SynergyCharacterOption<T>[] {
+  return characters
+    .filter((character) => Number(character.id) !== 9999)
+    .filter((character) => displayMode !== "only" || character.is_arena_relevant === true)
+    .map((character) => ({ character, count: 0, unavailable: false }));
 }

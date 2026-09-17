@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   groupSynergyCharacterOptions,
   mapAndSortSelectableSynergyCharacters,
+  mapSynergyCharactersWithoutUsage,
   type ArenaCharacterDisplayMode,
   type SynergyCharacter,
 } from "./synergyCharacters.ts";
@@ -44,4 +45,27 @@ test("all ignores arena relevance and sorts every used character by name", () =>
     "アイギス", "アリーナキャラA", "アリーナキャラB",
     "ナユタ", "通常エマ", "非アリーナキャラC",
   ]);
+});
+
+test("burst group labels use fixed English notation", () => {
+  const burstCharacters: SynergyCharacter[] = [
+    { id: 11, burst_phase: "1" },
+    { id: 12, burst_phase: "2" },
+    { id: 13, burst_phase: "3" },
+    { id: 14, burst_phase: "A" },
+  ];
+  const labels = groupSynergyCharacterOptions(
+    burstCharacters.map((character) => ({ character, count: 1, unavailable: false })),
+  ).map((group) => group.label);
+
+  assert.deepEqual(labels, ["Burst: I", "Burst: II", "Burst: III", "Burst: A"]);
+});
+
+test("arena-only filtering can rely on Character metadata before usage loads", () => {
+  const withEmpty = [...characters, { id: 9999, name: "空き枠", is_arena_relevant: true }];
+  assert.deepEqual(
+    mapSynergyCharactersWithoutUsage(withEmpty, "only").map((option) => option.character.id),
+    [1, 2, 3, 7],
+  );
+  assert.equal(mapSynergyCharactersWithoutUsage(withEmpty, "all").length, characters.length);
 });

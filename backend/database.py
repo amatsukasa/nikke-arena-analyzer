@@ -1,8 +1,9 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from database_safety import database_url_for_process
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:password@db:5432/nikke_arena")
+DATABASE_URL = database_url_for_process()
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

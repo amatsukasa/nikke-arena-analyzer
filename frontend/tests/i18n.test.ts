@@ -17,6 +17,21 @@ test('all locale dictionaries expose the same keys', () => {
   }
 });
 
+test('both Team Search pages use the shared arena display selector', async () => {
+  const [topPage, tournamentPage, picker] = await Promise.all([
+    readFile(new URL('../src/app/page.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/app/tournament/[id]/dashboard/page.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/SynergyCharacterPicker.tsx', import.meta.url), 'utf8'),
+  ]);
+  for (const page of [topPage, tournamentPage]) {
+    assert.match(page, /<ArenaCharacterDisplaySelect/);
+    assert.match(page, /displayMode=\{arenaCharacterDisplay\}/);
+    assert.doesNotMatch(page, /<option value="priority">/);
+  }
+  assert.match(picker, /export function ArenaCharacterDisplaySelect/);
+  assert.match(picker, /search\.displayArenaPriority/);
+});
+
 test('localized paths preserve routes and keep Japanese URLs unprefixed', () => {
   assert.deepEqual(locales, ['ja', 'en', 'fr', 'ko', 'zh-CN']);
   assert.equal(localizePath('/tournament/12?tab=overview', 'en'), '/en/tournament/12?tab=overview');

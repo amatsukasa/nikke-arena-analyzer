@@ -7,7 +7,8 @@ from sqlalchemy import inspect, text
 
 # 親ディレクトリを sys.path に追加して、database をインポートできるようにする
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database import engine
+from database import Base, engine
+import models  # noqa: F401  Ensure every mapped table is registered on Base.metadata.
 
 # 既存DBにテーブルだけがある場合は、このリビジョンから通常のupgradeを開始する。
 # headへ直接stampすると、追加マイグレーションを未実行のまま完了扱いにしてしまうため避ける。
@@ -144,6 +145,24 @@ def run_migrations():
     required_tables = {"tournaments", "characters", "users"}
     has_required_tables = required_tables.issubset(tables)
     has_alembic_version = "alembic_version" in tables
+
+    # The historical revision chain predates migrations for the legacy `users`
+    # table and therefore cannot build an empty database from revision zero.
+    # For a genuinely empty database, create the current model schema and mark it
+    # at head. Existing databases still follow the normal incremental path below.
+    application_tables = tables - {"alembic_version"}
+    if not application_tables:
+        print(
+            "[Migration] Empty database detected. Creating the current model "
+            "schema and stamping Alembic head."
+        )
+        Base.metadata.create_all(bind=engine)
+        command.stamp(alembic_cfg, "head")
+        _repair_missing_columns()
+        _repair_tournament_dates()
+        _repair_creator_foreign_keys()
+        print("[Migration] Fresh database initialization completed.")
+        return
 
     if has_required_tables and not has_alembic_version:
         print(

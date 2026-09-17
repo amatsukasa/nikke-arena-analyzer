@@ -10,7 +10,7 @@ import CharacterUsageByResultRanking from "../../../../components/CharacterUsage
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../../../../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../../../../components/TeamAdoptionRanking";
-import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../../../../components/SynergyCharacterPicker";
+import SynergyCharacterPicker, { ArenaCharacterDisplaySelect, SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../../../../components/SynergyCharacterPicker";
 import { emptySynergySelection } from "../../../../lib/synergyCharacters";
 import type { ArenaCharacterDisplayMode } from "../../../../lib/synergyCharacters";
 import { getCharIconUrl } from "@/utils/charIcon";
@@ -257,11 +257,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
-    if (hasFullStats) {
-      setAnalysisLoading(false);
-      return;
-    }
-    if (!isPrivateTournament || !tournamentId) return;
+    if (!isPrivateTournament || !tournamentId || hasFullStats) return;
     if (activeTab !== "overview" && activeTab !== "matchups" && activeTab !== "search") return;
 
     const controller = new AbortController();
@@ -1742,19 +1738,10 @@ export default function Dashboard() {
               <SynergyPickerInstructions />
               
               {/* フィルターUI */}
-              <div className="mb-3 flex items-center gap-2">
-                <label htmlFor="arena-character-display" className="shrink-0 text-sm font-semibold text-slate-300">表示:</label>
-                <select
-                  id="arena-character-display"
-                  className="min-w-0 rounded-lg border border-emerald-500/30 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  value={arenaCharacterDisplay}
-                  onChange={e => setArenaCharacterDisplay(e.target.value as ArenaCharacterDisplayMode)}
-                >
-                  <option value="priority">アリーナ優先</option>
-                  <option value="only">アリーナのみ</option>
-                  <option value="all">全キャラ</option>
-                </select>
-              </div>
+              <ArenaCharacterDisplaySelect
+                value={arenaCharacterDisplay}
+                onChange={setArenaCharacterDisplay}
+              />
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
                   <option value="">{t('filter.rarity')} ({t('common.all')})</option>
