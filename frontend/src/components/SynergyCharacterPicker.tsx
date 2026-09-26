@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { getCharIconUrl } from "@/utils/charIcon";
-import { CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
+import { ArenaCharacterDisplayMode, CharacterUsageCount, groupSynergyCharacterOptions, mapAndSortSelectableSynergyCharacters, mapSynergyCharactersWithoutUsage, reconcileSynergySelection, shouldResetSynergySelection, SynergyCharacter, transitionSynergySelection } from "@/lib/synergyCharacters";
 import { useI18n } from "@/i18n/I18nProvider";
 
 type UsageState = "loading" | "ready" | "error";
@@ -38,12 +38,42 @@ export function SynergyPickerInstructions() {
   );
 }
 
+export function ArenaCharacterDisplaySelect({
+  value,
+  onChange,
+}: {
+  value: ArenaCharacterDisplayMode;
+  onChange: (value: ArenaCharacterDisplayMode) => void;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <label htmlFor={id} className="shrink-0 text-sm font-semibold text-slate-300">
+        {t('search.display')}:
+      </label>
+      <select
+        id={id}
+        className="min-w-0 rounded-lg border border-emerald-500/30 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        value={value}
+        onChange={(event) => onChange(event.target.value as ArenaCharacterDisplayMode)}
+      >
+        <option value="priority">{t('search.displayArenaPriority')}</option>
+        <option value="only">{t('search.displayArenaOnly')}</option>
+        <option value="all">{t('search.displayAllCharacters')}</option>
+      </select>
+    </div>
+  );
+}
+
 export default function SynergyCharacterPicker({
   characters,
   characterUsage,
   usageState,
   includedIds,
   excludedIds,
+  displayMode = "priority",
   onChange,
 }: {
   characters: SynergyCharacter[];
@@ -51,6 +81,7 @@ export default function SynergyCharacterPicker({
   usageState: UsageState;
   includedIds: number[];
   excludedIds: number[];
+  displayMode?: ArenaCharacterDisplayMode;
   onChange: (selection: { includedIds: number[]; excludedIds: number[] }) => void;
 }) {
   const { t } = useI18n();
@@ -58,11 +89,9 @@ export default function SynergyCharacterPicker({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const options = usageState === "ready"
-    ? mapAndSortSelectableSynergyCharacters(characters, characterUsage)
-    : characters
-      .filter((character) => Number(character.id) !== 9999)
-      .map((character) => ({ character, count: 0, unavailable: false }));
-  const groups = groupSynergyCharacterOptions(options);
+    ? mapAndSortSelectableSynergyCharacters(characters, characterUsage, displayMode)
+    : mapSynergyCharactersWithoutUsage(characters, displayMode);
+  const groups = groupSynergyCharacterOptions(options, displayMode === "priority");
 
   const selectableIdsKey = usageState === "ready"
     ? options.map((option) => option.character.id).join(",")
@@ -138,7 +167,7 @@ export default function SynergyCharacterPicker({
                     ? "cursor-wait opacity-70 ring-1 ring-white/10"
                     : usageState === "error"
                       ? "cursor-not-allowed opacity-70 ring-1 ring-white/10"
-                    : "opacity-70 ring-1 ring-white/10 hover:opacity-100"
+                      : "opacity-70 ring-1 ring-white/10 hover:opacity-100"
             }`}
             title={title}
           >

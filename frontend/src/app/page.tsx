@@ -10,8 +10,9 @@ import CharacterUsageByResultRanking from "../components/CharacterUsageByResultR
 import TeamMatchupHistory from "../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../components/TeamAdoptionRanking";
-import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
+import SynergyCharacterPicker, { ArenaCharacterDisplaySelect, SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
 import { emptySynergySelection } from "../lib/synergyCharacters";
+import type { ArenaCharacterDisplayMode } from "../lib/synergyCharacters";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
@@ -120,6 +121,7 @@ function DashboardContent() {
   const [filterBurst, setFilterBurst] = useState<string>("");
   const [filterElement, setFilterElement] = useState<string>("");
   const [filterWeapon, setFilterWeapon] = useState<string>("");
+  const [arenaCharacterDisplay, setArenaCharacterDisplay] = useState<ArenaCharacterDisplayMode>("priority");
 
   // For winrate filters
   const [winrateMinMatches, setWinrateMinMatches] = useState<number>(1);
@@ -1263,7 +1265,12 @@ function DashboardContent() {
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20">
               <SynergyPickerInstructions />
-              
+
+              <ArenaCharacterDisplaySelect
+                value={arenaCharacterDisplay}
+                onChange={setArenaCharacterDisplay}
+              />
+
               {/* フィルターUI */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
@@ -1310,6 +1317,7 @@ function DashboardContent() {
                 usageState={loading ? "loading" : statsError || !stats ? "error" : "ready"}
                 includedIds={includedCharacterIds}
                 excludedIds={excludedCharacterIds}
+                displayMode={arenaCharacterDisplay}
                 onChange={({ includedIds, excludedIds }) => {
                   setIncludedCharacterIds(includedIds);
                   setExcludedCharacterIds(excludedIds);

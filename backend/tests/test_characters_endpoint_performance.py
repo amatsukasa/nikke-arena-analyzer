@@ -1,6 +1,7 @@
 """Regression coverage for the first-stage Character endpoint optimizations."""
 
 import os
+from datetime import date
 from pathlib import Path
 import sys
 import tempfile
@@ -13,7 +14,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import event, func  # noqa: E402
+from sqlalchemy import event, func, text  # noqa: E402
 
 from database import Base, SessionLocal, engine  # noqa: E402
 import main  # noqa: E402
@@ -43,6 +44,16 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
             models.Character(id=character_id, name=f"Character {character_id}", rarity="SSR")
             for character_id in range(1, 6)
         )
+        tournament = models.Tournament(
+            id=1,
+            name="Character endpoint performance test",
+            date=date(2026, 1, 1),
+            registration_scope="full_64",
+        )
+        player = models.Player(id=1, tournament_id=1, seed_number=1, name="Player 1")
+        deck_set = models.DeckSet(id=1, player_id=1)
+        self.db.add_all((tournament, player, deck_set))
+        self.db.flush()
         self.db.add_all((
             models.DeckTeam(
                 deck_set_id=1,
@@ -131,10 +142,58 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
             {
                 "id", "name", "weapon", "element", "burst_phase",
                 "manufacturer", "rarity", "class_type",
+                "is_arena_relevant",
                 "is_template_available", "template_filename", "icon_url",
                 "created_at", "usage_count",
             },
         )
+
+    def test_arena_relevance_defaults_false_and_is_returned_without_extra_selects(self):
+        marked = self.db.get(models.Character, 1)
+        marked.is_arena_relevant = True
+        self.db.commit()
+
+        statements = []
+
+        def record_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            rows = main.get_characters(self.db)
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+        by_id = {row.id: row for row in rows}
+        self.assertTrue(by_id[1].is_arena_relevant)
+        self.assertFalse(by_id[2].is_arena_relevant)
+        self.assertEqual(len(statements), 2)
+
+    def test_create_update_and_list_preserve_arena_relevance(self):
+        if engine.dialect.name == "postgresql":
+            self.db.execute(text(
+                "SELECT setval(pg_get_serial_sequence('characters', 'id'), "
+                "(SELECT MAX(id) FROM characters))"
+            ))
+            self.db.commit()
+
+        created = main.create_character(
+            {"name": "Arena API Character", "is_arena_relevant": True},
+            object(),
+            self.db,
+        )
+        character_id = created["character"]["id"]
+        self.assertTrue(self.db.get(models.Character, character_id).is_arena_relevant)
+
+        main.update_character(
+            character_id,
+            {"is_arena_relevant": False},
+            object(),
+            self.db,
+        )
+        listed = {row.id: row for row in main.get_characters(self.db)}
+        self.assertFalse(listed[character_id].is_arena_relevant)
 
 
 class CharactersFrontendFetchContractTest(unittest.TestCase):
@@ -151,6 +210,21 @@ class CharactersFrontendFetchContractTest(unittest.TestCase):
         self.assertNotIn("/api/characters?t=", source)
         self.assertIn("}, [isFirstLoad, tournamentId]);", source)
         self.assertNotIn("`/api/characters", source[source.index("const urls = ["):source.index("];", source.index("const urls = ["))])
+
+    def test_dashboard_has_all_arena_display_modes_without_an_extra_fetch(self):
+        source = (BACKEND_DIR.parent / "frontend/src/app/tournament/[id]/dashboard/page.tsx").read_text(encoding="utf-8")
+        picker = (BACKEND_DIR.parent / "frontend/src/components/SynergyCharacterPicker.tsx").read_text(encoding="utf-8")
+        self.assertIn('useState<ArenaCharacterDisplayMode>("priority")', source)
+        self.assertIn("<ArenaCharacterDisplaySelect", source)
+        self.assertIn('<option value="priority">', picker)
+        self.assertIn('<option value="only">', picker)
+        self.assertIn('<option value="all">', picker)
+        self.assertEqual(source.count('fetch("/api/characters"'), 1)
+
+    def test_admin_can_edit_arena_relevance(self):
+        source = (BACKEND_DIR.parent / "frontend/src/app/admin/page.tsx").read_text(encoding="utf-8")
+        self.assertIn("is_arena_relevant: formIsArenaRelevant", source)
+        self.assertIn("アリーナ向けキャラクター", source)
 
 
 if __name__ == "__main__":

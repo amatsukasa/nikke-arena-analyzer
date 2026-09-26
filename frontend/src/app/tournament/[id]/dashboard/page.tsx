@@ -10,8 +10,9 @@ import CharacterUsageByResultRanking from "../../../../components/CharacterUsage
 import TeamMatchupHistory from "../../../../components/TeamMatchupHistory";
 import TeamPositionAnalysis from "../../../../components/TeamPositionAnalysis";
 import TeamAdoptionRanking from "../../../../components/TeamAdoptionRanking";
-import SynergyCharacterPicker, { SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../../../../components/SynergyCharacterPicker";
+import SynergyCharacterPicker, { ArenaCharacterDisplaySelect, SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../../../../components/SynergyCharacterPicker";
 import { emptySynergySelection } from "../../../../lib/synergyCharacters";
+import type { ArenaCharacterDisplayMode } from "../../../../lib/synergyCharacters";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { teamMatchupPerspective } from "@/lib/teamMatchupPerspective";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -72,6 +73,7 @@ export default function Dashboard() {
   const [filterBurst, setFilterBurst] = useState<string>("");
   const [filterElement, setFilterElement] = useState<string>("");
   const [filterWeapon, setFilterWeapon] = useState<string>("");
+  const [arenaCharacterDisplay, setArenaCharacterDisplay] = useState<ArenaCharacterDisplayMode>("priority");
 
   // For winrate filters
   const [winrateMinMatches, setWinrateMinMatches] = useState<number>(1);
@@ -1736,6 +1738,10 @@ export default function Dashboard() {
               <SynergyPickerInstructions />
               
               {/* フィルターUI */}
+              <ArenaCharacterDisplaySelect
+                value={arenaCharacterDisplay}
+                onChange={setArenaCharacterDisplay}
+              />
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                 <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
                   <option value="">{t('filter.rarity')} ({t('common.all')})</option>
@@ -1781,6 +1787,7 @@ export default function Dashboard() {
                 usageState={analysisLoading ? "loading" : dataError || !stats ? "error" : "ready"}
                 includedIds={includedCharacterIds}
                 excludedIds={excludedCharacterIds}
+                displayMode={arenaCharacterDisplay}
                 onChange={({ includedIds, excludedIds }) => {
                   setIncludedCharacterIds(includedIds);
                   setExcludedCharacterIds(excludedIds);

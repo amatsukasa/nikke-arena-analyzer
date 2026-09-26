@@ -78,7 +78,7 @@ test("groups selectable characters by canonical burst order and Japanese name, n
     ],
   );
   const groups = groupSynergyCharacterOptions(selectable);
-  assert.deepEqual(groups.map((group) => group.label), ["バースト1", "バースト2", "バースト3", "バーストA", "その他"]);
+  assert.deepEqual(groups.map((group) => group.label), ["Burst: I", "Burst: II", "Burst: III", "Burst: A", "その他"]);
   assert.deepEqual(groups.map((group) => group.options.map((option) => option.character.id)), [[4], [5], [6, 7], [8], [2, 3]]);
   assert.equal(new Set(groups.flatMap((group) => group.options.map((option) => option.character.id))).size, 7);
 });

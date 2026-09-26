@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15
@@ -14,6 +12,39 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
+  db_test:
+    image: postgres:15
+    container_name: nikke_arena_test_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: nikke_arena_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nikke_arena_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  db_acceptance:
+    image: postgres:15
+    container_name: nikke_arena_acceptance_db
+    profiles: ["acceptance"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: nikke_arena_acceptance
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres_acceptance_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nikke_arena_acceptance"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   backend:
     build:
       context: ./backend
@@ -23,8 +54,10 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ./frontend:/frontend:ro
     environment:
       - DATABASE_URL=postgresql://postgres:password@db:5432/nikke_arena
+      - TEST_DATABASE_URL=postgresql://postgres:password@db_test:5432/nikke_arena_test
       - SECRET_KEY=dev-secret-key-local-only
       - INVITE_CODE=dev-invite
       - FIRST_ADMIN_EMAIL=admin@example.com
@@ -32,6 +65,7 @@ services:
       - CORS_ORIGINS=http://localhost:3000
     depends_on:
       - db
+      - db_test
     command: sh -c "python scripts/run_migrations.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
 
@@ -49,7 +83,51 @@ services:
     command: npm start
     restart: unless-stopped
 
+  backend_acceptance:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nikke_arena_acceptance_backend
+    profiles: ["acceptance"]
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - ./backend:/app
+      - ./frontend:/frontend:ro
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db_acceptance:5432/nikke_arena_acceptance
+      - ACCEPTANCE_DATABASE_URL=postgresql://postgres:password@db_acceptance:5432/nikke_arena_acceptance
+      - TEST_DATABASE_URL=postgresql://postgres:password@db_test:5432/nikke_arena_test
+      - SECRET_KEY=acceptance-secret-key-local-only
+      - INVITE_CODE=acceptance-invite
+      - FIRST_ADMIN_EMAIL=acceptance-admin@example.test
+      - FIRST_ADMIN_PASSWORD=acceptance-admin-password
+      - CORS_ORIGINS=http://localhost:3001
+    depends_on:
+      db_acceptance:
+        condition: service_healthy
+      db_test:
+        condition: service_healthy
+    command: sh -c "python scripts/run_migrations.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend_acceptance:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nikke_arena_acceptance_frontend
+    profiles: ["acceptance"]
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+      - API_URL=http://backend_acceptance:8000
+    depends_on:
+      - backend_acceptance
+    command: npm start
+
 volumes:
   postgres_data:
     name: nikke-arena-analyzer_postgres_data
     external: true
+  postgres_acceptance_data:
+    name: nikke-arena-analyzer_postgres_acceptance_data
