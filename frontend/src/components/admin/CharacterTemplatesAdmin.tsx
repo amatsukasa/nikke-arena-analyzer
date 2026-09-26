@@ -729,7 +729,7 @@ function TemplateThumb({
           loading="lazy"
           decoding="async"
           onError={() => setFailed(true)}
-          className="aspect-square w-full rounded bg-slate-800 object-cover"
+          className="aspect-square w-full rounded bg-slate-800 object-contain"
         />
       ) : (
         <div className="aspect-square rounded bg-slate-800 p-3 text-sm text-slate-400">

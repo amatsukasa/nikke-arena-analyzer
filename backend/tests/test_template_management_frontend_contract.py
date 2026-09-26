@@ -77,6 +77,8 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertGreaterEqual(page.count("setReassigning(null)"), 2)
         self.assertIn('role="alert"', page)
         self.assertIn('loading="lazy"', page)
+        self.assertNotIn("object-cover", page)
+        self.assertGreaterEqual(page.count("object-contain"), 2)
         self.assertIn("new AbortController()", page)
         self.assertIn("String((page - 1) * TEMPLATE_PAGE_SIZE)", page)
         self.assertIn('params.set("character_id", String(characterFilter.id))', page)

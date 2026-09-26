@@ -46,20 +46,23 @@ class RepresentativeImageInitializationTests(unittest.TestCase):
 
         dry_run = initialize_representative_templates(self.db, self.temp.name)
         self.assertFalse(dry_run["apply"])
-        self.assertEqual(dry_run["set_count"], 2)
+        self.assertEqual(dry_run["selected_count"], 2)
+        self.assertEqual(dry_run["updated_count"], 0)
         self.assertIsNone(self.db.get(models.Character, 1).representative_template_filename)
 
         applied = initialize_representative_templates(self.db, self.temp.name, apply=True)
         self.db.commit()
         self.assertEqual(applied["target_characters"], 3)
-        self.assertEqual(applied["set_count"], 2)
+        self.assertEqual(applied["selected_count"], 2)
+        self.assertEqual(applied["updated_count"], 2)
         self.assertEqual(self.db.get(models.Character, 1).representative_template_filename, "char_1_001.png")
         self.assertEqual(self.db.get(models.Character, 2).representative_template_filename, "char_2.png")
         self.assertEqual(self.db.get(models.Character, 4).representative_template_filename, "char_4_009.png")
 
         repeated = initialize_representative_templates(self.db, self.temp.name, apply=True)
         self.assertEqual(repeated["target_characters"], 1)
-        self.assertEqual(repeated["set_count"], 0)
+        self.assertEqual(repeated["selected_count"], 0)
+        self.assertEqual(repeated["updated_count"], 0)
         self.assertEqual(repeated["no_candidate"], [3])
 
     def test_reports_ambiguous_oldest_generation_and_invalid_files(self):
@@ -68,7 +71,8 @@ class RepresentativeImageInitializationTests(unittest.TestCase):
 
         report = initialize_representative_templates(self.db, self.temp.name, apply=True)
 
-        self.assertEqual(report["set_count"], 0)
+        self.assertEqual(report["selected_count"], 0)
+        self.assertEqual(report["updated_count"], 0)
         self.assertEqual(report["unset_count"], 3)
         self.assertEqual(report["invalid_files"], ["bad.png"])
         self.assertEqual(report["ambiguous_generation"][0]["character_id"], 1)

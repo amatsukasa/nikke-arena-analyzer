@@ -34,7 +34,8 @@ def initialize_representative_templates(db, upload_dir: str | Path, *, apply: bo
     report = {
         "apply": apply,
         "target_characters": len(targets),
-        "set_count": 0,
+        "selected_count": 0,
+        "updated_count": 0,
         "unset_count": 0,
         "invalid_files": sorted(invalid_files),
         "no_candidate": [],
@@ -71,7 +72,8 @@ def initialize_representative_templates(db, upload_dir: str | Path, *, apply: bo
         })
         if apply:
             character.representative_template_filename = filename
-        report["set_count"] += 1
+            report["updated_count"] += 1
+        report["selected_count"] += 1
 
-    report["unset_count"] = len(targets) - report["set_count"]
+    report["unset_count"] = len(targets) - report["selected_count"]
     return report
