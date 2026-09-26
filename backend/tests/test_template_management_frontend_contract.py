@@ -25,6 +25,9 @@ class TemplateManagementFrontendContract(unittest.TestCase):
             "どのCharacterにも使わず無効化",
             "正しいCharacterへ移す",
             "テンプレートとして無効化",
+            "代表画像に設定",
+            "代表画像未設定",
+            "有効テンプレート",
             "復元",
             "完全削除",
         ):
@@ -56,6 +59,12 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertNotIn('label={`予測 Character ${review.predicted_character_id}`}', page)
         self.assertNotIn('label={`修正 Character ${review.corrected_character_id}`}', page)
         self.assertIn("visibleTemplates.map", page)
+        self.assertIn("characterSummaries.map", page)
+        self.assertIn('/api/admin/all-characters?${params}', page)
+        self.assertIn('/representative`', page)
+        self.assertIn("template.representative", page)
+        self.assertIn("await load()", page)
+        self.assertIn('role="alert"', page)
         self.assertIn('loading="lazy"', page)
         self.assertIn("new AbortController()", page)
         self.assertIn("String((page - 1) * TEMPLATE_PAGE_SIZE)", page)

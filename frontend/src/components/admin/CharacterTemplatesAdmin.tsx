@@ -32,6 +32,13 @@ type CharacterGroup = {
   pending_count: number;
   representative_url: string | null;
 };
+type CharacterSummary = {
+  char_id: number;
+  char_name: string;
+  template_count: number;
+  representative_template_filename: string | null;
+  image_url: string | null;
+};
 type Review = {
   id: number;
   status: string;
@@ -63,6 +70,7 @@ export default function CharacterTemplatesAdmin({
   const router = useRouter();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const [groups, setGroups] = useState<CharacterGroup[]>([]);
+  const [characterSummaries, setCharacterSummaries] = useState<CharacterSummary[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [tab, setTab] = useState<"pending" | "active" | "quarantine">(
@@ -109,6 +117,23 @@ export default function CharacterTemplatesAdmin({
         const body = await response.json();
         setReviews(body.reviews ?? []);
         setGroups([]);
+        setCharacterSummaries([]);
+        setTotalItems(body.total ?? 0);
+      } else if (tab === "active" && !characterFilter) {
+        const params = new URLSearchParams({
+          offset: String((page - 1) * TEMPLATE_PAGE_SIZE),
+          limit: String(TEMPLATE_PAGE_SIZE),
+          query: appliedQuery,
+        });
+        const response = await apiFetch(`/api/admin/all-characters?${params}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Character一覧を取得できませんでした。");
+        const body = await response.json();
+        setCharacterSummaries(body.characters ?? []);
+        setGroups([]);
+        setReviews([]);
         setTotalItems(body.total ?? 0);
       } else {
         const params = new URLSearchParams({
@@ -125,6 +150,7 @@ export default function CharacterTemplatesAdmin({
         if (!response.ok) throw new Error("テンプレート情報を取得できませんでした。");
         const body = await response.json();
         setGroups(body.characters ?? []);
+        setCharacterSummaries([]);
         setReviews([]);
         setTotalItems(body.total ?? 0);
       }
@@ -389,6 +415,37 @@ export default function CharacterTemplatesAdmin({
             </div>
             {loading ? (
               <p className="text-slate-400">読み込み中…</p>
+            ) : tab === "active" && !characterFilter ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {characterSummaries.map((character) => (
+                  <button
+                    type="button"
+                    key={character.char_id}
+                    onClick={() => {
+                      setCharacterFilter({ id: character.char_id, name: character.char_name });
+                      setPage(1);
+                    }}
+                    className="grid grid-cols-[5rem_1fr] gap-4 rounded-xl border border-slate-700 bg-slate-900 p-4 text-left transition hover:border-indigo-400"
+                  >
+                    <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-lg border border-slate-700 bg-slate-950">
+                      {character.image_url ? (
+                        <img src={character.image_url} alt={`${character.char_name} 代表画像`} className="h-full w-full object-contain" />
+                      ) : (
+                        <span className="px-1 text-center text-xs text-amber-300">代表画像未設定</span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="truncate font-bold">{character.char_name}</h2>
+                      <p className="text-sm text-slate-400">ID {character.char_id}</p>
+                      <p className="mt-2 text-sm">有効テンプレート {character.template_count}枚</p>
+                      <p className={character.representative_template_filename ? "truncate text-xs text-emerald-300" : "text-xs font-bold text-amber-300"}>
+                        {character.representative_template_filename ?? "代表画像未設定"}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+                {characterSummaries.length === 0 && <p className="text-slate-400">該当するCharacterはありません。</p>}
+              </div>
             ) : templateEntries.length === 0 && (
               <p className="text-slate-400">
                 該当するテンプレートはありません。
@@ -396,12 +453,12 @@ export default function CharacterTemplatesAdmin({
             )}
             <div
               aria-busy={loading}
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+              className={tab === "active" && !characterFilter ? "hidden" : "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"}
             >
             {visibleTemplates.map(({ group, template }) => (
               <article
                 key={template.filename}
-                className="rounded-xl border border-slate-800 bg-slate-900 p-4"
+                className={`rounded-xl border bg-slate-900 p-4 ${template.representative ? "border-emerald-400 ring-2 ring-emerald-400/30" : "border-slate-800"}`}
               >
                 <h2 className="font-bold">
                   {group.character_name}{" "}
@@ -424,10 +481,29 @@ export default function CharacterTemplatesAdmin({
                         <p className="text-xs text-slate-400">
                           世代 {template.generation} /{" "}
                           {(template.size_bytes / 1024).toFixed(1)}KB
-                          {template.representative ? " / 代表" : ""}
+                          {template.representative ? " / 代表画像" : ""}
                         </p>
                         {tab === "active" ? (
                           <div className="mt-2 grid gap-2">
+                            {!template.representative && (
+                              <button
+                                disabled={!!busy}
+                                className="rounded bg-emerald-700 py-1 text-sm font-bold"
+                                onClick={() =>
+                                  window.confirm(`${template.filename} を表示用の代表画像に設定しますか？`) &&
+                                  void run(
+                                    `representative-${template.filename}`,
+                                    `/api/admin/character-templates/${group.character_id}/representative`,
+                                    {
+                                      method: "PUT",
+                                      body: JSON.stringify({ filename: template.filename }),
+                                    },
+                                  )
+                                }
+                              >
+                                代表画像に設定
+                              </button>
+                            )}
                             <button
                               disabled={!!busy}
                               className="rounded bg-indigo-700 py-1 text-sm"

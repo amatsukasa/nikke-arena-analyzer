@@ -1455,20 +1455,15 @@ def get_all_characters_admin(
     chars = chars_query.order_by(models.Character.name, models.Character.id).offset(offset).limit(limit).all()
     page_character_ids = {character.id for character in chars}
     template_counts: dict[int, int] = {}
-    representatives: dict[int, Path] = {}
     for template_path in list_template_paths(template_dir):
         parsed = parse_template_name(template_path.name)
         if parsed.character_id not in page_character_ids:
             continue
         template_counts[parsed.character_id] = template_counts.get(parsed.character_id, 0) + 1
-        current = representatives.get(parsed.character_id)
-        if current is None or parsed.generation > parse_template_name(current.name).generation:
-            representatives[parsed.character_id] = template_path
     result = []
     for c in chars:
-        template_path = representatives.get(c.id)
-        has_tpl = template_path is not None
         tpl_count = template_counts.get(c.id, 0)
+        representative_filename = c.representative_template_filename
         result.append({
             "char_id": c.id,
             "char_name": c.name,
@@ -1479,11 +1474,12 @@ def get_all_characters_admin(
             "weapon": c.weapon,
             "class_type": c.class_type,
             "is_arena_relevant": c.is_arena_relevant,
-            "has_template": has_tpl,
+            "has_template": tpl_count > 0,
             "template_count": tpl_count,
+            "representative_template_filename": representative_filename,
             "image_url": (
-                f"/api/char-icon/{c.id}.png?v={template_path.stem}"
-                if template_path else None
+                f"/api/char-icon/{c.id}.png?v={Path(representative_filename).stem}"
+                if representative_filename else None
             ),
         })
     return {
