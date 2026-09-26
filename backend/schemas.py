@@ -13,6 +13,7 @@ class CharacterBase(BaseModel):
     is_arena_relevant: bool = False
     is_template_available: bool = False
     template_filename: Optional[str] = None
+    representative_template_filename: Optional[str] = None
     icon_url: Optional[str] = None
 
 class Character(CharacterBase):
