@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
 
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -19,7 +21,6 @@ from sqlalchemy import event, func, text  # noqa: E402
 from database import Base, SessionLocal, engine  # noqa: E402
 import main  # noqa: E402
 import models  # noqa: E402
-from services import character_templates  # noqa: E402
 
 
 class CharactersEndpointPerformanceTest(unittest.TestCase):
@@ -41,7 +42,14 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
         (template_dir / "ignored.png").write_bytes(b"ignored")
 
         self.db.add_all(
-            models.Character(id=character_id, name=f"Character {character_id}", rarity="SSR")
+            models.Character(
+                id=character_id,
+                name=f"Character {character_id}",
+                rarity="SSR",
+                is_template_available=character_id in {1, 2, 5},
+                template_filename={1: "char_1_002.png", 2: "char_2_001.png", 5: "char_5.png"}.get(character_id),
+                representative_template_filename={1: "char_1_001.png", 2: "char_2_001.png", 5: "char_5.png"}.get(character_id),
+            )
             for character_id in range(1, 6)
         )
         tournament = models.Tournament(
@@ -98,7 +106,7 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
         self.assertEqual(expected, {1: 4, 2: 2, 3: 1, 4: 1})
         self.assertEqual(actual, {1: 4, 2: 2, 3: 1, 4: 1, 5: 0})
 
-    def test_endpoint_uses_two_selects_and_scans_templates_once(self):
+    def test_endpoint_uses_two_selects_and_does_not_scan_templates(self):
         statements = []
 
         def record_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
@@ -107,33 +115,22 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
 
         event.listen(engine, "before_cursor_execute", record_statement)
         try:
-            with patch.object(
-                character_templates,
-                "list_template_paths",
-                wraps=character_templates.list_template_paths,
-            ) as list_paths:
+            with patch.object(main, "list_template_paths") as list_paths:
                 rows = main.get_characters(self.db)
         finally:
             event.remove(engine, "before_cursor_execute", record_statement)
 
         self.assertEqual(len(statements), 2)
-        list_paths.assert_called_once_with(Path(self.tmp.name) / "templates")
+        list_paths.assert_not_called()
         by_id = {row.id: row for row in rows}
         self.assertEqual(by_id[1].template_filename, "char_1_002.png")
-        self.assertEqual(by_id[1].icon_url, "/api/char-icon/1.png?v=char_1_002")
+        self.assertEqual(by_id[1].representative_template_filename, "char_1_001.png")
+        self.assertEqual(by_id[1].icon_url, "/api/char-icon/1.png?v=char_1_001")
         self.assertTrue(by_id[1].is_template_available)
         self.assertEqual(by_id[2].template_filename, "char_2_001.png")
         self.assertFalse(by_id[3].is_template_available)
         self.assertIsNone(by_id[3].template_filename)
         self.assertIsNone(by_id[3].icon_url)
-
-    def test_inventory_matches_existing_representative_selection_rule(self):
-        inventory = character_templates.get_character_template_inventory(self.tmp.name)
-        for character_id in (1, 2, 5):
-            self.assertEqual(
-                inventory[character_id],
-                character_templates.find_character_template(self.tmp.name, character_id),
-            )
 
     def test_response_contract_is_unchanged(self):
         row = main.get_characters(self.db)[0]
@@ -143,10 +140,33 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
                 "id", "name", "weapon", "element", "burst_phase",
                 "manufacturer", "rarity", "class_type",
                 "is_arena_relevant",
-                "is_template_available", "template_filename", "icon_url",
+                "is_template_available", "template_filename",
+                "representative_template_filename", "icon_url",
                 "created_at", "usage_count",
             },
         )
+
+    def test_char_icon_uses_saved_filename_without_enumerating_templates(self):
+        with patch.object(main, "list_template_paths") as list_paths:
+            response = main.get_char_icon(1, self.db)
+
+        list_paths.assert_not_called()
+        self.assertEqual(Path(response.path).name, "char_1_001.png")
+
+    def test_first_template_sets_representative_and_later_template_does_not_change_it(self):
+        character = self.db.get(models.Character, 3)
+        self.assertIsNone(character.representative_template_filename)
+        first = np.full((32, 32, 3), 20, dtype=np.uint8)
+        second = np.full((32, 32, 3), 220, dtype=np.uint8)
+
+        first_path = main.install_champion_character_template(3, first, self.db)
+        self.assertIsNotNone(first_path)
+        self.assertEqual(character.representative_template_filename, first_path.name)
+
+        second_path = main.install_champion_character_template(3, second, self.db)
+        self.assertIsNotNone(second_path)
+        self.assertNotEqual(second_path.name, first_path.name)
+        self.assertEqual(character.representative_template_filename, first_path.name)
 
     def test_arena_relevance_defaults_false_and_is_returned_without_extra_selects(self):
         marked = self.db.get(models.Character, 1)

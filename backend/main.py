@@ -226,7 +226,6 @@ def require_analysis_capacity():
 def request_analysis_reservation(value) -> AnalysisReservation | None:
     """Return FastAPI's resolved dependency; direct unit calls pass Depends."""
     return value if isinstance(value, AnalysisReservation) else None
-from services.character_templates import find_character_template, get_character_template_inventory
 from services.collection_classifier import COLLECTION_VALUES, collection_match_mask
 from services.template_matcher import prepare_character_image, masked_absolute_similarity
 from services.registration_email import (
@@ -364,8 +363,8 @@ def get_upload(
 
 @app.get("/api/char-icon/{char_id}.png")
 def get_char_icon(char_id: int, db: Session = Depends(get_db)):
-    """キャラクターの代表テンプレート画像を返す（旧形式・新形式両対応）"""
-    char = db.query(models.Character).filter(models.Character.id == char_id).first()
+    """Return the explicitly selected display image without enumerating templates."""
+    char = db.get(models.Character, char_id)
     if not char:
         raise HTTPException(
             status_code=404,
@@ -373,14 +372,28 @@ def get_char_icon(char_id: int, db: Session = Depends(get_db)):
             headers={"Cache-Control": NO_STORE_CACHE_CONTROL},
         )
     
-    # Filesystem active generations are authoritative. This GET is read-only.
-    template_path = find_character_template(UPLOAD_DIR, char_id)
-    if template_path:
-        return FileResponse(
-            template_path,
-            media_type="image/png",
-            headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
-        )
+    filename = char.representative_template_filename
+    if filename:
+        try:
+            template_path = safe_template_path(
+                Path(UPLOAD_DIR) / "templates", filename, char_id
+            )
+        except ValueError:
+            print(
+                "[character-icon] invalid representative "
+                f"character_id={char_id} filename={filename!r}"
+            )
+        else:
+            if template_path.is_file():
+                return FileResponse(
+                    template_path,
+                    media_type="image/png",
+                    headers={"Cache-Control": IMMUTABLE_CACHE_CONTROL},
+                )
+            print(
+                "[character-icon] missing representative file "
+                f"character_id={char_id} filename={filename!r}"
+            )
     
     raise HTTPException(
         status_code=404,
@@ -851,24 +864,19 @@ def get_characters(db: Session = Depends(get_db)):
         rarity_order,
         models.Character.name,
     ).all()
-    # The filesystem is authoritative for display availability.  DB metadata can
-    # lag behind files restored from a persistent uploads volume; discovering the
-    # files here avoids both missing saved-deck icons and speculative per-icon 404s.
-    template_inventory = get_character_template_inventory(UPLOAD_DIR)
     res = []
     for character in characters:
-        template_path = template_inventory.get(character.id)
-        tpl_filename = template_path.name if template_path else None
-        is_avail = template_path is not None
-        if is_avail:
-            icon_url = f"/api/char-icon/{character.id}.png?v={template_path.stem}"
+        representative_filename = character.representative_template_filename
+        if representative_filename:
+            icon_url = (
+                f"/api/char-icon/{character.id}.png"
+                f"?v={Path(representative_filename).stem}"
+            )
         else:
             icon_url = None
         res.append(
             schemas.Character.model_validate(character).model_copy(
                 update={
-                    "is_template_available": is_avail,
-                    "template_filename": tpl_filename,
                     "icon_url": icon_url,
                     "usage_count": usage_counts.get(character.id, 0)
                 }
@@ -2477,6 +2485,8 @@ def install_champion_character_template(character_id: int, source_image, db: Ses
         character = db.get(models.Character, character_id)
         character.is_template_available = True
         character.template_filename = destination.name
+        if not existing and character.representative_template_filename is None:
+            character.representative_template_filename = destination.name
         return destination
 
 
