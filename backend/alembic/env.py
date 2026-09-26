@@ -1,4 +1,3 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -7,6 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from database import Base
+from database_safety import database_url_for_process
 import models
 
 # this is the Alembic Config object, which provides
@@ -62,7 +62,7 @@ def run_migrations_online() -> None:
 
     """
     configuration = config.get_section(config.config_ini_section, {})
-    db_url = os.environ.get("DATABASE_URL", "postgresql://postgres:password@db:5432/nikke_arena")
+    db_url = database_url_for_process()
     configuration["sqlalchemy.url"] = db_url
 
     connectable = engine_from_config(

@@ -13,6 +13,19 @@ TEST_DATABASE_NAME = "nikke_arena_test"
 ACCEPTANCE_DATABASE_NAME = "nikke_arena_acceptance"
 
 
+def normalize_postgresql_driver_url(raw: str) -> str:
+    """Select the installed psycopg2 driver without changing connection details."""
+    scheme, separator, remainder = raw.partition("://")
+    if not separator or scheme not in {
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+psycopg2",
+    }:
+        return raw
+    return f"postgresql+psycopg2://{remainder}"
+
+
 def is_automated_test_process(argv: list[str] | None = None) -> bool:
     arguments = argv if argv is not None else sys.argv
     if os.environ.get("NIKKE_AUTOMATED_TEST") == "1":
@@ -27,7 +40,12 @@ def is_automated_test_process(argv: list[str] | None = None) -> bool:
 
 def _connection_target(raw: str, label: str) -> tuple[str, str]:
     parsed = urlsplit(raw)
-    if parsed.scheme not in {"postgres", "postgresql"}:
+    if parsed.scheme not in {
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+psycopg2",
+    }:
         raise RuntimeError(f"Refusing {label}: only PostgreSQL URLs are allowed")
     return (parsed.hostname or "").lower(), parsed.path.rsplit("/", 1)[-1].lower()
 
@@ -78,6 +96,8 @@ def database_url_for_process() -> str:
             application_url,
             os.environ.get("ACCEPTANCE_DATABASE_URL"),
         )
-        os.environ["DATABASE_URL"] = test_url
-        return test_url
-    return application_url or "postgresql://postgres:password@db:5432/nikke_arena"
+        normalized_url = normalize_postgresql_driver_url(test_url)
+        os.environ["DATABASE_URL"] = normalized_url
+        return normalized_url
+    selected_url = application_url or "postgresql://postgres:password@db:5432/nikke_arena"
+    return normalize_postgresql_driver_url(selected_url)

@@ -1,13 +1,37 @@
+import os
 import unittest
+from unittest.mock import patch
 
 from database_safety import (
+    database_url_for_process,
     is_automated_test_process,
+    normalize_postgresql_driver_url,
     validate_acceptance_database_url,
     validate_test_database_url,
 )
 
 
 class TestDatabaseSafetyTest(unittest.TestCase):
+    def test_test_process_stores_and_returns_normalized_psycopg2_url(self):
+        source = "postgresql+psycopg://postgres:password@db_test:5432/nikke_arena_test"
+        expected = "postgresql+psycopg2://postgres:password@db_test:5432/nikke_arena_test"
+        with patch.dict(
+            os.environ,
+            {"NIKKE_AUTOMATED_TEST": "1", "TEST_DATABASE_URL": source},
+            clear=True,
+        ):
+            self.assertEqual(database_url_for_process(), expected)
+            self.assertEqual(os.environ["DATABASE_URL"], expected)
+
+    def test_normalizes_postgresql_scheme_to_installed_psycopg2_driver(self):
+        suffix = "user:p%40ss@db.example:5432/app?sslmode=require&x=1"
+        for scheme in ("postgres", "postgresql", "postgresql+psycopg", "postgresql+psycopg2"):
+            with self.subTest(scheme=scheme):
+                self.assertEqual(
+                    normalize_postgresql_driver_url(f"{scheme}://{suffix}"),
+                    f"postgresql+psycopg2://{suffix}",
+                )
+
     def test_detects_direct_test_files(self):
         self.assertTrue(is_automated_test_process(["tests/test_example.py"]))
 
@@ -38,6 +62,7 @@ class TestDatabaseSafetyTest(unittest.TestCase):
     def test_accepts_only_dedicated_or_loopback_test_database(self):
         for target in (
             "postgresql://postgres:password@db_test:5432/nikke_arena_test",
+            "postgresql+psycopg://postgres:password@db_test:5432/nikke_arena_test",
             "postgresql://postgres:password@localhost:5433/nikke_arena_test",
             "postgresql://postgres:password@127.0.0.1:5433/nikke_arena_test",
             "postgresql://postgres:password@[::1]:5433/nikke_arena_test",
