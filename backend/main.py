@@ -1011,6 +1011,23 @@ def _refresh_character_template_metadata(db: Session, character_ids: set[int]) -
         character.template_filename = representative.name if representative else None
 
 
+def _require_not_representative(
+    db: Session, character_id: int, filename: str
+) -> models.Character:
+    character = db.get(models.Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Character not found")
+    if character.representative_template_filename == filename:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "この画像は現在の代表画像です。"
+                "先に別の代表画像を設定してください"
+            ),
+        )
+    return character
+
+
 def _template_audit(
     db: Session, actor_id: int, action: str, *, source_character_id=None,
     target_character_id=None, source_filename=None, target_filename=None,
@@ -1075,12 +1092,14 @@ def list_character_templates(
     pending_counts = dict(pending_query.group_by(
         models.CharacterTemplateReview.predicted_character_id
     ).all())
-    active_representatives = {}
-    for path in selected_paths if state == "active" else []:
-        parsed = parse_template_name(path.name)
-        current = active_representatives.get(parsed.character_id)
-        if current is None or parsed.generation > parse_template_name(current.name).generation:
-            active_representatives[parsed.character_id] = path
+    active_by_name = {
+        path.name: path for path in selected_paths if state == "active"
+    }
+    active_representatives = {
+        character_id: active_by_name[character.representative_template_filename]
+        for character_id, character in characters.items()
+        if character.representative_template_filename in active_by_name
+    }
     normalized_query = query.strip().casefold()
     entries = [
         path for path in selected_paths
@@ -1110,6 +1129,48 @@ def list_character_templates(
         "total": total,
         "offset": offset,
         "limit": limit,
+    }
+
+
+@app.put("/api/admin/character-templates/{character_id}/representative")
+def set_representative_character_template(
+    character_id: int,
+    body: dict,
+    admin: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    filename = body.get("filename")
+    if not isinstance(filename, str):
+        raise HTTPException(status_code=422, detail="filename is required")
+    upload_root, active_root, _ = _template_roots()
+    with template_operation_lock(upload_root):
+        character = db.get(models.Character, character_id)
+        if character is None:
+            raise HTTPException(status_code=404, detail="Character not found")
+        try:
+            path = safe_template_path(active_root, filename, character_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid active template filename") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Active template not found")
+        previous = character.representative_template_filename
+        character.representative_template_filename = filename
+        _template_audit(
+            db,
+            admin.id,
+            "set_representative",
+            source_character_id=character_id,
+            source_filename=previous,
+            target_character_id=character_id,
+            target_filename=filename,
+            digest=template_sha256(path),
+        )
+        db.commit()
+    return {
+        "ok": True,
+        "character_id": character_id,
+        "representative_template_filename": filename,
+        "icon_url": f"/api/char-icon/{character_id}.png?v={path.stem}",
     }
 
 
@@ -1170,6 +1231,7 @@ def disable_character_template(
     moved = None
     with template_operation_lock(upload_root):
         try:
+            _require_not_representative(db, character_id, filename)
             digest = template_sha256(safe_template_path(upload_root / "templates", filename, character_id))
             original, destination = move_to_quarantine(upload_root, character_id, filename)
             moved = (destination, original)
@@ -1230,6 +1292,7 @@ def reassign_character_template(
     moved = None
     with template_operation_lock(upload_root):
         try:
+            _require_not_representative(db, character_id, filename)
             source = safe_template_path(active_root, filename, character_id)
             digest = template_sha256(source)
             original, destination, duplicate = reassign_active_template(
@@ -1270,6 +1333,7 @@ def permanently_delete_character_template(
         tombstone = None
         original = None
         try:
+            _require_not_representative(db, character_id, filename)
             path = safe_template_path(quarantine_root, filename, character_id)
             if not path.is_file():
                 raise FileNotFoundError(filename)
@@ -1321,6 +1385,9 @@ def resolve_character_template_review(
             if action == "keep":
                 review.status = "kept"
             elif action == "disable":
+                _require_not_representative(
+                    db, review.predicted_character_id, review.matched_template_filename
+                )
                 original, destination = move_to_quarantine(upload_root, review.predicted_character_id, review.matched_template_filename)
                 moved = (destination, original)
                 target_filename = destination.name
@@ -1329,6 +1396,9 @@ def resolve_character_template_review(
                 target_character_id = int(body.get("target_character_id") or review.corrected_character_id)
                 if db.get(models.Character, target_character_id) is None:
                     raise HTTPException(status_code=422, detail="Target Character not found")
+                _require_not_representative(
+                    db, review.predicted_character_id, review.matched_template_filename
+                )
                 original, destination, duplicate = reassign_active_template(
                     upload_root, review.predicted_character_id, target_character_id, review.matched_template_filename
                 )

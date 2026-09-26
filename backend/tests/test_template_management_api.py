@@ -29,7 +29,12 @@ class TemplateManagementApiTests(unittest.TestCase):
         self.admin = self.user("admin@example.invalid", "admin")
         self.user_row = self.user("user@example.invalid", "contributor")
         for character_id, name in ((1, "A"), (2, "B")):
-            self.db.add(models.Character(id=character_id, name=name, rarity="SSR"))
+            self.db.add(models.Character(
+                id=character_id,
+                name=name,
+                rarity="SSR",
+                representative_template_filename="char_1.png" if character_id == 1 else None,
+            ))
         self.db.commit()
         (Path(self.temp.name) / "templates" / "char_1.png").write_bytes(b"legacy")
         (Path(self.temp.name) / "templates" / "char_1_001.png").write_bytes(b"new")
@@ -45,7 +50,7 @@ class TemplateManagementApiTests(unittest.TestCase):
         result = main.list_character_templates(self.admin, self.db, "active", 0, 30, "")
         group = result["characters"][0]
         self.assertEqual([item["generation"] for item in group["active"]], [0, 1])
-        self.assertTrue(group["active"][1]["representative"])
+        self.assertTrue(group["active"][0]["representative"])
         main.disable_character_template(1, "char_1_001.png", {}, self.admin, self.db)
         self.assertFalse((Path(self.temp.name) / "templates" / "char_1_001.png").exists())
         self.assertTrue((Path(self.temp.name) / "template_quarantine" / "char_1_001.png").exists())
@@ -66,6 +71,68 @@ class TemplateManagementApiTests(unittest.TestCase):
                 1, "char_1_001.png", "DELETE", self.admin, self.db
             )
         self.assertEqual(invalidate.call_count, 4)
+
+    def test_set_representative_validates_active_character_template(self):
+        with patch.object(main, "_invalidate_template_matcher_cache") as invalidate:
+            result = main.set_representative_character_template(
+                1, {"filename": "char_1_001.png"}, self.admin, self.db
+            )
+        self.assertEqual(
+            self.db.get(models.Character, 1).representative_template_filename,
+            "char_1_001.png",
+        )
+        self.assertEqual(result["icon_url"], "/api/char-icon/1.png?v=char_1_001")
+        invalidate.assert_not_called()
+
+        for filename in ("../char_1.png", "char_2_001.png", "invalid.png"):
+            with self.subTest(filename=filename), self.assertRaises(HTTPException):
+                main.set_representative_character_template(
+                    1, {"filename": filename}, self.admin, self.db
+                )
+
+        quarantine = Path(self.temp.name) / "template_quarantine"
+        quarantine.mkdir()
+        (quarantine / "char_1_002.png").write_bytes(b"quarantined")
+        with self.assertRaises(HTTPException):
+            main.set_representative_character_template(
+                1, {"filename": "char_1_002.png"}, self.admin, self.db
+            )
+
+        outside = Path(self.temp.name) / "outside.png"
+        outside.write_bytes(b"outside")
+        link = Path(self.temp.name) / "templates" / "char_1_003.png"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlinks are unavailable: {exc}")
+        with self.assertRaises(HTTPException):
+            main.set_representative_character_template(
+                1, {"filename": link.name}, self.admin, self.db
+            )
+
+    def test_representative_template_is_protected_from_mutations(self):
+        for operation in (
+            lambda: main.disable_character_template(
+                1, "char_1.png", {}, self.admin, self.db
+            ),
+            lambda: main.reassign_character_template(
+                1, "char_1.png", {"target_character_id": 2}, self.admin, self.db
+            ),
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                operation()
+            self.assertEqual(caught.exception.status_code, 409)
+
+        active = Path(self.temp.name) / "templates" / "char_1.png"
+        quarantine = Path(self.temp.name) / "template_quarantine"
+        quarantine.mkdir(exist_ok=True)
+        active.replace(quarantine / active.name)
+        with self.assertRaises(HTTPException) as caught:
+            main.permanently_delete_character_template(
+                1, "char_1.png", "DELETE", self.admin, self.db
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertTrue((quarantine / "char_1.png").exists())
 
     def test_template_listing_hashes_only_requested_page(self):
         root = Path(self.temp.name) / "templates"
@@ -183,6 +250,7 @@ class TemplateManagementApiTests(unittest.TestCase):
     def test_admin_routes_are_registered_and_depend_on_backend_admin(self):
         expected = {
             ("/api/admin/character-templates", "GET"),
+            ("/api/admin/character-templates/{character_id}/representative", "PUT"),
             ("/api/admin/character-template-reviews", "GET"),
             ("/api/admin/character-template-reviews/{review_id}/resolve", "POST"),
         }
