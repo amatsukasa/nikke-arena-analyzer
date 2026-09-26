@@ -73,6 +73,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     container_name: nikke_arena_frontend
     ports:
       - "3000:3000"
@@ -114,6 +116,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8001
     container_name: nikke_arena_acceptance_frontend
     profiles: ["acceptance"]
     ports:
