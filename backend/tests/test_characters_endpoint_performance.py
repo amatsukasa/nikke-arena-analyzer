@@ -153,7 +153,7 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
         list_paths.assert_not_called()
         self.assertEqual(Path(response.path).name, "char_1_001.png")
 
-    def test_first_template_sets_representative_and_later_template_does_not_change_it(self):
+    def test_new_templates_never_change_representative_selection(self):
         character = self.db.get(models.Character, 3)
         self.assertIsNone(character.representative_template_filename)
         first = np.full((32, 32, 3), 20, dtype=np.uint8)
@@ -161,7 +161,9 @@ class CharactersEndpointPerformanceTest(unittest.TestCase):
 
         first_path = main.install_champion_character_template(3, first, self.db)
         self.assertIsNotNone(first_path)
-        self.assertEqual(character.representative_template_filename, first_path.name)
+        self.assertIsNone(character.representative_template_filename)
+
+        character.representative_template_filename = first_path.name
 
         second_path = main.install_champion_character_template(3, second, self.db)
         self.assertIsNotNone(second_path)

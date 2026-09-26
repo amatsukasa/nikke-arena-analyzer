@@ -110,6 +110,26 @@ class TemplateManagementApiTests(unittest.TestCase):
                 1, {"filename": link.name}, self.admin, self.db
             )
 
+    def test_representative_can_be_cleared_before_moving_or_disabling(self):
+        with patch.object(main, "_invalidate_template_matcher_cache") as invalidate:
+            result = main.clear_representative_character_template(
+                1, self.admin, self.db
+            )
+        self.assertIsNone(
+            self.db.get(models.Character, 1).representative_template_filename
+        )
+        self.assertIsNone(result["icon_url"])
+        invalidate.assert_not_called()
+
+        moved = main.reassign_character_template(
+            1, "char_1.png", {"target_character_id": 2}, self.admin, self.db
+        )
+        self.assertTrue(moved["ok"])
+        audit = self.db.query(models.CharacterTemplateAudit).filter_by(
+            action="clear_representative"
+        ).one()
+        self.assertEqual(audit.source_filename, "char_1.png")
+
     def test_representative_template_is_protected_from_mutations(self):
         for operation in (
             lambda: main.disable_character_template(
@@ -233,6 +253,26 @@ class TemplateManagementApiTests(unittest.TestCase):
                     self.assertEqual(third["page"], 3)
                     self.assertFalse(third["has_next"])
 
+    def test_admin_character_listing_can_prioritize_arena_characters(self):
+        self.db.add_all([
+            models.Character(id=10, name="Sort Alpha", rarity="SSR", is_arena_relevant=False),
+            models.Character(id=11, name="Sort Zulu", rarity="SSR", is_arena_relevant=True),
+        ])
+        self.db.commit()
+
+        by_name = main.get_all_characters_admin(
+            self.admin, self.db, offset=0, limit=30,
+            query="Sort", rarity="", class_type="", sort="name",
+        )
+        arena_first = main.get_all_characters_admin(
+            self.admin, self.db, offset=0, limit=30,
+            query="Sort", rarity="", class_type="", sort="arena_priority",
+        )
+
+        self.assertEqual(by_name["characters"][0]["char_name"], "Sort Alpha")
+        self.assertEqual(arena_first["characters"][0]["char_name"], "Sort Zulu")
+        self.assertTrue(arena_first["characters"][0]["is_arena_relevant"])
+
     def test_review_keep_does_not_move_predicted_template(self):
         tournament = models.Tournament(name="T", date=date(2026, 1, 1), created_by=self.user_row.id)
         self.db.add(tournament); self.db.flush()
@@ -251,6 +291,7 @@ class TemplateManagementApiTests(unittest.TestCase):
         expected = {
             ("/api/admin/character-templates", "GET"),
             ("/api/admin/character-templates/{character_id}/representative", "PUT"),
+            ("/api/admin/character-templates/{character_id}/representative", "DELETE"),
             ("/api/admin/character-template-reviews", "GET"),
             ("/api/admin/character-template-reviews/{review_id}/resolve", "POST"),
         }

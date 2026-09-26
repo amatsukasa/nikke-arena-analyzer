@@ -26,6 +26,7 @@ class TemplateManagementFrontendContract(unittest.TestCase):
             "正しいCharacterへ移す",
             "テンプレートとして無効化",
             "代表画像に設定",
+            "代表画像から外す",
             "代表画像未設定",
             "有効テンプレート",
             "復元",
@@ -36,6 +37,8 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertNotIn("要確認に記録されていない誤登録", page)
         self.assertIn("利用者による修正が誤りだった場合", page)
         self.assertIn("再び照合と代表画像の候補になります", page)
+        self.assertIn("復元先のCharacter：${group.character_name}（ID ${group.character_id}）", page)
+        self.assertIn("復元後に「正しいCharacterへ移す」を使用してください", page)
         self.assertIn('user?.role !== "admin"', page)
         self.assertEqual(page.count('"最終確認：完全削除しますか？"'), 1)
         self.assertIn("setActiveTab('templates')", admin)
@@ -60,10 +63,18 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertNotIn('label={`修正 Character ${review.corrected_character_id}`}', page)
         self.assertIn("visibleTemplates.map", page)
         self.assertIn("characterSummaries.map", page)
+        self.assertIn('useState<"arena_priority" | "name">("arena_priority")', page)
+        self.assertIn('aria-label="Characterの並び順"', page)
+        self.assertIn('アリーナキャラ優先', page)
+        self.assertIn('五十音順', page)
+        self.assertIn('sort: characterSort', page)
         self.assertIn('/api/admin/all-characters?${params}', page)
         self.assertIn('/representative`', page)
+        self.assertIn('{ method: "DELETE" }', page)
         self.assertIn("template.representative", page)
         self.assertIn("await load()", page)
+        self.assertIn("The page-level alert sits behind this modal", page)
+        self.assertGreaterEqual(page.count("setReassigning(null)"), 2)
         self.assertIn('role="alert"', page)
         self.assertIn('loading="lazy"', page)
         self.assertIn("new AbortController()", page)
@@ -74,6 +85,8 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertIn("{c.template_count}枚を見る →", admin)
         self.assertIn("`${c.char_name}のテンプレート${c.template_count}枚を見る`", admin)
         self.assertIn("focus-visible:ring-2", admin)
+        self.assertIn("setModalError(err.message || 'エラーが発生しました。')", admin)
+        self.assertGreaterEqual(admin.count('role="alert"'), 2)
         self.assertIn("0枚", admin)
         self.assertIn('const [draftQuery, setDraftQuery] = useState("")', page)
         self.assertIn('const [appliedQuery, setAppliedQuery] = useState("")', page)
@@ -83,6 +96,11 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertIn("setAppliedQuery(draftQuery)", page)
         self.assertIn('setAppliedQuery("")', page)
         self.assertIn("setCharacterFilter(null)", page)
+        self.assertIn("const [characterListReturnPage, setCharacterListReturnPage] = useState(1)", page)
+        self.assertIn("setCharacterListReturnPage(page)", page)
+        self.assertIn("setPage(characterListReturnPage)", page)
+        self.assertIn("detail result's smaller page count", page)
+        self.assertIn("onClick={clearCharacterFilter}", page)
         self.assertIn("offset=${(page - 1) * REVIEW_PAGE_SIZE}", page)
         self.assertIn("setTotalItems(body.total ?? 0)", page)
         self.assertNotIn("URL.createObjectURL", page)
@@ -115,6 +133,8 @@ class TemplateManagementFrontendContract(unittest.TestCase):
         self.assertIn("/api/admin/all-characters?${params}", admin)
         self.assertIn("proxyBackend(request", character_proxy)
         self.assertIn("ALLOWED_FILTERS", character_proxy)
+        self.assertIn('"sort"', character_proxy)
+        self.assertIn('sort !== "name" && sort !== "arena_priority"', character_proxy)
         self.assertNotIn("NEXT_PUBLIC_API_URL", character_proxy)
 
         search = (ROOT / "frontend/src/components/CharacterSearchSelect.tsx").read_text(encoding="utf-8")

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { proxyBackend } from "../../../../lib/backendProxy";
 
-const ALLOWED_FILTERS = new Set(["offset", "limit", "query", "rarity", "class_type"]);
+const ALLOWED_FILTERS = new Set(["offset", "limit", "query", "rarity", "class_type", "sort"]);
 
 export async function GET(request: NextRequest) {
   const incoming = request.nextUrl.searchParams;
@@ -14,7 +14,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ detail: "Invalid pagination" }, { status: 422 });
   }
   const outgoing = new URLSearchParams({ offset, limit });
-  for (const key of ["query", "rarity", "class_type"]) {
+  const sort = incoming.get("sort");
+  if (sort && sort !== "name" && sort !== "arena_priority") {
+    return NextResponse.json({ detail: "Invalid sort" }, { status: 422 });
+  }
+  for (const key of ["query", "rarity", "class_type", "sort"]) {
     const value = incoming.get(key);
     if (value) outgoing.set(key, value);
   }

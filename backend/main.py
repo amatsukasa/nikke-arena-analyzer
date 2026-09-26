@@ -1174,6 +1174,34 @@ def set_representative_character_template(
     }
 
 
+@app.delete("/api/admin/character-templates/{character_id}/representative")
+def clear_representative_character_template(
+    character_id: int,
+    admin: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    character = db.get(models.Character, character_id)
+    if character is None:
+        raise HTTPException(status_code=404, detail="Character not found")
+    previous = character.representative_template_filename
+    character.representative_template_filename = None
+    _template_audit(
+        db,
+        admin.id,
+        "clear_representative",
+        source_character_id=character_id,
+        source_filename=previous,
+        target_character_id=character_id,
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "character_id": character_id,
+        "representative_template_filename": None,
+        "icon_url": None,
+    }
+
+
 @app.get("/api/admin/character-template-reviews")
 def list_character_template_reviews(
     status: str = "pending",
@@ -1440,6 +1468,7 @@ def get_all_characters_admin(
     query: str = Query("", max_length=100),
     rarity: str = Query("", max_length=20),
     class_type: str = Query("", max_length=20),
+    sort: Literal["name", "arena_priority"] = "name",
 ):
     """Return one filtered admin page; scan template filenames once per request."""
     template_dir = Path(UPLOAD_DIR) / "templates"
@@ -1452,7 +1481,12 @@ def get_all_characters_admin(
     if class_type:
         chars_query = chars_query.filter(models.Character.class_type == class_type)
     total = chars_query.count()
-    chars = chars_query.order_by(models.Character.name, models.Character.id).offset(offset).limit(limit).all()
+    ordering = (
+        (models.Character.is_arena_relevant.desc(), models.Character.name, models.Character.id)
+        if sort == "arena_priority"
+        else (models.Character.name, models.Character.id)
+    )
+    chars = chars_query.order_by(*ordering).offset(offset).limit(limit).all()
     page_character_ids = {character.id for character in chars}
     template_counts: dict[int, int] = {}
     for template_path in list_template_paths(template_dir):
@@ -2551,8 +2585,6 @@ def install_champion_character_template(character_id: int, source_image, db: Ses
         character = db.get(models.Character, character_id)
         character.is_template_available = True
         character.template_filename = destination.name
-        if not existing and character.representative_template_filename is None:
-            character.representative_template_filename = destination.name
         return destination
 
 

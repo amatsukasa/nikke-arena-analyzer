@@ -38,6 +38,7 @@ type CharacterSummary = {
   template_count: number;
   representative_template_filename: string | null;
   image_url: string | null;
+  is_arena_relevant: boolean;
 };
 type Review = {
   id: number;
@@ -78,8 +79,10 @@ export default function CharacterTemplatesAdmin({
   );
   const [draftQuery, setDraftQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
+  const [characterSort, setCharacterSort] = useState<"arena_priority" | "name">("arena_priority");
   const [characterFilter, setCharacterFilter] = useState(initialCharacterFilter);
   const [page, setPage] = useState(1);
+  const [characterListReturnPage, setCharacterListReturnPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -124,6 +127,7 @@ export default function CharacterTemplatesAdmin({
           offset: String((page - 1) * TEMPLATE_PAGE_SIZE),
           limit: String(TEMPLATE_PAGE_SIZE),
           query: appliedQuery,
+          sort: characterSort,
         });
         const response = await apiFetch(`/api/admin/all-characters?${params}`, {
           cache: "no-store",
@@ -165,7 +169,7 @@ export default function CharacterTemplatesAdmin({
         setLoading(false);
       }
     }
-  }, [apiFetch, apiUrl, appliedQuery, characterFilter, page, tab]);
+  }, [apiFetch, apiUrl, appliedQuery, characterFilter, characterSort, page, tab]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -190,8 +194,8 @@ export default function CharacterTemplatesAdmin({
   const visibleTemplates = templateEntries;
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    if (!loading && page > totalPages) setPage(totalPages);
+  }, [loading, page, totalPages]);
   const run = async (key: string, url: string, options: RequestInit): Promise<boolean> => {
     if (busy) return false;
     setBusy(key);
@@ -223,6 +227,13 @@ export default function CharacterTemplatesAdmin({
     setAppliedQuery("");
     setCharacterFilter(null);
     setPage(1);
+  };
+  const clearCharacterFilter = () => {
+    // Prevent the detail result's smaller page count from clamping the
+    // restored list page before the list request finishes.
+    setLoading(true);
+    setCharacterFilter(null);
+    setPage(characterListReturnPage);
   };
 
   if (isLoading)
@@ -392,7 +403,7 @@ export default function CharacterTemplatesAdmin({
             {characterFilter && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-indigo-500/40 bg-indigo-950/30 p-3 text-sm">
                 <span>絞り込み中: {characterFilter.name}（ID {characterFilter.id}）</span>
-                <button type="button" onClick={clearSearch} className="rounded bg-slate-700 px-3 py-1">
+                <button type="button" onClick={clearCharacterFilter} className="rounded bg-slate-700 px-3 py-1">
                   絞り込み解除
                 </button>
               </div>
@@ -412,6 +423,20 @@ export default function CharacterTemplatesAdmin({
               />
               <button type="button" onClick={applySearch} className="rounded bg-indigo-600 px-4 py-2">検索</button>
               <button type="button" onClick={clearSearch} className="rounded bg-slate-700 px-4 py-2">クリア</button>
+              {tab === "active" && !characterFilter && (
+                <select
+                  aria-label="Characterの並び順"
+                  value={characterSort}
+                  onChange={(event) => {
+                    setCharacterSort(event.target.value as "arena_priority" | "name");
+                    setPage(1);
+                  }}
+                  className="rounded border border-slate-700 bg-slate-900 px-3 py-2"
+                >
+                  <option value="arena_priority">アリーナキャラ優先</option>
+                  <option value="name">五十音順</option>
+                </select>
+              )}
             </div>
             {loading ? (
               <p className="text-slate-400">読み込み中…</p>
@@ -422,6 +447,7 @@ export default function CharacterTemplatesAdmin({
                     type="button"
                     key={character.char_id}
                     onClick={() => {
+                      setCharacterListReturnPage(page);
                       setCharacterFilter({ id: character.char_id, name: character.char_name });
                       setPage(1);
                     }}
@@ -436,6 +462,9 @@ export default function CharacterTemplatesAdmin({
                     </div>
                     <div className="min-w-0">
                       <h2 className="truncate font-bold">{character.char_name}</h2>
+                      {character.is_arena_relevant && (
+                        <span className="inline-block rounded bg-emerald-900/60 px-2 py-0.5 text-xs font-bold text-emerald-200">アリーナ</span>
+                      )}
                       <p className="text-sm text-slate-400">ID {character.char_id}</p>
                       <p className="mt-2 text-sm">有効テンプレート {character.template_count}枚</p>
                       <p className={character.representative_template_filename ? "truncate text-xs text-emerald-300" : "text-xs font-bold text-amber-300"}>
@@ -485,7 +514,22 @@ export default function CharacterTemplatesAdmin({
                         </p>
                         {tab === "active" ? (
                           <div className="mt-2 grid gap-2">
-                            {!template.representative && (
+                            {template.representative ? (
+                              <button
+                                disabled={!!busy}
+                                className="rounded bg-slate-700 py-1 text-sm font-bold"
+                                onClick={() =>
+                                  window.confirm(`${template.filename} を表示用の代表画像から外しますか？\n代表画像は未設定になります。`) &&
+                                  void run(
+                                    `clear-representative-${template.filename}`,
+                                    `/api/admin/character-templates/${group.character_id}/representative`,
+                                    { method: "DELETE" },
+                                  )
+                                }
+                              >
+                                代表画像から外す
+                              </button>
+                            ) : (
                               <button
                                 disabled={!!busy}
                                 className="rounded bg-emerald-700 py-1 text-sm font-bold"
@@ -542,7 +586,7 @@ export default function CharacterTemplatesAdmin({
                               className="rounded bg-emerald-700 py-1 text-sm"
                               onClick={() =>
                                 window.confirm(
-                                  "この画像をテンプレートとして復元しますか？\n再び照合と代表画像の候補になります。",
+                                  `この画像をテンプレートとして復元しますか？\n再び照合と代表画像の候補になります。\n\n復元先のCharacter：${group.character_name}（ID ${group.character_id}）\n別のCharacterへ戻す場合は、復元後に「正しいCharacterへ移す」を使用してください。`,
                                 ) && void run(
                                   `restore-${template.filename}`,
                                   `/api/admin/character-templates/${group.character_id}/${template.filename}/restore`,
@@ -642,6 +686,11 @@ export default function CharacterTemplatesAdmin({
                       },
                     );
                     if (succeeded) {
+                      setReassigning(null);
+                      setTargetCharacterId(null);
+                    } else {
+                      // The page-level alert sits behind this modal. Close the
+                      // modal on failure so the API error is immediately visible.
                       setReassigning(null);
                       setTargetCharacterId(null);
                     }

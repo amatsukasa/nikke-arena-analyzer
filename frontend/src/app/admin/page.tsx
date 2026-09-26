@@ -387,6 +387,7 @@ export default function AdminPage() {
   const openModal = (mode: 'create' | 'edit', char?: AdminCharacter) => {
     setModalMode(mode);
     setError('');
+    setModalError('');
     setMessage('');
     if (mode === 'edit' && char) {
       setEditingCharId(char.char_id);
@@ -416,6 +417,7 @@ export default function AdminPage() {
   const handleCharacterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setModalError('');
     setMessage('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -453,7 +455,7 @@ export default function AdminPage() {
       setIsModalOpen(false);
       fetchCharacters();
     } catch (err: any) {
-      setError(err.message || 'エラーが発生しました。');
+      setModalError(err.message || 'エラーが発生しました。');
     }
   };
 
@@ -957,7 +959,7 @@ export default function AdminPage() {
             </div>
 
             {modalError && (
-              <div className="bg-red-950/50 border border-red-800 text-red-300 px-4 py-3 rounded-lg text-sm mb-4">
+              <div role="alert" className="bg-red-950/50 border border-red-800 text-red-300 px-4 py-3 rounded-lg text-sm mb-4">
                 {modalError}
               </div>
             )}
@@ -1022,6 +1024,12 @@ export default function AdminPage() {
                 ×
               </button>
             </div>
+
+            {modalError && (
+              <div role="alert" className="bg-red-950/50 border border-red-800 text-red-300 px-4 py-3 rounded-lg text-sm mb-4">
+                {modalError}
+              </div>
+            )}
 
             <form onSubmit={handleCharacterSubmit} className="space-y-5">
               {/* 名前 */}
