@@ -6,7 +6,7 @@ export interface SynergyCharacter {
   [key: string]: unknown;
 }
 
-export type ArenaCharacterDisplayMode = "priority" | "only" | "all";
+export type ArenaCharacterDisplayMode = "only" | "all";
 
 export interface CharacterUsageCount {
   id?: number;
@@ -73,7 +73,6 @@ export function normalizeSynergyBurst(value: unknown): SynergyBurstGroupKey {
 
 export function groupSynergyCharacterOptions<T extends SynergyCharacter>(
   options: SynergyCharacterOption<T>[],
-  prioritizeArena = false,
 ): SynergyCharacterGroup<T>[] {
   const byGroup = new Map<SynergyBurstGroupKey, SynergyCharacterOption<T>[]>();
   const seenIds = new Set<number>();
@@ -89,11 +88,6 @@ export function groupSynergyCharacterOptions<T extends SynergyCharacter>(
   return SYNERGY_BURST_GROUPS.flatMap(({ key, label }) => {
     const group = byGroup.get(key) ?? [];
     group.sort((left, right) => {
-      if (prioritizeArena) {
-        const byArena = Number(right.character.is_arena_relevant === true)
-          - Number(left.character.is_arena_relevant === true);
-        if (byArena) return byArena;
-      }
       const byName = japaneseCollator.compare(left.character.name ?? "", right.character.name ?? "");
       return byName || Number(left.character.id) - Number(right.character.id);
     });
@@ -171,30 +165,21 @@ export function mapAndSortSynergyCharacters<T extends SynergyCharacter>(
 export function mapAndSortSelectableSynergyCharacters<T extends SynergyCharacter>(
   characters: T[],
   characterUsage: CharacterUsageCount[],
-  displayMode: ArenaCharacterDisplayMode = "priority",
+  displayMode: ArenaCharacterDisplayMode = "only",
 ): SynergyCharacterOption<T>[] {
   const selectable = mapAndSortSynergyCharacters(
     characters.filter((character) => Number(character.id) !== 9999),
     characterUsage,
   ).filter((option) => option.count > 0);
 
-  const filtered = displayMode === "only"
+  return displayMode === "only"
     ? selectable.filter((option) => option.character.is_arena_relevant === true)
     : selectable;
-
-  if (displayMode !== "priority") return filtered;
-  return filtered.sort((left, right) => {
-    const byArena = Number(right.character.is_arena_relevant === true)
-      - Number(left.character.is_arena_relevant === true);
-    if (byArena) return byArena;
-    const byName = japaneseCollator.compare(left.character.name ?? "", right.character.name ?? "");
-    return byName || Number(left.character.id) - Number(right.character.id);
-  });
 }
 
 export function mapSynergyCharactersWithoutUsage<T extends SynergyCharacter>(
   characters: T[],
-  displayMode: ArenaCharacterDisplayMode = "priority",
+  displayMode: ArenaCharacterDisplayMode = "only",
 ): SynergyCharacterOption<T>[] {
   return characters
     .filter((character) => Number(character.id) !== 9999)

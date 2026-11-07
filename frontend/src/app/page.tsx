@@ -121,7 +121,7 @@ function DashboardContent() {
   const [filterBurst, setFilterBurst] = useState<string>("");
   const [filterElement, setFilterElement] = useState<string>("");
   const [filterWeapon, setFilterWeapon] = useState<string>("");
-  const [arenaCharacterDisplay, setArenaCharacterDisplay] = useState<ArenaCharacterDisplayMode>("priority");
+  const [arenaCharacterDisplay, setArenaCharacterDisplay] = useState<ArenaCharacterDisplayMode>("only");
 
   // For winrate filters
   const [winrateMinMatches, setWinrateMinMatches] = useState<number>(1);
