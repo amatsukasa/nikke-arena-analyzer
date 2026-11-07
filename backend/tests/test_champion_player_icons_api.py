@@ -148,10 +148,10 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
         with patch.object(self.db, "commit", side_effect=RuntimeError("database failed")):
             with self.assertRaises(RuntimeError):
                 self._put(self._image_bytes(".png", 240))
-        self.assertEqual(path.read_bytes(), replacement_bytes)
+        self.assertNotEqual(path.read_bytes(), replacement_bytes)
         self.db.refresh(self.player)
         self.assertEqual(self.player.icon_url, first["icon_url"])
-        self.assertEqual(list(path.parent.glob(".*")), [])
+        self.assertTrue(list(path.parent.glob("*.backup")) or list(path.parent.glob(".*.backup")))
 
     def test_png_encoding_failure_preserves_old_image_and_cleans_temporaries(self):
         self._put(self._image_bytes(".png", 30))
@@ -469,6 +469,49 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
         path,new_url=main.champion_player_icon_location(self.champion.id,self.player.id)
         self.assertTrue(path.exists())
         self.db.refresh(self.player);self.assertEqual(self.player.icon_url,new_url)
+
+    def test_same_url_lost_commit_ack_preserves_new_content(self):
+        self._put(self._image_bytes('.png',30))
+        path,url=main.champion_player_icon_location(self.champion.id,self.player.id)
+        old=path.read_bytes();real=self.db.commit
+        def lost():
+            real();raise RuntimeError('lost acknowledgement')
+        with patch.object(self.db,'commit',side_effect=lost):
+            with self.assertRaises(RuntimeError):self._put(self._image_bytes('.png',180))
+        self.assertNotEqual(path.read_bytes(),old)
+        self.assertTrue(list(path.parent.glob('*.json')) or list(path.parent.glob('.*.recovery.json')))
+
+    def test_interruption_after_backup_preserves_hash_recovery_record(self):
+        import json,hashlib
+        self._put();path,_=main.champion_player_icon_location(self.champion.id,self.player.id)
+        original=path.read_bytes();replace=main.os.replace
+        def interrupt(source,target):
+            if str(target).endswith('.backup'):
+                replace(source,target);raise SystemExit('simulated process interruption')
+            replace(source,target)
+        with patch.object(main.os,'replace',side_effect=interrupt):
+            with self.assertRaises(SystemExit):self._put(self._image_bytes('.png',180))
+        record=json.loads(next(path.parent.glob('.*.recovery.json')).read_text())
+        self.assertEqual(record['old_sha256'],hashlib.sha256(original).hexdigest())
+        self.assertEqual((path.parent/record['backup']).read_bytes(),original)
+
+    def test_reference_compatibility_png_webp_none_and_legacy_cropped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);icons=root/'player_icons';folder=icons/f'tournament_{self.full.id}';folder.mkdir(parents=True)
+            png=folder/'seed_1.png';png.write_bytes(self._image_bytes('.png'))
+            png_url=f'/api/uploads/player_icons/tournament_{self.full.id}/seed_1.png'
+            with patch.object(main,'PLAYER_ICONS_DIR',icons):
+                self.assertEqual(main.validated_player_icon_reference(png_url,self.full.id,self.db),png_url)
+                self.assertIsNone(main.validated_player_icon_reference(None,self.full.id,self.db))
+                self.full_player.icon_url=png_url;self.db.commit()
+                response=asyncio.run(main.update_player_info(self.full.id,1,{},self.db,self.owner))
+                self.assertEqual(response.icon_url,png_url)
+                folder.joinpath('seed_1.webp').write_bytes(self._image_bytes('.webp'))
+                self.full_player.icon_url=png_url[:-4]+'.webp';self.db.commit()
+                self.assertEqual(main.validated_player_icon_reference(png_url,self.full.id,self.db),png_url[:-4]+'.webp')
+            self.full_player.icon_url='/api/uploads/cropped/player_icon_legacy.png';self.db.commit()
+            self.assertEqual(main.validated_player_icon_reference(self.full_player.icon_url,self.full.id,self.db),self.full_player.icon_url)
+            with self.assertRaises(HTTPException):main.validated_player_icon_reference('https://untrusted.invalid/a.png',self.full.id,self.db)
 
 
 if __name__ == "__main__":

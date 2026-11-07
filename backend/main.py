@@ -8,6 +8,7 @@ from database import engine, Base, get_db, SessionLocal
 import models, schemas
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime, timedelta, timezone
+import json
 import hashlib
 import base64
 import secrets
@@ -2743,6 +2744,7 @@ async def save_player_icon(image, player, final_path, icon_url, db):
         db.flush()
         db.query(models.Player).filter(models.Player.id == player.id).populate_existing().with_for_update().one()
         final_path.parent.mkdir(parents=True, exist_ok=True)
+        recovery_path = final_path.parent / f".{final_path.name}.{token}.recovery.json"
         previous_url = player.icon_url
         replaced_existing = False
         installed = False
@@ -2755,6 +2757,12 @@ async def save_player_icon(image, player, final_path, icon_url, db):
                 raise HTTPException(status_code=413, detail=str(exc)) from exc
             except InvalidIcon as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            recovery = dict(player_id=player.id, old_url=previous_url, new_url=icon_url,
+                            old_sha256=hashlib.sha256(final_path.read_bytes()).hexdigest() if final_path.exists() else None,
+                            new_sha256=hashlib.sha256(normalized_path.read_bytes()).hexdigest(),
+                            target=final_path.name, backup=backup_path.name)
+            with recovery_path.open("x", encoding="utf-8") as output:
+                json.dump(recovery, output); output.flush(); os.fsync(output.fileno())
             if final_path.exists():
                 os.replace(final_path, backup_path)
                 replaced_existing = True
@@ -2767,7 +2775,7 @@ async def save_player_icon(image, player, final_path, icon_url, db):
             committed = True
         except Exception:
             db.rollback()
-            restore_files = True
+            restore_files = not commit_attempted
             if commit_attempted and previous_url != icon_url:
                 try:
                     with db.get_bind().connect() as connection:
@@ -2785,6 +2793,7 @@ async def save_player_icon(image, player, final_path, icon_url, db):
                     final_path.unlink(missing_ok=True)
                 if replaced_existing and backup_path.exists():
                     os.replace(backup_path, final_path)
+                recovery_path.unlink(missing_ok=True)
             raise
         finally:
             for temporary_path in (upload_path, normalized_path):
@@ -2795,6 +2804,7 @@ async def save_player_icon(image, player, final_path, icon_url, db):
             if committed:
                 try:
                     backup_path.unlink(missing_ok=True)
+                    recovery_path.unlink(missing_ok=True)
                 except OSError:
                     print("[player-icon] backup cleanup failed")
     # Old PNGs are deliberately retained for separately approved cleanup.
