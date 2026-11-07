@@ -261,7 +261,8 @@ from services.upload_cleanup import (
     PLAYER_ICONS_DIR,
     _is_within,
 )
-from fastapi.responses import FileResponse
+from services.player_icons import (write_webp, icon_mutation_lock, InvalidIcon, IconTooLarge)
+from fastapi.responses import FileResponse, RedirectResponse
 
 
 def get_team_collection_levels(team: models.DeckTeam) -> list[str | None]:
@@ -284,11 +285,14 @@ NO_STORE_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
 
 def _private_upload_tournament_id(asset_path: str, db: Session) -> int | None:
     """Return the owning tournament for a private upload URL, if it is known."""
+    ownership = re.fullmatch(r"player_icons/tournament_(\d+)/(?:seed|player)_\d+\.(?:png|webp)", asset_path)
     normalized_url = f"/api/uploads/{asset_path}"
     player = db.query(models.Player).filter(
         models.Player.icon_url == normalized_url
     ).first()
     if player is not None:
+        if ownership and int(ownership.group(1)) != player.tournament_id:
+            return None
         return player.tournament_id
 
     # Older full_64 registrations could persist a cache-buster in icon_url.
@@ -308,6 +312,8 @@ def _private_upload_tournament_id(asset_path: str, db: Session) -> int | None:
         legacy_player is not None
             and legacy_player.icon_url.partition("?")[0] == normalized_url
     ):
+        if ownership and int(ownership.group(1)) != legacy_player.tournament_id:
+            return None
         return legacy_player.tournament_id
 
     crop_match = CHAMPION_CROP_NAME.fullmatch(Path(asset_path).name)
@@ -326,6 +332,12 @@ def get_upload(
     requested = Path(asset_path)
     upload_root = Path(UPLOAD_DIR).resolve()
     full_path = (upload_root / requested).resolve()
+    canonical_asset = None
+    if re.fullmatch(r"player_icons/tournament_\d+/(?:seed|player)_\d+\.png", asset_path):
+        candidate = asset_path[:-4] + ".webp"
+        if _private_upload_tournament_id(candidate, db) is not None:
+            canonical_asset = candidate
+            full_path = (upload_root / candidate).resolve()
     if (
         not asset_path
         or requested.is_absolute()
@@ -343,7 +355,7 @@ def get_upload(
     # cross-tournament analysis. Tournament-owned uploads remain private.
     is_template = asset_path.startswith("templates/")
     if not is_template:
-        tournament_id = _private_upload_tournament_id(asset_path, db)
+        tournament_id = _private_upload_tournament_id(canonical_asset or asset_path, db)
         if tournament_id is None:
             raise HTTPException(
                 status_code=404,
@@ -352,8 +364,12 @@ def get_upload(
             )
         require_tournament_viewer(tournament_id, db, current_user)
 
+    if canonical_asset:
+        return RedirectResponse(f"/api/uploads/{canonical_asset}", status_code=307,
+                                headers={"Cache-Control": NO_STORE_CACHE_CONTROL})
     return FileResponse(
         full_path,
+        media_type={".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(full_path.suffix.lower()),
         headers={
             "Cache-Control": (
                 IMMUTABLE_CACHE_CONTROL if is_template else NO_STORE_CACHE_CONTROL
@@ -2067,12 +2083,14 @@ def delete_tournament(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    db_tournament = require_tournament_manager(tournament_id, db, current_user)
-    invalidate_dashboard_cache(tournament_id)
-    db.delete(db_tournament)
-    db.commit()
-    # 大会削除時に永続保存アイコンをクリーンアップ
-    delete_tournament_player_icons(tournament_id)
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    with icon_mutation_lock(PLAYER_ICONS_DIR):
+        db_tournament = require_tournament_manager(tournament_id, db, current_user)
+        invalidate_dashboard_cache(tournament_id)
+        db.delete(db_tournament)
+        db.commit()
+        delete_tournament_player_icons(tournament_id)
     return {"ok": True}
 
 # ==========================================
@@ -2689,16 +2707,16 @@ def champion_player_icon_location(tournament_id: int, player_id: int) -> tuple[P
     icon_dir = (PLAYER_ICONS_DIR / f"tournament_{tournament_id}").resolve()
     if not _is_within(icon_dir, PLAYER_ICONS_DIR):
         raise HTTPException(status_code=500, detail="Unsafe player icon path")
-    path = (icon_dir / f"player_{player_id}.png").resolve()
+    path = (icon_dir / f"player_{player_id}.webp").resolve()
     if not _is_within(path, icon_dir):
         raise HTTPException(status_code=500, detail="Unsafe player icon path")
-    return path, f"/api/uploads/player_icons/tournament_{tournament_id}/player_{player_id}.png"
+    return path, f"/api/uploads/player_icons/tournament_{tournament_id}/player_{player_id}.webp"
 
 
 def champion_icon_temporary_paths(final_path: Path, token: str) -> tuple[Path, Path, Path]:
     return (
         final_path.parent / f".{final_path.name}.{token}.upload",
-        final_path.parent / f".{final_path.name}.{token}.png",
+        final_path.parent / f".{final_path.name}.{token}.webp",
         final_path.parent / f".{final_path.name}.{token}.backup",
     )
 
@@ -2708,6 +2726,78 @@ def invalidate_dashboard_cache_safely(tournament_id: int) -> None:
         invalidate_dashboard_cache(tournament_id)
     except Exception as exc:
         print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
+
+
+async def save_player_icon(image, player, final_path, icon_url, db):
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
+    data = await image.read(CHAMPION_ICON_MAX_BYTES + 1)
+    if len(data) > CHAMPION_ICON_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
+    token = secrets.token_hex(8)
+    upload_path, normalized_path, backup_path = champion_icon_temporary_paths(final_path, token)
+    # Finish all awaits before acquiring the process/file lock.
+    with icon_mutation_lock(PLAYER_ICONS_DIR):
+        db.flush()
+        db.query(models.Player).filter(models.Player.id == player.id).populate_existing().with_for_update().one()
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        previous_url = player.icon_url
+        replaced_existing = False
+        installed = False
+        commit_attempted = False
+        committed = False
+        try:
+            try:
+                write_webp(normalized_path, data)
+            except IconTooLarge as exc:
+                raise HTTPException(status_code=413, detail=str(exc)) from exc
+            except InvalidIcon as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if final_path.exists():
+                os.replace(final_path, backup_path)
+                replaced_existing = True
+            os.replace(normalized_path, final_path)
+            installed = True
+            player.icon_url = icon_url
+            db.flush()
+            commit_attempted = True
+            db.commit()
+            committed = True
+        except Exception:
+            db.rollback()
+            restore_files = True
+            if commit_attempted and previous_url != icon_url:
+                try:
+                    with db.get_bind().connect() as connection:
+                        current_url = connection.execute(
+                            select(models.Player.icon_url).where(models.Player.id == player.id)
+                        ).scalar_one_or_none()
+                    restore_files = current_url != icon_url
+                except Exception:
+                    # A lost commit acknowledgement must never leave a committed
+                    # WebP URL without its file. Preserve both files for recovery.
+                    restore_files = False
+                    print("[player-icon] commit outcome unknown; retained recovery files")
+            if restore_files:
+                if installed:
+                    final_path.unlink(missing_ok=True)
+                if replaced_existing and backup_path.exists():
+                    os.replace(backup_path, final_path)
+            raise
+        finally:
+            for temporary_path in (upload_path, normalized_path):
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    print("[player-icon] temporary cleanup failed")
+            if committed:
+                try:
+                    backup_path.unlink(missing_ok=True)
+                except OSError:
+                    print("[player-icon] backup cleanup failed")
+    # Old PNGs are deliberately retained for separately approved cleanup.
 
 
 @app.put(
@@ -2724,76 +2814,8 @@ async def upload_champion_player_icon(
     _, player = require_champion_player_manager(
         tournament_id, player_id, db, current_user
     )
-    if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
-        raise HTTPException(status_code=422, detail="Unsupported image MIME type")
-
     final_path, icon_url = champion_player_icon_location(tournament_id, player.id)
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_hex(8)
-    upload_path, normalized_path, backup_path = champion_icon_temporary_paths(
-        final_path, token
-    )
-    replaced_existing = False
-    try:
-        total = 0
-        with open(upload_path, "wb") as output:
-            while chunk := await image.read(1024 * 1024):
-                total += len(chunk)
-                if total > CHAMPION_ICON_MAX_BYTES:
-                    raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
-                output.write(chunk)
-        if total == 0:
-            raise HTTPException(status_code=422, detail="Empty image files are not allowed")
-
-        import cv2
-        decoded = cv2.imread(str(upload_path), cv2.IMREAD_UNCHANGED)
-        if decoded is None or decoded.size == 0:
-            raise HTTPException(status_code=422, detail="File is not a decodable image")
-        height, width = decoded.shape[:2]
-        if (
-            width > CHAMPION_ICON_MAX_WIDTH
-            or height > CHAMPION_ICON_MAX_HEIGHT
-            or width * height > CHAMPION_ICON_MAX_PIXELS
-        ):
-            raise HTTPException(
-                status_code=413,
-                detail="Decoded image dimensions exceed the allowed limit",
-            )
-        if not write_lossless_png(normalized_path, decoded):
-            raise HTTPException(status_code=422, detail="Image normalization failed")
-
-        if final_path.exists():
-            os.replace(final_path, backup_path)
-            replaced_existing = True
-        os.replace(normalized_path, final_path)
-        player.icon_url = icon_url
-        try:
-            db.flush()
-            db.commit()
-            db.refresh(player)
-        except Exception:
-            db.rollback()
-            if final_path.exists():
-                final_path.unlink()
-            if replaced_existing and backup_path.exists():
-                os.replace(backup_path, final_path)
-            raise
-        if backup_path.exists():
-            try:
-                backup_path.unlink()
-            except OSError as exc:
-                print(f"[player-icon] backup cleanup failed tournament={tournament_id} player={player.id}: {exc}")
-    except Exception:
-        if replaced_existing and backup_path.exists() and not final_path.exists():
-            os.replace(backup_path, final_path)
-        raise
-    finally:
-        for temporary_path in (upload_path, normalized_path):
-            if temporary_path.exists():
-                try:
-                    temporary_path.unlink()
-                except OSError as exc:
-                    print(f"[player-icon] temporary cleanup failed path={temporary_path}: {exc}")
+    await save_player_icon(image, player, final_path, icon_url, db)
     invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
@@ -2816,32 +2838,30 @@ def delete_champion_player_icon(
     _, player = require_champion_player_manager(
         tournament_id, player_id, db, current_user
     )
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     final_path, _ = champion_player_icon_location(tournament_id, player.id)
-    backup_path = final_path.parent / f".{final_path.name}.{secrets.token_hex(8)}.delete"
-    moved_file = False
-    commit_succeeded = False
-    try:
-        if final_path.exists():
-            os.replace(final_path, backup_path)
-            moved_file = True
-        player.icon_url = None
+    with icon_mutation_lock(PLAYER_ICONS_DIR):
+        db.query(models.Player).filter(models.Player.id == player.id).populate_existing().with_for_update().one()
+        moved = []
         try:
+            for path in (final_path, final_path.with_suffix(".png")):
+                if path.exists():
+                    backup = path.parent / f".{path.name}.{secrets.token_hex(8)}.delete"
+                    os.replace(path, backup)
+                    moved.append((path, backup))
+            player.icon_url = None
             db.commit()
-            db.refresh(player)
-            commit_succeeded = True
         except Exception:
             db.rollback()
-            if moved_file and backup_path.exists():
-                os.replace(backup_path, final_path)
+            for original, backup in reversed(moved):
+                os.replace(backup, original)
             raise
-    finally:
-        # A successful DB commit may still be followed by an unlink failure. Do
-        # not expose the backup as a public icon; leave a clear operational log.
-        if backup_path.exists() and commit_succeeded:
+        for _, backup in moved:
             try:
-                backup_path.unlink()
-            except OSError as exc:
-                print(f"[player-icon] cleanup failed tournament={tournament_id} player={player.id}: {exc}")
+                backup.unlink()
+            except OSError:
+                print("[player-icon] cleanup failed")
     invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
@@ -3590,6 +3610,27 @@ def _get_player_details_by_player(tournament_id: int, player: models.Player | No
 
 
 
+def validated_player_icon_reference(url, tournament_id, db):
+    if not url:
+        return None
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    normalized = url.partition("?")[0]
+    match = re.fullmatch(r"/api/uploads/player_icons/tournament_(\d+)/(?:seed|player)_\d+\.(png|webp)", normalized)
+    if match:
+        if int(match.group(1)) != tournament_id:
+            raise HTTPException(status_code=422, detail="Icon belongs to another tournament")
+        candidate = normalized[:-4] + ".webp" if match.group(2) == "png" else normalized
+        chosen = candidate if _private_upload_tournament_id(candidate.removeprefix("/api/uploads/"), db) == tournament_id else normalized
+        path = (PLAYER_ICONS_DIR / chosen.removeprefix("/api/uploads/player_icons/")).resolve()
+        if not _is_within(path, PLAYER_ICONS_DIR.resolve()) or not path.is_file():
+            raise HTTPException(status_code=422, detail="Player icon file does not exist")
+        return chosen
+    if normalized.startswith("/api/uploads/cropped/") and _private_upload_tournament_id(normalized.removeprefix("/api/uploads/"), db) == tournament_id:
+        return normalized
+    raise HTTPException(status_code=422, detail="Invalid player icon reference")
+
+
 def cleanup_replaced_player_icon(
     db: Session,
     player_id: int,
@@ -3629,33 +3670,37 @@ async def update_player_info(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    tournament = require_tournament_manager(tournament_id, db, current_user)
-    player = db.query(models.Player).filter(
-        models.Player.tournament_id == tournament_id,
-        models.Player.seed_number == seed_number
-    ).first()
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    with icon_mutation_lock(PLAYER_ICONS_DIR):
+        tournament = require_tournament_manager(tournament_id, db, current_user)
+        player = db.query(models.Player).filter(
+            models.Player.tournament_id == tournament_id,
+            models.Player.seed_number == seed_number
+        ).first()
     
-    icon_url = data.get("icon_url")
-    previous_icon_url = player.icon_url if player else None
-    player_name = automatic_player_name(seed_number)
+        icon_url = validated_player_icon_reference(data.get("icon_url"), tournament_id, db)
+        previous_icon_url = player.icon_url if player else None
+        player_name = automatic_player_name(seed_number)
     
-    if not player:
-        player = models.Player(
-            tournament_id=tournament_id,
-            seed_number=seed_number,
-            name=player_name,
-            icon_url=icon_url
-        )
-        db.add(player)
-    else:
-        player.name = player_name
-        if icon_url: player.icon_url = icon_url
+        if not player:
+            player = models.Player(
+                tournament_id=tournament_id,
+                seed_number=seed_number,
+                name=player_name,
+                icon_url=icon_url
+            )
+            db.add(player)
+        else:
+            player.name = player_name
+            if icon_url: player.icon_url = icon_url
     
-    db.commit()
-    db.refresh(player)
-    cleanup_replaced_player_icon(db, player.id, previous_icon_url, player.icon_url)
-    invalidate_dashboard_cache(tournament_id)
-    return player
+        db.commit()
+        db.refresh(player)
+        cleanup_replaced_player_icon(db, player.id, previous_icon_url, player.icon_url)
+        invalidate_dashboard_cache(tournament_id)
+        return player
+
 
 @app.post("/api/tournaments/{tournament_id}/teams")
 async def save_teams(
@@ -3664,6 +3709,8 @@ async def save_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
+        raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     tournament = require_tournament_manager(tournament_id, db, current_user)
     temporary_crop_urls = [
         character.get(url_field)
@@ -3678,41 +3725,43 @@ async def save_teams(
         
         is_update = False  # 上書きフラグ
         
-        player = db.query(models.Player).filter(
-            models.Player.tournament_id == tournament_id,
-            models.Player.seed_number == seed_number
-        ).first()
-        # 編成登録前の icon_url を記録（上書き防止のため）
-        previous_icon_url = player.icon_url if player else None
+        with icon_mutation_lock(PLAYER_ICONS_DIR):
+            player_icon_url = validated_player_icon_reference(player_icon_url, tournament_id, db)
+            player = db.query(models.Player).filter(
+                models.Player.tournament_id == tournament_id,
+                models.Player.seed_number == seed_number
+            ).first()
+            # 編成登録前の icon_url を記録（上書き防止のため）
+            previous_icon_url = player.icon_url if player else None
 
-        if not player:
-            # Player が存在しない場合は新規作成
-            # icon_url はフロントから送られた場合のみ設定（なければ None のまま）
-            player = models.Player(
-                tournament_id=tournament_id,
-                seed_number=seed_number,
-                name=automatic_player_name(seed_number),
-                icon_url=player_icon_url or None,
+            if not player:
+                # Player が存在しない場合は新規作成
+                # icon_url はフロントから送られた場合のみ設定（なければ None のまま）
+                player = models.Player(
+                    tournament_id=tournament_id,
+                    seed_number=seed_number,
+                    name=automatic_player_name(seed_number),
+                    icon_url=player_icon_url or None,
+                )
+                db.add(player)
+                db.commit()
+                db.refresh(player)
+                print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+            else:
+                # 既存 Player 更新
+                player.name = automatic_player_name(seed_number)
+                # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
+                # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
+                if player_icon_url:
+                    player.icon_url = player_icon_url
+                db.commit()
+                print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+            cleanup_replaced_player_icon(
+                db,
+                player.id,
+                previous_icon_url,
+                player.icon_url,
             )
-            db.add(player)
-            db.commit()
-            db.refresh(player)
-            print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
-        else:
-            # 既存 Player 更新
-            player.name = automatic_player_name(seed_number)
-            # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
-            # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
-            if player_icon_url:
-                player.icon_url = player_icon_url
-            db.commit()
-            print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
-        cleanup_replaced_player_icon(
-            db,
-            player.id,
-            previous_icon_url,
-            player.icon_url,
-        )
 
         # 重複キャラクターのバリデーション
         all_char_ids = []
@@ -3859,6 +3908,7 @@ async def save_teams(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/upload/player-icon")
 async def upload_player_icon(
     image: UploadFile = File(...),
@@ -3896,41 +3946,20 @@ async def upload_player_icon(
             name=automatic_player_name(seed_number),
         )
         db.add(player)
-        db.flush()  # player.id を確定させるため flush（commit 前）
-        print(f"[PlayerIcon] Player 自動作成: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+        # Flush inside the shared icon lock to keep filesystem/DB lock order consistent.
+
     else:
         player.name = automatic_player_name(seed_number)
 
-    # 永続保存先ディレクトリを作成
-    icon_dir = PLAYER_ICONS_DIR / f"tournament_{tournament_id}"
-    icon_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = f"seed_{seed_number}.png"
-    file_path = icon_dir / filename
-    icon_url = f"/api/uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.png"
-
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(image.file, buffer)
-
-        # DB の players.icon_url を更新してコミット
-        player.icon_url = icon_url
-        db.commit()
-        db.refresh(player)
-        invalidate_dashboard_cache(tournament_id)
-    except Exception as e:
-        db.rollback()
-        # 保存途中のファイルがあれば削除
-        if file_path.exists():
-            try:
-                file_path.unlink()
-            except OSError:
-                pass
-        print(f"[PlayerIcon] 保存失敗: {e}")
-        raise HTTPException(status_code=500, detail="顔画像の保存中にエラーが発生しました")
-
-    print(f"[PlayerIcon] 保存完了: {file_path} → {icon_url} (player_id={player.id})")
+    icon_dir = (PLAYER_ICONS_DIR / f"tournament_{tournament_id}").resolve()
+    if not _is_within(icon_dir, PLAYER_ICONS_DIR):
+        raise HTTPException(status_code=422, detail="Unsafe icon path")
+    file_path = icon_dir / f"seed_{seed_number}.webp"
+    icon_url = f"/api/uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.webp"
+    await save_player_icon(image, player, file_path, icon_url, db)
+    invalidate_dashboard_cache_safely(tournament_id)
     return {"url": icon_url, "player_id": player.id}
+
 
 @app.post("/api/analyze/deck")
 async def analyze_deck(

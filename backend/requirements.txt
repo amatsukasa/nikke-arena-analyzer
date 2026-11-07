@@ -1,4 +1,4 @@
-﻿fastapi
+fastapi
 uvicorn
 sqlalchemy
 psycopg2-binary
@@ -11,3 +11,5 @@ pytesseract
 python-jose[cryptography]
 passlib[bcrypt]
 resend
+
+Pillow>=11.1.0,<13
