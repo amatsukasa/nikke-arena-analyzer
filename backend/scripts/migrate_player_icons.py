@@ -3,6 +3,7 @@
 Never imports main/database or starts the app. Credentials come only from env.
 The external backup is immutable; the append-only journal enables recovery.
 """
+from contextlib import nullcontext
 from pathlib import Path
 from hashlib import sha256
 import argparse
@@ -158,7 +159,7 @@ def retained_bytes(root):
 
 
 def migrate_one(engine, root, row, directory, manifest, execute=False,
-                min_free=64*1024*1024, max_retained=32*1024*1024, before_install=None):
+                min_free=64*1024*1024, max_retained=32*1024*1024, before_install=None, capacity_state=None, lock_held=False):
     relative = relative_url(row['icon_url'], row['tournament_id'])
     if relative.endswith('.webp'):
         decode_icon(safe_path(root, relative).read_bytes())
@@ -181,7 +182,7 @@ def migrate_one(engine, root, row, directory, manifest, execute=False,
         raise ValueError("Current file/reference is not covered by the verified backup")
     if before_install:
         before_install()
-    with icon_mutation_lock(root):
+    with nullcontext() if lock_held else icon_mutation_lock(root):
         # Required ordering: filesystem lock, then DB row lock (same as API).
         with engine.begin() as c:
             suffix = ' FOR UPDATE' if engine.dialect.name == 'postgresql' else ''
@@ -196,7 +197,7 @@ def migrate_one(engine, root, row, directory, manifest, execute=False,
             if not target.exists():
                 if shutil.disk_usage(root).free < min_free + len(encoded):
                     raise ValueError("Insufficient free space; stop and review PNG cleanup")
-                if retained_bytes(root) + len(encoded) > max_retained:
+                if (capacity_state['retained'] if capacity_state is not None else retained_bytes(root)) + len(encoded) > max_retained:
                     raise ValueError("Retained double-storage budget reached; review PNG cleanup")
             journal(directory, dict(state='intent', **details))
             if not target.exists():
@@ -207,6 +208,8 @@ def migrate_one(engine, root, row, directory, manifest, execute=False,
                     if digest(source.read_bytes()) != original_hash:
                         raise ValueError("Source changed during conversion")
                     os.replace(temporary, target)
+                    if capacity_state is not None:
+                        capacity_state['retained'] += len(encoded)
                 finally:
                     temporary.unlink(missing_ok=True)
             updated = c.execute(text('UPDATE players SET icon_url=:new WHERE id=:id AND icon_url=:old'),
@@ -220,6 +223,19 @@ def migrate_one(engine, root, row, directory, manifest, execute=False,
 
 
 def cleanup(engine, root, directory, manifest, execute=False, limit=100):
+    # Hold the shared writer lock for one bounded batch and take one DB snapshot.
+    with icon_mutation_lock(root) if execute else nullcontext():
+        return _cleanup_batch(engine, root, directory, manifest, execute, limit)
+
+
+def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100):
+    current = rows(engine)
+    owners = {row['id']: row for row in current}
+    references = set()
+    for row in current:
+        if row['icon_url'].startswith(PREFIX):
+            references.add(relative_url(row['icon_url'], row['tournament_id']))
+    extra = additional_references(engine)
     logfile = directory / 'migration.jsonl'
     entries = {}
     for line in logfile.read_text(encoding='utf-8').splitlines() if logfile.exists() else []:
@@ -227,7 +243,7 @@ def cleanup(engine, root, directory, manifest, execute=False, limit=100):
             entry = json.loads(line)
             # Intents also recover a crash after commit but before journal append.
             if entry.get('state') in {'intent', 'committed'}:
-                entries[(entry['id'], entry['source'])] = entry
+                entries[entry['source']] = entry
         except (ValueError, KeyError):
             raise ValueError("Invalid journal; review before cleanup")
     results = []
@@ -243,14 +259,12 @@ def cleanup(engine, root, directory, manifest, execute=False, limit=100):
                 expected = manifest['files'].get(entry['source'])
                 if not expected or expected['sha256'] != entry['source_sha256']:
                     raise ValueError('Backup coverage mismatch')
-                current = rows(engine)
-                if entry['source'] in additional_references(engine):
+                if entry['source'] in extra:
                     raise ValueError('PNG has a legacy deck reference')
-                owner = next((r for r in current if r['id'] == entry['id']), None)
+                owner = owners.get(entry['id'])
                 if not owner or owner['icon_url'] != entry['new_url']:
                     raise ValueError('Current DB URL differs')
-                if any(relative_url(r['icon_url'], r['tournament_id']) == entry['source']
-                       for r in current if r['icon_url'].startswith(PREFIX)):
+                if entry['source'] in references:
                     raise ValueError('PNG is still referenced')
                 if digest(target.read_bytes()) != entry['target_sha256']:
                     raise ValueError('WebP changed since migration')
@@ -259,9 +273,8 @@ def cleanup(engine, root, directory, manifest, execute=False, limit=100):
                     raise ValueError('PNG changed since backup')
                 return source
             if execute:
-                with icon_mutation_lock(root):
-                    source = check()
-                    source.unlink(missing_ok=True)
+                source = check()
+                source.unlink(missing_ok=True)
             else:
                 source = check()
             results.append(dict(id=entry['id'], source=entry['source'], bytes=entry['before'], status='deleted' if execute else 'would_delete'))
@@ -333,6 +346,14 @@ def rollback(engine, root, directory, manifest, execute=False, limit=100):
 
 def run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
         after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024):
+    # Bounded by limit; never cache a capacity estimate across unlocked batches.
+    with icon_mutation_lock(root) if execute else nullcontext():
+        return _run(engine, root, directory, execute, limit, batch_size,
+                    after_id, min_free, max_retained)
+
+
+def _run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
+        after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024):
     root = Path(root).resolve()
     all_rows = rows(engine)
     files = inventory(root)
@@ -343,6 +364,7 @@ def run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
         except ValueError:
             pass
     manifest = verify_backup(root, directory) if execute else None
+    capacity_state = dict(retained=retained_bytes(root)) if execute else None
     selected = sorted([r for r in all_rows if r['id'] > after_id],
                       key=lambda r: (r['icon_url'].partition('?')[0].endswith('.webp'), r['id']))[:limit]
     report = dict(mode='execute' if execute else 'dry-run', processed=0, success=0,
@@ -352,7 +374,8 @@ def run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
         for row in selected[offset:offset+batch_size]:
             try:
                 result = migrate_one(engine, root, row, Path(directory) if directory else None,
-                                     manifest, execute, min_free, max_retained)
+                                     manifest, execute, min_free, max_retained,
+                                     capacity_state=capacity_state, lock_held=execute)
                 if result['status'] == 'already_webp':
                     report['already_webp'] += 1
                 else:
@@ -367,6 +390,9 @@ def run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
             if 'old_url' in result and '?' in result['old_url']:
                 result = dict(result, old_url=result['old_url'].partition('?')[0]+'?[redacted]')
             report['items'].append(result); report['processed'] += 1
+            if result.get('detail', '').startswith(('Insufficient free space', 'Retained double-storage')):
+                report['stopped_for_capacity'] = True
+                return report
     return report
 
 

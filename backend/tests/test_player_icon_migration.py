@@ -182,5 +182,51 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(migration.run(self.engine,self.root,self.backup,True,limit=1)['success'],1)
         self.assertEqual(migration.run(self.engine,self.root,self.backup,True)['already_webp'],2)
 
+    def test_cleanup_loads_reference_snapshot_once_per_batch(self):
+        self.prepare();migration.run(self.engine,self.root,self.backup,True)
+        with patch.object(migration,'rows',wraps=migration.rows) as query:
+            migration.cleanup(self.engine,self.root,self.backup,migration.verify_backup(self.root,self.backup))
+        self.assertLessEqual(query.call_count,1)
+
+    def test_4748_icons_batched_migration_cleanup_query_count_and_capacity(self):
+        import time
+        raw=png((69,69)); encoded=encode_webp(raw)
+        self.source.write_bytes(raw)
+        with self.engine.begin() as c:
+            c.execute(text('INSERT INTO players (id,tournament_id,icon_url) VALUES (:id,1,:url)'),
+                      [dict(id=i,url=migration.PREFIX+f'tournament_1/seed_{i}.png') for i in range(2,4749)])
+        for i in range(2,4749): (self.source.parent/f'seed_{i}.png').write_bytes(raw)
+        manifest=self.prepare();start=time.perf_counter();queries=[]
+        def count(conn,cursor,statement,parameters,context,many):
+            if statement.startswith('SELECT'):queries.append(statement)
+        event.listen(self.engine,'before_cursor_execute',count)
+        try:
+            # Actual 32MiB boundary: reserve all but one encoded image with a
+            # pre-existing PNG/WebP pair, outside the DB migration candidates.
+            reserve=self.source.parent/'seed_99999.png';reserve.write_bytes(raw)
+            reserve.with_suffix('.webp').write_bytes(b'x'*(32*1024*1024-len(encoded)))
+            with patch.object(migration,'encode_webp',return_value=encoded):
+                first=migration.run(self.engine,self.root,self.backup,True,limit=100)
+                self.assertTrue(first['stopped_for_capacity']);self.assertEqual(first['success'],1)
+                self.assertLessEqual(migration.retained_bytes(self.root),32*1024*1024)
+                migration.cleanup(self.engine,self.root,self.backup,manifest,True)
+                self.assertTrue(reserve.exists())
+                reserve.unlink();reserve.with_suffix('.webp').unlink()
+                while True:
+                    report=migration.run(self.engine,self.root,self.backup,True,limit=500)
+                    self.assertEqual(report['failed'],0)
+                    if report['success']==0:break
+            before=len(queries);deleted=0
+            while True:
+                batch=migration.cleanup(self.engine,self.root,self.backup,manifest,True,limit=500)
+                if not batch:break
+                self.assertEqual(len({x['source'] for x in batch}),len(batch))
+                self.assertTrue(all(x['status']=='deleted' for x in batch));deleted+=len(batch)
+            self.assertEqual(deleted,4747)
+            self.assertLess(len(queries)-before,60)
+            self.assertEqual(len(list(self.root.glob('tournament_*/*.webp'))),4748)
+            print('BULK_4748 seconds=',round(time.perf_counter()-start,2),'selects=',len(queries),'cleanup_selects=',len(queries)-before)
+        finally:event.remove(self.engine,'before_cursor_execute',count)
+
 
 if __name__=='__main__': unittest.main()
