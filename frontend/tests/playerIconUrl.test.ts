@@ -12,3 +12,7 @@ test("player icon URL is stable until a successful write changes its revision", 
   assert.equal(playerIconUrl("/api/icon.png?t=legacy", 12), "/api/icon.png?t=legacy");
   assert.equal(playerIconUrl(null, 12), null);
 });
+
+test("WebP player URLs retain their extension through cache revisions", () => {
+  assert.equal(playerIconUrl("/api/uploads/player_icons/tournament_1/seed_1.webp", 9), "/api/uploads/player_icons/tournament_1/seed_1.webp?v=9");
+});

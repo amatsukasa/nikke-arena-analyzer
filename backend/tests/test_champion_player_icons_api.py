@@ -108,9 +108,9 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
             function(*args)
         self.assertEqual(raised.exception.status_code, status)
 
-    def test_upload_accepts_jpeg_png_webp_and_normalizes_to_player_id_png(self):
+    def test_upload_accepts_jpeg_png_webp_and_normalizes_to_player_id_webp(self):
         formats = ((".jpg", "image/jpeg"), (".png", "image/png"), (".webp", "image/webp"))
-        expected_url = f"/api/uploads/player_icons/tournament_{self.champion.id}/player_{self.player.id}.png"
+        expected_url = f"/api/uploads/player_icons/tournament_{self.champion.id}/player_{self.player.id}.webp"
         for extension, content_type in formats:
             response = schemas.ChampionPlayerIconResponse.model_validate(
                 self._put(self._image_bytes(extension), content_type)
@@ -157,7 +157,7 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
         self._put(self._image_bytes(".png", 30))
         path, old_url = main.champion_player_icon_location(self.champion.id, self.player.id)
         old_bytes = path.read_bytes()
-        with patch.object(main, "write_lossless_png", return_value=False):
+        with patch.object(main, "write_webp", side_effect=main.InvalidIcon("encoding failed")):
             with self.assertRaises(HTTPException) as raised:
                 self._put(self._image_bytes(".png", 180))
         self.assertEqual(raised.exception.status_code, 422)
@@ -191,7 +191,7 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
 
         def fail_new_image(source, destination):
             source_path = Path(source)
-            if source_path.name.startswith(f".{path.name}.") and source_path.suffix == ".png" and Path(destination) == path:
+            if source_path.name.startswith(f".{path.name}.") and source_path.suffix == ".webp" and Path(destination) == path:
                 raise OSError("new image placement failed")
             return real_replace(source, destination)
 
@@ -247,19 +247,14 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
         self.assertEqual(list(final_path.parent.glob(".*")), [])
 
     def test_decoded_dimension_limits_reject_width_height_and_total_pixels(self):
-        oversized_shapes = (
-            (1, main.CHAMPION_ICON_MAX_WIDTH + 1, 3),
-            (main.CHAMPION_ICON_MAX_HEIGHT + 1, 1, 3),
-            (5_001, 5_001, 3),
-        )
-        for shape in oversized_shapes:
-            decoded = np.lib.stride_tricks.as_strided(
-                np.zeros(1, dtype=np.uint8), shape=shape, strides=(0, 0, 0)
-            )
-            with patch("cv2.imread", return_value=decoded):
-                with self.assertRaises(HTTPException) as raised:
-                    self._put(self._image_bytes(".png"))
-            self.assertEqual(raised.exception.status_code, 413)
+        with patch("services.player_icons.MAX_DIMENSION", 20):
+            with self.assertRaises(HTTPException) as raised:
+                self._put(self._image_bytes(".png"))
+        self.assertEqual(raised.exception.status_code, 413)
+        with patch("services.player_icons.MAX_PIXELS", 100):
+            with self.assertRaises(HTTPException) as raised:
+                self._put(self._image_bytes(".png"))
+        self.assertEqual(raised.exception.status_code, 413)
         self._put(self._image_bytes(".png"))
 
     def test_seed_and_name_changes_do_not_change_url_or_path(self):
@@ -339,8 +334,141 @@ class ChampionPlayerIconApiTest(unittest.TestCase):
         ))
         self.assertEqual(legacy["player_id"], self.full_player.id)
         self.assertTrue(
-            (main.PLAYER_ICONS_DIR / f"tournament_{self.full.id}" / "seed_1.png").is_file()
+            (main.PLAYER_ICONS_DIR / f"tournament_{self.full.id}" / "seed_1.webp").is_file()
         )
+
+    def test_full64_rejects_corrupt_image_and_preserves_old_icon(self):
+        good = asyncio.run(main.upload_player_icon(self._upload(self._image_bytes('.png'),'image/png'),self.full.id,1,self.db,self.owner))
+        path=main.PLAYER_ICONS_DIR/f'tournament_{self.full.id}'/'seed_1.webp'
+        previous=path.read_bytes()
+        with self.assertRaises(HTTPException):
+            asyncio.run(main.upload_player_icon(self._upload(b'broken','image/png'),self.full.id,1,self.db,self.owner))
+        self.assertEqual(path.read_bytes(),previous)
+        self.assertEqual(self.db.get(models.Player,self.full_player.id).icon_url,good['url'])
+
+    def test_webp_mime_png_redirect_and_private_access(self):
+        self._put()
+        relative=f'player_icons/tournament_{self.champion.id}/player_{self.player.id}.webp'
+        old_root=main.UPLOAD_DIR
+        main.UPLOAD_DIR=str(main.PLAYER_ICONS_DIR.parent)
+        # The fixture root is an arbitrary temp dir, so create a dedicated upload tree.
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/relative;target.parent.mkdir(parents=True)
+            path,_=main.champion_player_icon_location(self.champion.id,self.player.id)
+            shutil.copyfile(path,target);main.UPLOAD_DIR=directory
+            try:
+                response=main.get_upload(relative,self.db,self.owner)
+                self.assertEqual(response.media_type,'image/webp')
+                redirected=main.get_upload(relative[:-5]+'.png',self.db,self.owner)
+                self.assertEqual(redirected.status_code,307)
+                self.assertEqual(redirected.headers['location'],'/api/uploads/'+relative)
+                self._assert_status(404,main.get_upload,relative,self.db,self.other)
+                self._assert_status(404,main.get_upload,relative[:-5]+'.png',self.db,None)
+                self.champion.publication_status='published';self.db.commit()
+                self.assertEqual(main.get_upload(relative,self.db,self.owner).status_code,200)
+                self._assert_status(404,main.get_upload,relative,self.db,None)
+            finally:main.UPLOAD_DIR=old_root
+
+    def test_existing_png_display_delete_and_mixed_formats(self):
+        path,_=main.champion_player_icon_location(self.champion.id,self.player.id)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        png_path=path.with_suffix('.png');png_path.write_bytes(self._image_bytes('.png'))
+        self.player.icon_url=f'/api/uploads/player_icons/tournament_{self.champion.id}/player_{self.player.id}.png'
+        self.db.commit()
+        self._put();self.assertTrue(png_path.exists());self.assertTrue(path.exists())
+        main.delete_champion_player_icon(self.champion.id,self.player.id,self.db,self.owner)
+        self.assertFalse(png_path.exists());self.assertFalse(path.exists())
+
+    def test_wrong_tournament_reference_and_paused_writes(self):
+        foreign=f'/api/uploads/player_icons/tournament_{self.other_champion.id}/seed_1.webp'
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(main.update_player_info(self.full.id,1,{'icon_url':foreign},self.db,self.owner))
+        self.assertEqual(raised.exception.status_code,422)
+        with patch.dict(os.environ,{'PLAYER_ICON_WRITES_PAUSED':'1'}):
+            self._assert_status(503,self._put)
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(main.upload_player_icon(self._upload(self._image_bytes('.png'),'image/png'),self.full.id,1,self.db,self.owner))
+            self.assertEqual(raised.exception.status_code,503)
+
+    def test_actual_rgba_upload_preserves_alpha(self):
+        from PIL import Image
+        im=Image.new('RGBA',(32,24));im.putdata([(i%256,80,120,i%256) for i in range(32*24)])
+        stream=BytesIO();im.save(stream,'PNG');self._put(stream.getvalue())
+        path,_=main.champion_player_icon_location(self.champion.id,self.player.id)
+        with Image.open(path) as saved:
+            self.assertEqual(saved.format,'WEBP');self.assertEqual(saved.size,im.size)
+            self.assertEqual(saved.convert('RGBA').getchannel('A').tobytes(),im.getchannel('A').tobytes())
+
+    def test_tournament_deletion_removes_both_formats_only_for_target(self):
+        self._put();self._put(player=self.other_player,tournament=self.other_champion,user=self.other)
+        path,_=main.champion_player_icon_location(self.champion.id,self.player.id)
+        other,_=main.champion_player_icon_location(self.other_champion.id,self.other_player.id)
+        path.with_suffix('.png').write_bytes(self._image_bytes('.png'))
+        from services import upload_cleanup
+        with patch.object(upload_cleanup,'PLAYER_ICONS_DIR',main.PLAYER_ICONS_DIR):
+            main.delete_tournament(self.champion.id,self.db,self.owner)
+        self.assertFalse(path.parent.exists());self.assertTrue(other.exists())
+
+    def test_http_multipart_upload_and_image_response(self):
+        import httpx
+        overrides=dict(main.app.dependency_overrides)
+        main.app.dependency_overrides[main.get_db]=lambda:self.db
+        main.app.dependency_overrides[main.auth_module.get_current_user]=lambda:self.owner
+        main.app.dependency_overrides[main.auth_module.get_current_user_optional]=lambda:self.owner
+        old_upload=main.UPLOAD_DIR
+        with tempfile.TemporaryDirectory() as directory:
+            old_icons=main.PLAYER_ICONS_DIR
+            main.UPLOAD_DIR=directory;main.PLAYER_ICONS_DIR=Path(directory)/'player_icons'
+            async def requests():
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app),base_url="http://test") as client:
+                    response=await client.post('/api/upload/player-icon',data={'tournament_id':self.full.id,'seed_number':44},files={'image':('evil-name.png',self._image_bytes('.png'),'image/png')})
+                    self.assertEqual(response.status_code,200,response.text)
+                    url=response.json()['url'];self.assertTrue(url.endswith('.webp'))
+                    served=await client.get(url);self.assertEqual(served.status_code,200)
+                    self.assertEqual(served.headers['content-type'],'image/webp')
+                    self.assertEqual(served.content[:4],b'RIFF')
+                    response=await client.put(f'/api/tournaments/{self.champion.id}/players/by-id/{self.player.id}/icon',files={'image':('input.webp',self._image_bytes('.webp'),'image/webp')})
+                    self.assertEqual(response.status_code,200,response.text)
+                    self.assertEqual((await client.get(response.json()['icon_url'])).headers['content-type'],'image/webp')
+            try:
+                asyncio.run(requests())
+            finally:
+                main.UPLOAD_DIR=old_upload;main.PLAYER_ICONS_DIR=old_icons
+                main.app.dependency_overrides.clear();main.app.dependency_overrides.update(overrides)
+
+    def test_postgres_migration_commit_failure_retry_and_rollback(self):
+        from scripts import migrate_player_icons as migration
+        from sqlalchemy import event
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);root=base/'uploads'/'player_icons'
+            relative=f'tournament_{self.champion.id}/player_{self.player.id}.png'
+            source=root/relative;source.parent.mkdir(parents=True);source.write_bytes(self._image_bytes('.png'))
+            self.player.icon_url=migration.PREFIX+relative;self.db.commit()
+            backup=base/'backup';migration.backup(engine,root,backup)
+            manifest=migration.verify_backup(root,backup,True)
+            def fail_update(conn,cursor,statement,parameters,context,executemany):
+                if statement.startswith('UPDATE players SET icon_url='):raise RuntimeError('injected')
+            event.listen(engine,'before_cursor_execute',fail_update)
+            try:self.assertEqual(migration.run(engine,root,backup,True)['failed'],1)
+            finally:event.remove(engine,'before_cursor_execute',fail_update)
+            self.assertTrue(source.exists())
+            self.assertEqual(migration.run(engine,root,backup,True)['success'],1)
+            self.assertEqual(migration.run(engine,root,backup,True)['already_webp'],1)
+            self.assertEqual(migration.rollback(engine,root,backup,manifest,True)[0]['status'],'restored')
+
+    def test_lost_commit_ack_keeps_committed_webp_file(self):
+        old_url=f'/api/uploads/player_icons/tournament_{self.champion.id}/player_{self.player.id}.png'
+        self.player.icon_url=old_url;self.db.commit()
+        real_commit=self.db.commit
+        def lost_ack():
+            real_commit()
+            raise RuntimeError('lost acknowledgement')
+        with patch.object(self.db,'commit',side_effect=lost_ack):
+            with self.assertRaises(RuntimeError):self._put()
+        path,new_url=main.champion_player_icon_location(self.champion.id,self.player.id)
+        self.assertTrue(path.exists())
+        self.db.refresh(self.player);self.assertEqual(self.player.icon_url,new_url)
 
 
 if __name__ == "__main__":
