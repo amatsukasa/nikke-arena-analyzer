@@ -26,10 +26,14 @@ test('both Team Search pages use the shared arena display selector', async () =>
   for (const page of [topPage, tournamentPage]) {
     assert.match(page, /<ArenaCharacterDisplaySelect/);
     assert.match(page, /displayMode=\{arenaCharacterDisplay\}/);
+    assert.match(page, /useState<ArenaCharacterDisplayMode>\("only"\)/);
     assert.doesNotMatch(page, /<option value="priority">/);
   }
   assert.match(picker, /export function ArenaCharacterDisplaySelect/);
-  assert.match(picker, /search\.displayArenaPriority/);
+  assert.equal((picker.match(/<option value=/g) ?? []).length, 2);
+  assert.match(picker, /<option value="only">/);
+  assert.match(picker, /<option value="all">/);
+  assert.doesNotMatch(picker, /displayArenaPriority|value="priority"/);
 });
 
 test('localized paths preserve routes and keep Japanese URLs unprefixed', () => {

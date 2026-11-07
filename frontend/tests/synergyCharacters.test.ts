@@ -53,6 +53,7 @@ test("shows only positive count characters, excludes missing usage and 9999, and
       { id: 1, count: 0, player_count: 99 },
       { id: 9999, count: 100 },
     ],
+    "all",
   );
 
   assert.deepEqual(selectable.map((item) => item.character.id), [3, 4, 5]);
@@ -76,6 +77,7 @@ test("groups selectable characters by canonical burst order and Japanese name, n
       { id: 5, count: 1 }, { id: 4, count: 1 }, { id: 3, count: 1 },
       { id: 2, count: 1 }, { id: 1, count: 0 }, { id: 9999, count: 99 },
     ],
+    "all",
   );
   const groups = groupSynergyCharacterOptions(selectable);
   assert.deepEqual(groups.map((group) => group.label), ["Burst: I", "Burst: II", "Burst: III", "Burst: A", "その他"]);

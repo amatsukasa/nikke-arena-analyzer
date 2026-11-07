@@ -59,7 +59,6 @@ export function ArenaCharacterDisplaySelect({
         value={value}
         onChange={(event) => onChange(event.target.value as ArenaCharacterDisplayMode)}
       >
-        <option value="priority">{t('search.displayArenaPriority')}</option>
         <option value="only">{t('search.displayArenaOnly')}</option>
         <option value="all">{t('search.displayAllCharacters')}</option>
       </select>
@@ -73,7 +72,7 @@ export default function SynergyCharacterPicker({
   usageState,
   includedIds,
   excludedIds,
-  displayMode = "priority",
+  displayMode = "only",
   onChange,
 }: {
   characters: SynergyCharacter[];
@@ -91,7 +90,7 @@ export default function SynergyCharacterPicker({
   const options = usageState === "ready"
     ? mapAndSortSelectableSynergyCharacters(characters, characterUsage, displayMode)
     : mapSynergyCharactersWithoutUsage(characters, displayMode);
-  const groups = groupSynergyCharacterOptions(options, displayMode === "priority");
+  const groups = groupSynergyCharacterOptions(options);
 
   const selectableIdsKey = usageState === "ready"
     ? options.map((option) => option.character.id).join(",")

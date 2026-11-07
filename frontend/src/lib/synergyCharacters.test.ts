@@ -25,19 +25,16 @@ const usage = characters.map((character) => ({
 
 function namesFor(mode: ArenaCharacterDisplayMode): string[] {
   const options = mapAndSortSelectableSynergyCharacters(characters, usage, mode);
-  return groupSynergyCharacterOptions(options, mode === "priority")
+  return groupSynergyCharacterOptions(options)
     .flatMap((group) => group.options.map((option) => option.character.name ?? ""));
 }
 
-test("arena priority keeps arena and non-arena groups in Japanese name order", () => {
-  assert.deepEqual(namesFor("priority"), [
-    "アリーナキャラA", "アリーナキャラB", "ナユタ",
-    "アイギス", "通常エマ", "非アリーナキャラC",
-  ]);
-});
-
 test("arena only excludes non-arena and zero-usage characters", () => {
   assert.deepEqual(namesFor("only"), ["アリーナキャラA", "アリーナキャラB", "ナユタ"]);
+  assert.deepEqual(
+    mapAndSortSelectableSynergyCharacters(characters, usage).map((option) => option.character.id),
+    [3, 2, 1],
+  );
 });
 
 test("all ignores arena relevance and sorts every used character by name", () => {
@@ -65,6 +62,10 @@ test("arena-only filtering can rely on Character metadata before usage loads", (
   const withEmpty = [...characters, { id: 9999, name: "空き枠", is_arena_relevant: true }];
   assert.deepEqual(
     mapSynergyCharactersWithoutUsage(withEmpty, "only").map((option) => option.character.id),
+    [1, 2, 3, 7],
+  );
+  assert.deepEqual(
+    mapSynergyCharactersWithoutUsage(withEmpty).map((option) => option.character.id),
     [1, 2, 3, 7],
   );
   assert.equal(mapSynergyCharactersWithoutUsage(withEmpty, "all").length, characters.length);
