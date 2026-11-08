@@ -229,4 +229,99 @@ class MigrationTests(unittest.TestCase):
         finally:event.remove(self.engine,'before_cursor_execute',count)
 
 
+    def add_icons(self, count):
+        for i in range(2, count+1):
+            (self.source.parent/f'seed_{i}.png').write_bytes(png((40,40)))
+            with self.engine.begin() as c:
+                c.execute(text('INSERT INTO players VALUES (:id,1,:url)'),
+                          dict(id=i,url=migration.PREFIX+f'tournament_1/seed_{i}.png'))
+
+    def test_paged_migrate_passes_a_full_page_of_failures_and_retries_them(self):
+        self.add_icons(5); self.prepare()
+        originals={}
+        for i in (1,2,4):
+            path=self.source.parent/f'seed_{i}.png'; originals[i]=path.read_bytes(); path.write_bytes(b'broken')
+        first=migration.run(self.engine,self.root,self.backup,True,limit=2,paged=True)
+        self.assertEqual(first['failed'],2); self.assertEqual(first['next_after_id'],2)
+        second=migration.run(self.engine,self.root,self.backup,True,limit=2,after_id=first['next_after_id'],paged=True)
+        self.assertEqual((second['success'],second['failed']),(1,1)); self.assertEqual(second['next_after_id'],4)
+        third=migration.run(self.engine,self.root,self.backup,True,limit=2,after_id=4,paged=True)
+        self.assertEqual(third['success'],1); self.assertTrue(third['exhausted'])
+        for i,data in originals.items(): (self.source.parent/f'seed_{i}.png').write_bytes(data)
+        retry=migration.run(self.engine,self.root,self.backup,True,limit=10,paged=True)
+        self.assertEqual((retry['success'],retry['already_webp'],retry['failed']),(3,2,0))
+
+    def test_paged_cleanup_passes_skipped_page_without_deleting_it(self):
+        self.add_icons(4); manifest=self.prepare();migration.run(self.engine,self.root,self.backup,True)
+        for i in (1,2): (self.source.parent/f'seed_{i}.png').write_bytes(b'new content')
+        first=migration.cleanup(self.engine,self.root,self.backup,manifest,True,limit=2)
+        self.assertTrue(all(x['status']=='skipped' for x in first))
+        second=migration.cleanup(self.engine,self.root,self.backup,manifest,True,limit=2,after_source=first[-1]['source'])
+        self.assertEqual([x['status'] for x in second],['deleted','deleted'])
+        for i in (1,2): self.assertEqual((self.source.parent/f'seed_{i}.png').read_bytes(),b'new content')
+
+    def test_paged_rollback_passes_unrecoverable_page_and_preserves_new_images(self):
+        self.add_icons(4);manifest=self.prepare();migration.run(self.engine,self.root,self.backup,True)
+        for i in (1,2): (self.source.parent/f'seed_{i}.webp').write_bytes(b'new content')
+        first=migration.rollback(self.engine,self.root,self.backup,manifest,True,limit=2)
+        self.assertTrue(all(x['status']=='skipped' for x in first))
+        second=migration.rollback(self.engine,self.root,self.backup,manifest,True,limit=2,after_id=first[-1]['id'])
+        self.assertEqual([x['status'] for x in second],['restored','restored'])
+        current={r['id']:r['icon_url'] for r in migration.rows(self.engine)}
+        self.assertTrue(current[1].endswith('.webp')); self.assertTrue(current[4].endswith('.png'))
+
+    def test_capacity_stop_keeps_cursor_before_failed_image(self):
+        self.prepare()
+        result=migration.run(self.engine,self.root,self.backup,True,max_retained=1,paged=True)
+        self.assertTrue(result['stopped_for_capacity']); self.assertEqual(result['next_after_id'],0)
+        self.assertFalse(result['exhausted']);self.assertEqual(self.row()['icon_url'],self.url)
+
+    def test_cleanup_and_rollback_refuse_changed_tournament(self):
+        manifest=self.prepare();migration.run(self.engine,self.root,self.backup,True)
+        with self.engine.begin() as c: c.execute(text('UPDATE players SET tournament_id=2'))
+        self.assertEqual(migration.cleanup(self.engine,self.root,self.backup,manifest,True)[0]['status'],'skipped')
+        self.assertEqual(migration.rollback(self.engine,self.root,self.backup,manifest,True)[0]['status'],'skipped')
+        self.assertTrue(self.source.exists())
+
+    def test_paged_dry_runs_do_not_write_files_or_database(self):
+        self.add_icons(3);manifest=self.prepare();migration.run(self.engine,self.root,self.backup,True)
+        before={str(p.relative_to(self.base)):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        migration.run(self.engine,self.root,limit=1,after_id=1,paged=True)
+        migration.cleanup(self.engine,self.root,self.backup,manifest,after_source='tournament_1/seed_1.png')
+        migration.rollback(self.engine,self.root,self.backup,manifest,after_id=1)
+        after={str(p.relative_to(self.base)):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        self.assertEqual(before,after)
+
+
+
+    def test_cli_paging_output_and_delete_approval_guard(self):
+        import json, os, subprocess, sys
+        self.add_icons(4); self.prepare()
+        for i in (1,2): (self.source.parent/f'seed_{i}.png').write_bytes(b'broken')
+        env=dict(os.environ,ICON_MIGRATION_DATABASE_URL=str(self.engine.url))
+        def cli(action,*args):
+            return subprocess.run([sys.executable,'-B',migration.__file__,action,'--root',str(self.root),
+                                   '--backup-dir',str(self.backup),'--limit','2',*args],
+                                  env=env,text=True,capture_output=True)
+        first=cli('migrate');self.assertEqual(first.returncode,2)
+        page=json.loads(first.stdout);self.assertEqual(page['next_after_id'],2)
+        second=cli('migrate','--after-id',str(page['next_after_id']))
+        self.assertEqual(second.returncode,0);self.assertEqual(json.loads(second.stdout)['success'],2)
+        for i in (1,2): (self.source.parent/f'seed_{i}.png').write_bytes(png() if i==1 else png((40,40)))
+        migration.run(self.engine,self.root,self.backup,True)
+        denied=cli('cleanup','--execute','--maintenance-confirmed','--backup-export-confirmed')
+        self.assertEqual(denied.returncode,2);self.assertIn('--approve-delete',denied.stderr)
+        self.assertTrue(self.source.exists())
+        for i in (1,2): (self.source.parent/f'seed_{i}.png').write_bytes(b'new content')
+        first=cli('cleanup');self.assertEqual(first.returncode,2)
+        page=json.loads(first.stdout);self.assertEqual(page['skipped'],2)
+        second=cli('cleanup','--after-source',page['next_after_source'])
+        self.assertEqual(second.returncode,0)
+        self.assertEqual([r['status'] for r in json.loads(second.stdout)['items']],['would_delete','would_delete'])
+        first=cli('rollback');self.assertEqual(first.returncode,2)
+        second=cli('rollback','--after-id',str(json.loads(first.stdout)['next_after_id']))
+        self.assertEqual(second.returncode,0)
+        self.assertEqual([r['status'] for r in json.loads(second.stdout)['items']],['would_restore','would_restore'])
+
+
 if __name__=='__main__': unittest.main()

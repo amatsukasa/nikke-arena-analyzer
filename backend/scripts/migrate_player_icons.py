@@ -222,19 +222,20 @@ def migrate_one(engine, root, row, directory, manifest, execute=False,
     return dict(status='migrated', **details)
 
 
-def cleanup(engine, root, directory, manifest, execute=False, limit=100):
+def cleanup(engine, root, directory, manifest, execute=False, limit=100, after_source=""):
     # Hold the shared writer lock for one bounded batch and take one DB snapshot.
     with icon_mutation_lock(root) if execute else nullcontext():
-        return _cleanup_batch(engine, root, directory, manifest, execute, limit)
+        return _cleanup_batch(engine, root, directory, manifest, execute, limit, after_source)
 
 
-def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100):
+def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100, after_source=""):
     current = rows(engine)
     owners = {row['id']: row for row in current}
     references = set()
     for row in current:
         if row['icon_url'].startswith(PREFIX):
-            references.add(relative_url(row['icon_url'], row['tournament_id']))
+            # Preserve even malformed ownership references conservatively.
+            references.add(row['icon_url'][len(PREFIX):].partition('?')[0])
     extra = additional_references(engine)
     logfile = directory / 'migration.jsonl'
     entries = {}
@@ -247,7 +248,9 @@ def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100):
         except (ValueError, KeyError):
             raise ValueError("Invalid journal; review before cleanup")
     results = []
-    for entry in entries.values():
+    for source_key, entry in sorted(entries.items()):
+        if source_key <= after_source:
+            continue
         if len(results) >= limit:
             break
         try:
@@ -262,7 +265,7 @@ def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100):
                 if entry['source'] in extra:
                     raise ValueError('PNG has a legacy deck reference')
                 owner = owners.get(entry['id'])
-                if not owner or owner['icon_url'] != entry['new_url']:
+                if not owner or owner['icon_url'] != entry['new_url'] or owner['tournament_id'] != int(NAME.fullmatch(entry['source']).group(1)):
                     raise ValueError('Current DB URL differs')
                 if entry['source'] in references:
                     raise ValueError('PNG is still referenced')
@@ -279,15 +282,17 @@ def _cleanup_batch(engine, root, directory, manifest, execute=False, limit=100):
                 source = check()
             results.append(dict(id=entry['id'], source=entry['source'], bytes=entry['before'], status='deleted' if execute else 'would_delete'))
         except Exception as exc:
-            results.append(dict(id=entry.get('id'), status='skipped', reason=type(exc).__name__))
+            results.append(dict(id=entry.get('id'), source=entry['source'], status='skipped', reason=type(exc).__name__))
     return results
 
 
-def rollback(engine, root, directory, manifest, execute=False, limit=100):
+def rollback(engine, root, directory, manifest, execute=False, limit=100, after_id=0):
     """Restore only unchanged migrated refs; never revert newer user uploads."""
     current = {r['id']: r for r in rows(engine)}
     result = []
-    for old in manifest['players']:
+    for old in sorted(manifest['players'], key=lambda row: row['id']):
+        if old['id'] <= after_id:
+            continue
         if len(result) >= limit:
             break
         try:
@@ -298,6 +303,8 @@ def rollback(engine, root, directory, manifest, execute=False, limit=100):
             now = current.get(old['id'])
             if not now or now['icon_url'] != PREFIX+target_relative:
                 continue
+            if now['tournament_id'] != old['tournament_id']:
+                raise ValueError('Player ownership changed')
             entries = []
             logfile = directory / 'migration.jsonl'
             for line in logfile.read_text(encoding='utf-8').splitlines() if logfile.exists() else []:
@@ -321,8 +328,8 @@ def rollback(engine, root, directory, manifest, execute=False, limit=100):
                 with icon_mutation_lock(root):
                     with engine.begin() as c:
                         suffix = ' FOR UPDATE' if engine.dialect.name == 'postgresql' else ''
-                        value = c.execute(text('SELECT icon_url FROM players WHERE id=:id'+suffix),dict(id=old['id'])).scalar()
-                        if value != now['icon_url']:
+                        value = c.execute(text('SELECT icon_url,tournament_id FROM players WHERE id=:id'+suffix),dict(id=old['id'])).mappings().first()
+                        if not value or value['icon_url'] != now['icon_url'] or value['tournament_id'] != old['tournament_id']:
                             raise ValueError('Concurrent DB update detected')
                         check()
                         if not source.exists():
@@ -345,15 +352,15 @@ def rollback(engine, root, directory, manifest, execute=False, limit=100):
 
 
 def run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
-        after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024):
+        after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024, paged=False):
     # Bounded by limit; never cache a capacity estimate across unlocked batches.
     with icon_mutation_lock(root) if execute else nullcontext():
         return _run(engine, root, directory, execute, limit, batch_size,
-                    after_id, min_free, max_retained)
+                    after_id, min_free, max_retained, paged)
 
 
 def _run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
-        after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024):
+        after_id=0, min_free=64*1024*1024, max_retained=32*1024*1024, paged=False):
     root = Path(root).resolve()
     all_rows = rows(engine)
     files = inventory(root)
@@ -366,10 +373,12 @@ def _run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
     manifest = verify_backup(root, directory) if execute else None
     capacity_state = dict(retained=retained_bytes(root)) if execute else None
     selected = sorted([r for r in all_rows if r['id'] > after_id],
-                      key=lambda r: (r['icon_url'].partition('?')[0].endswith('.webp'), r['id']))[:limit]
+                      key=(lambda r: r['id']) if paged else
+                      (lambda r: (r['icon_url'].partition('?')[0].endswith('.webp'), r['id'])))[:limit]
     report = dict(mode='execute' if execute else 'dry-run', processed=0, success=0,
                   failed=0, already_webp=0, before=0, after=0,
-                  unreferenced_png=sorted(set(files)-referenced), items=[])
+                  unreferenced_png=sorted(set(files)-referenced), items=[],
+                  next_after_id=after_id, exhausted=not selected)
     for offset in range(0, len(selected), batch_size):
         for row in selected[offset:offset+batch_size]:
             try:
@@ -387,12 +396,16 @@ def _run(engine, root, directory=None, execute=False, limit=100, batch_size=25,
                 if type(exc) is ValueError:
                     result['detail'] = str(exc)
                 report['failed'] += 1
+            result.setdefault('id', row['id'])
             if 'old_url' in result and '?' in result['old_url']:
                 result = dict(result, old_url=result['old_url'].partition('?')[0]+'?[redacted]')
             report['items'].append(result); report['processed'] += 1
             if result.get('detail', '').startswith(('Insufficient free space', 'Retained double-storage')):
                 report['stopped_for_capacity'] = True
+                report['exhausted'] = False
                 return report
+            report['next_after_id'] = row['id']
+    report['exhausted'] = not any(r['id'] > report['next_after_id'] for r in all_rows) if paged else len(selected) < limit
     return report
 
 
@@ -407,10 +420,17 @@ def main():
     p.add_argument('--approve-delete', action='store_true', help='Separate operator approval for PNG deletion')
     p.add_argument('--limit', type=int, default=100)
     p.add_argument('--batch-size', type=int, default=25)
-    p.add_argument('--after-id', type=int, default=0)
+    p.add_argument('--after-id', type=int, default=0, help='Resume migrate/rollback after the reported player ID')
+    p.add_argument('--after-source', default='', help='Resume cleanup after the reported source path')
     p.add_argument('--min-free-mib', type=int, default=64)
     p.add_argument('--max-retained-mib', type=int, default=32)
     args = p.parse_args()
+    if args.after_id < 0:
+        p.error('--after-id must be nonnegative')
+    if args.after_source and (args.action != 'cleanup' or not NAME.fullmatch(args.after_source)):
+        p.error('--after-source requires cleanup and a canonical icon path')
+    if args.action == 'cleanup' and args.after_id:
+        p.error('cleanup uses --after-source, not --after-id')
     if args.limit < 1 or args.batch_size < 1 or args.min_free_mib < 1 or args.max_retained_mib < 1:
         p.error('Limits must be positive')
     if args.execute and not args.backup_dir:
@@ -434,18 +454,24 @@ def main():
                     mode='dry-run', files=len(inventory(args.root)), players=len(rows(engine)))
             elif args.action == 'rollback':
                 manifest = verify_backup(args.root.resolve(), args.backup_dir)
-                result = rollback(engine, args.root.resolve(), args.backup_dir, manifest, args.execute, args.limit)
+                result = rollback(engine, args.root.resolve(), args.backup_dir, manifest, args.execute, args.limit, args.after_id)
             elif args.action == 'cleanup':
                 if args.execute and not args.approve_delete:
                     p.error('PNG deletion requires --execute --approve-delete after user approval')
                 manifest = verify_backup(args.root.resolve(), args.backup_dir)
-                result = cleanup(engine, args.root.resolve(), args.backup_dir, manifest, args.execute, args.limit)
+                result = cleanup(engine, args.root.resolve(), args.backup_dir, manifest, args.execute, args.limit, args.after_source)
             else:
                 result = run(engine, args.root, args.backup_dir, args.execute, args.limit, args.batch_size,
-                             args.after_id, args.min_free_mib*1024*1024, args.max_retained_mib*1024*1024)
-        print(json.dumps(result, ensure_ascii=True, indent=2))
+                             args.after_id, args.min_free_mib*1024*1024, args.max_retained_mib*1024*1024, paged=True)
         if isinstance(result, list):
-            return 2 if any(item.get('status') == 'skipped' for item in result) else 0
+            items = result
+            cursor_key = 'next_after_source' if args.action == 'cleanup' else 'next_after_id'
+            cursor = (items[-1]['source'] if args.action == 'cleanup' else items[-1]['id']) if items else None
+            result = dict(items=items, processed=len(items), skipped=sum(x['status'] == 'skipped' for x in items),
+                          exhausted=len(items) < args.limit, **{cursor_key: cursor})
+            print(json.dumps(result, ensure_ascii=True, indent=2))
+            return 2 if result['skipped'] else 0
+        print(json.dumps(result, ensure_ascii=True, indent=2))
         return 2 if result.get('failed') else 0
     except Exception as exc:
         print(json.dumps(dict(error=type(exc).__name__, message='Operation stopped; inspect configuration, backup and conflicts locally.')))
