@@ -1,3 +1,12 @@
+> 2026-11-09 更新: 本番操作は新しい `player-icon-webp-beginner-runbook.md` を先に参照。
+> CLIはID順（migrate/rollback）、原本パス辞書順（cleanup）の明示ページングになった。
+> migrate/rollbackは出力next_after_idを--after-idへ、cleanupはnext_after_sourceを--after-sourceへ指定する。
+> cleanup/rollbackのCLI出力は配列からitems等を持つJSONオブジェクトへ変更。同じコマンドの単純反復で全件処理を保証しない。
+> 走査末尾exhaustedと全失敗解消を区別し、容量停止では失敗位置を飛ばさない。
+> 新しいcleanup走査（新規移行後）は空の--after-sourceから開始する。
+> ユーザーの表示・画質・アップロード受け入れは合格済み。本番移行・削除・復元は未実施。
+> PRマージで自動デプロイされるため、書き込み停止と外部バックアップ・実復元検証が整う前にマージしない。
+
 # プレイヤーアイコン WebP 品質80 移行手順
 
 この文書は本番実行を許可するものではない。各本番操作は事前承認後に実施する。
@@ -35,8 +44,8 @@ DBの例外は接続情報漏洩を避けるため型のみを報告する。
 - migrate / cleanup / rollback の実行には `--backup-export-confirmed` も必要
 - migrate: `--limit 100`、`--batch-size 25` が既定。DBコミットは1画像単位。
 - cleanup / rollback も --limit（既定100件）で対象を区切る。cleanupは削除済み原本をスキップして次へ進む。
-- 再実行は未移行PNGを優先するため、同じコマンドで次の少量バッチへ進める。
-- `--after-id N` は明示的な対象絞り込み。通常の再開に必須ではない。
+- 再実行は未移行PNGを優先するため、CLIでは出力カーソルを指定して次の少量バッチへ進める。
+- `--after-id N` は明示的な対象絞り込み。新しいCLIのID順走査では再開時に出力next_after_idを指定する。
 - `--min-free-mib 64`、`--max-retained-mib 32` が既定。
   旧PNGとWebPが併存する分のWebP容量を最大32MiBに制限する。原本サイズ分の二重保存はしない。
   容量上限に達したら失敗としてスキップし、旧PNG削除のレビュー・承認後に再開する。
@@ -126,7 +135,7 @@ DBコミット直後に停止しても、事前にfsyncしたintentと現状照�
 
 ### 4. 残りをバッチ移行
 
-同じexecuteコマンドを --limit 100 --batch-size 25 などで繰り返す。
+executeの出力next_after_idを--after-idへ指定し、--limit 100 --batch-size 25などで進める。
 全件を指定しても空き容量・併存予算のチェックは残るが、運用上は少量ずつ確認する。
 各バッチのJSONと migration.jsonl をVolume外の耐久性のある保管先へ退避する。
 変換後もPNGを保持するため、275MB分の原本をもう一組Volumeへ作ることはない。
