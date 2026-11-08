@@ -3,7 +3,11 @@ import numpy as np
 import os
 import pytesseract
 import secrets
+import logging
+
 from services.collection_classifier import analyze_collection
+
+logger = logging.getLogger(__name__)
 
 
 PREVIEW_WEBP_QUALITY = 55
@@ -86,8 +90,14 @@ def _find_round_tab_anchor(normalized_modal):
         cv2.CHAIN_APPROX_SIMPLE,
     )
     modal_height = normalized_modal.shape[0]
-    y_limit = int(modal_height * 0.17)
-    valid = [contour for contour in contours if cv2.boundingRect(contour)[1] < y_limit]
+    y_limit = int(modal_height * 0.35)
+    valid = []
+    for contour in contours:
+        x, y, width, height = cv2.boundingRect(contour)
+        if y < y_limit and _is_alignment_anchor_reliable(
+            width, height, cv2.contourArea(contour), modal_height
+        ):
+            valid.append(contour)
     if not valid:
         return 400, 540, False
     contour = max(valid, key=cv2.contourArea)
@@ -105,7 +115,10 @@ def _find_character_card_centers(normalized_modal, global_shift, fallback_center
     """Use the five ROUND tab bounds as the five character-column centers."""
     gray = cv2.cvtColor(normalized_modal, cv2.COLOR_BGR2GRAY)
     height = normalized_modal.shape[0]
-    tab_band = gray[:int(height * 0.22)]
+    y_tab, _, reliable = _find_round_tab_anchor(normalized_modal)
+    # Preserve legacy grid-only callers; real uploads require a reliable anchor.
+    band_end = min(height, y_tab + 110) if reliable else int(height * 0.22)
+    tab_band = gray[:band_end]
     if tab_band.size == 0:
         return fallback_centers, False
 
@@ -121,7 +134,7 @@ def _find_character_card_centers(normalized_modal, global_shift, fallback_center
         if (
             0.14 * NORMALIZED_MODAL_WIDTH <= width <= 0.22 * NORMALIZED_MODAL_WIDTH
             and 0.08 * height <= tab_height <= 0.20 * height
-            and y < 0.17 * height
+            and (abs(y - y_tab) <= 8 if reliable else y < 0.17 * height)
         ):
             candidates.append((x, x + width, x + width / 2))
 
@@ -208,7 +221,7 @@ def process_images(
     for image_index, path in enumerate(image_paths):
         img = cv2.imread(path)
         if img is None:
-            continue
+            raise ValueError("画像を読み込めません")
             
         # --- モーダルウィンドウ（白い背景領域）の精密検出プロセス ---
         # 切り出し済み画像は全体をモーダルとして扱い、二重切り出しを防ぐ。
@@ -234,6 +247,13 @@ def process_images(
             _find_round_tab_anchor(img_res)
         )
             
+        if not alignment_anchor_is_reliable:
+            logger.warning("deck_layout_rejected image_index=%d reason=round_tab", image_index)
+            raise ValueError("ROUNDタブを検出できません。対応する編成画像を指定してください")
+        if y_anchor_tab + 360 > img_res.shape[0]:
+            raise ValueError("キャラクター領域が画像の範囲外です")
+        logger.info("deck_layout image_index=%d width=1080 height=%d tab_y=%d tab_x=%d",
+                    image_index, img_res.shape[0], y_anchor_tab, x_anchor_tab)
         rounds_data.append({
             "path": path, 
             "img": img_res, 
