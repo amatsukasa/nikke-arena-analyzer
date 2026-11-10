@@ -1,5 +1,7 @@
 # 初心者向け：既存PNGを安全にWebPへ移行する手順
 
+> 2026-11-10: 現段階では本番接続・バックアップ・デプロイ・移行を行わない。まず `player-icon-webp-investigation-preflight.md` の「第1段階」だけを実行し、結果確認後に次の1段階を案内する。以下は将来の各段階の参照資料であり、全ブロックを一括貼り付けしない。
+
 この手順は「準備・確認→人が承認→次へ」の順で使います。一括実行しないでください。
 **現在は本番未確認・未実行です。本書だけを根拠にマージ／移行／削除しないでください。**
 ユーザーのWebP表示・画質・アップロード受け入れは合格済みですが、本番データの復元成功とは別です。
@@ -33,7 +35,8 @@ $SshTarget = Read-Host '本番バックエンドのSSHドメインまたはServi
 $BackupDir = Read-Host '外部退避先の新規Windowsフォルダー絶対パス'
 if (-not [IO.Path]::IsPathRooted($BackupDir) -or (Test-Path -LiteralPath $BackupDir)) { throw '新規の絶対パスを指定してください' }
 New-Item -ItemType Directory -Path $BackupDir
-railway ssh --project $Project --environment $Environment --service $Service
+# STOP: 今は接続しない。接続先・鍵・権限を別段階で確認し、接続を明示許可してから:
+# railway ssh --project $Project --environment $Environment --service $Service
 ```
 
 **成功表示**：選んだ本番バックエンドのLinuxプロンプト。
@@ -46,7 +49,7 @@ railway ssh --project $Project --environment $Environment --service $Service
 **場所**：Windowsでツールだけを転送、Railwayで画像・DBを読み取り。
 **コマンド**：旧本番コードには新ツールがないため、PRマージせず、レビューしたツールを/tmpへ置きます。稼働アプリを置換しません。
 
-Windows（別のPowerShell。準備カードの変数があるウィンドウを使う）：
+Windows（準備カードの変数を設定した同じPowerShell。別ウィンドウに変数は自動継承されません）：
 
 ```powershell
 $ToolsTar = Join-Path $BackupDir 'reviewed-tools.tar'
@@ -75,19 +78,35 @@ command -v findmnt >/dev/null && findmnt -T "$UPLOAD_ROOT"
 command -v findmnt >/dev/null && findmnt -T "$WORK"
 # DATABASE_URLが管理画面で照合した目的のDBであることを確認してから設定。
 export ICON_MIGRATION_DATABASE_URL="$DATABASE_URL"
-# 表示されたDB名・ユーザー・サーバー情報を、管理画面と照合する。
-PYTHONPATH="$WORK/tools/backend" python - <<'PY'
-import os
+# 接続許可後の別段階でのみ実施。期待値は管理画面から自分で照合し、非表示入力。
+# DB URL・ホスト・ユーザー名・内部IP・例外詳細を表示しない。
+PYTHONPATH="$WORK/tools/backend" python -B - <<'PY'
+import os, sys, getpass
 from sqlalchemy import create_engine, text
 from database_safety import normalize_postgresql_driver_url
-engine=create_engine(normalize_postgresql_driver_url(os.environ['ICON_MIGRATION_DATABASE_URL']))
-with engine.connect() as c:
-    c.execute(text('SET TRANSACTION READ ONLY'))
-    print('DB_IDENTITY', tuple(c.execute(text('SELECT current_database(),current_user,inet_server_addr()')).one()))
-    for table in ('players','characters'):
-        print(table, c.execute(text('SELECT count(*) FROM '+table)).scalar())
-    print('icon_references',c.execute(text('SELECT count(*) FROM players WHERE icon_url IS NOT NULL')).scalar())
-engine.dispose()
+engine=None
+try:
+    engine=create_engine(normalize_postgresql_driver_url(os.environ['ICON_MIGRATION_DATABASE_URL']))
+    # 非対話シェルの入力エコーへfallbackさせない。
+    tty=os.open('/dev/tty',os.O_RDWR); os.close(tty)
+    expected_host=getpass.getpass('管理画面で確認したDBホスト（非表示）: ')
+    expected_db=getpass.getpass('管理画面で確認したDB名（非表示）: ')
+    expected_user=getpass.getpass('管理画面で確認したDBユーザー（非表示）: ')
+    if (engine.url.host,engine.url.database,engine.url.username)!=(expected_host,expected_db,expected_user):
+        raise ValueError('target mismatch')
+    with engine.connect() as c:
+        c.execute(text('SET TRANSACTION READ ONLY'))
+        actual=c.execute(text('SELECT current_database(),current_user')).one()
+        if tuple(actual)!=(expected_db,expected_user): raise ValueError('identity mismatch')
+        print('DB_TARGET_MATCH')
+        for table in ('players','characters'):
+            print(table+'_count',c.execute(text('SELECT count(*) FROM '+table)).scalar())
+        print('icon_reference_count',c.execute(text('SELECT count(*) FROM players WHERE icon_url IS NOT NULL')).scalar())
+except Exception:
+    print('DB_CHECK_FAILED: 停止。接続先・認証・権限を手元だけで確認してください')
+    sys.exit(2)
+finally:
+    if engine is not None: engine.dispose()
 PY
 python -B "$WORK/tools/backend/scripts/audit_storage.py" --root "$UPLOAD_ROOT"
 ```
@@ -147,18 +166,27 @@ Get-FileHash -Algorithm SHA256 (Join-Path $LocalWork 'database.dump'),(Join-Path
 Get-Content (Join-Path $LocalWork 'transfer.sha256')
 # DBメジャーバージョンは管理画面/pg_dumpのバージョンから確認。同じか対応する新しい検証用イメージを指定。
 $PgImage = Read-Host '確認済み検証用PostgreSQLイメージ（例示値でなく実際の適合版）'
-$RestoreDb = 'nikke-webp-restore-' + (Get-Date -Format yyyyMMddHHmmss)
-docker run -d --name $RestoreDb --network none -e POSTGRES_PASSWORD=restore-local-only -e POSTGRES_DB=restore_check $PgImage
+$LocalWork = (Resolve-Path -LiteralPath $LocalWork).ProviderPath
+if ($LocalWork.Contains(',')) { throw 'Docker --mount用パスにカンマを含めないでください' }
+$Stamp = Get-Date -Format yyyyMMddHHmmss
+$RestoreDb = 'nikke-webp-restore-' + $Stamp
+$RestoreVolume = 'nikke-webp-restore-data-' + $Stamp
+# DB領域を明示し、本番・既存DBのVolumeを一切指定しない。
+docker volume create $RestoreVolume
+docker run -d --name $RestoreDb --network none --mount "type=volume,source=$RestoreVolume,target=/restore-pgdata" -e PGDATA=/restore-pgdata -e POSTGRES_PASSWORD=restore-local-only -e POSTGRES_DB=restore_check $PgImage
 docker exec $RestoreDb pg_isready -U postgres -d restore_check
 # accepting connectionsになるまで待つ。ready前に次へ進まない。
 docker cp (Join-Path $LocalWork 'database.dump') "${RestoreDb}:/tmp/database.dump"
 docker exec $RestoreDb pg_restore -U postgres -d restore_check --no-owner --no-privileges --exit-on-error /tmp/database.dump
 docker exec $RestoreDb psql -U postgres -d restore_check -c 'SELECT count(*) FROM players; SELECT count(*) FROM characters; SELECT count(*) FROM players WHERE icon_url IS NOT NULL;'
 # 全画像を別の一時コンテナへ展開し、元ファイルの全ハッシュを検証。
+# /restoreのtmpfsはRAMを使用する。実データが収まる容量を確認できなければ停止し、専用ローカルディスク領域での検証を担当者が準備する。
 docker run --rm --network none --mount "type=bind,source=$LocalWork,target=/backup,readonly" --tmpfs /restore alpine:latest sh -c 'cd /restore && tar -xf /backup/uploads-before.tar && sha256sum -c /backup/uploads-files.sha256 >/tmp/check.log && echo FULL_IMAGES_RESTORE_OK'
 # アイコン用manifestもWindows側の読み取り専用コピーで再検証。イメージ名はローカルで作成した検証イメージ。
 docker run --rm --network none --mount "type=bind,source=$LocalWork,target=/backup,readonly" --mount "type=bind,source=$Repo/backend,target=/code,readonly" -e PYTHONPATH=/code -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python nikke-webp-acceptance-backend -B /code/scripts/migrate_player_icons.py verify-backup --root /tmp/restore-source/uploads/player_icons --backup-dir /backup/icon-backup
 ```
+
+ローカル検証時のイメージはpostgres:15、alpine:latest、nikke-webp-acceptance-backend（Linux/amd64）。本番DBのメジャーバージョンは未確認。pg_dump/pg_restoreの互換性は実際の版で別途確認する。ローカルのバックエンドイメージにはpg_dumpがなく、本番にもあるとは仮定しない。なければBを停止し、バックアップ取得環境を先に設計する。
 
 **成功表示**：DB_DUMP_OK、backed_up/verified件数一致、ファイルハッシュ一致、pg_restore終了コード0、FULL_IMAGES_RESTORE_OK、外部コピーのverified件数一致。
 **停止条件**：コマンド失敗、容量不足、DB復元エラー、件数未照合、ハッシュ不一致、画像復元未確認、バックアップ場所が同じVolume、外部PCへの転送未完了。**1つでもあればC～Fは禁止**。
