@@ -9,10 +9,21 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const token = request.cookies.get('auth_token')?.value;
     const res = await fetch(`${BACKEND_URL}/api/uploads/${filePath}`, {
       method: 'GET',
+      redirect: 'manual',
       cache: 'no-store',
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     
+    if (res.status === 307) {
+      const location = res.headers.get('location') || '';
+      if (!/^\/api\/uploads\/player_icons\/tournament_\d+\/(?:seed|player)_\d+\.webp$/.test(location)) {
+        return new NextResponse('Invalid image redirect', { status: 502 });
+      }
+      return NextResponse.redirect(new URL(location, request.url), {
+        status: 307,
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' },
+      });
+    }
     if (!res.ok) {
       return new NextResponse('File not found', { status: res.status });
     }
