@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-react";
 import Link from "../../../components/LocalizedLink";
+import ArenaPhaseRegistration from "../../../components/ArenaPhaseRegistration";
 import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
 import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
 import DeckRegistrationViewport from "../../../components/DeckRegistrationViewport";
@@ -64,6 +65,10 @@ export default function TournamentDetailRouter() {
   }
   if (loadError || !tournament) {
     return <main className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-red-300">{loadError || t('tournament.notFound')}</div></main>;
+  }
+  if (tournament.deck_registration_phases) {
+    const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by));
+    return <ArenaPhaseRegistration tournamentId={tournament.id} canEdit={canEdit} published={tournament.publication_status === "published"} />;
   }
   if (tournament.registration_scope === "champion_8") {
     const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));

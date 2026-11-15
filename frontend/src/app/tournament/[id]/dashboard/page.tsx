@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "../../../../components/LocalizedLink";
+import ArenaPhaseRegistration from "../../../../components/ArenaPhaseRegistration";
 import PaginatedTeamList from "../../../../components/PaginatedTeamList";
 import SharedTeamDisplay from "../../../../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
@@ -31,7 +32,7 @@ const TOURNAMENT_TABS = new Set<DashboardTab>([
   "best8",
 ]);
 
-export default function Dashboard() {
+function LegacyDashboard() {
   const { t } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -2202,4 +2203,28 @@ export default function Dashboard() {
       )}
     </main>
   );
+}
+
+
+export default function TournamentDashboardRouter() {
+  const { id } = useParams();
+  const search = useSearchParams();
+  const { t } = useI18n();
+  const [tournament, setTournament] = useState<{ id: number; deck_registration_phases: boolean } | null>(null);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    setTournament(null); setError(false);
+    fetch(`/api/tournaments/${id}`, { cache: "no-store", signal: controller.signal }).then(async response => {
+      if (!response.ok) throw new Error();
+      setTournament(await response.json());
+    }).catch(e => { if (e.name !== "AbortError") setError(true); });
+    return () => controller.abort();
+  }, [id]);
+  if (error) return <p role="alert">{t("arenaPhases.error")}</p>;
+  if (!tournament) return <p>{t("arenaPhases.loading")}</p>;
+  if (!tournament.deck_registration_phases) return <LegacyDashboard />;
+  const initialDetails = search.get("initial_details") === "1";
+  return <><div className="mx-auto max-w-7xl p-4"><Link className="text-blue-300" href={`/tournament/${tournament.id}/dashboard${initialDetails ? "" : "?initial_details=1"}`}>{t(initialDetails ? "arenaPhases.title" : "arenaPhases.initialDetails")}</Link>{initialDetails && <p>{t("arenaPhases.top8Notice")}</p>}</div>{initialDetails ? <LegacyDashboard /> : <ArenaPhaseRegistration tournamentId={tournament.id} />}</>;
+
 }

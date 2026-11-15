@@ -16,6 +16,7 @@ export interface TournamentSummary {
   provider_game_start_date: string | null;
   game_start_date: string | null;
   display_order: number | null;
+  deck_registration_phases?: boolean;
   is_champion_arena: boolean;
   has_match_data: boolean;
 }
@@ -68,6 +69,7 @@ export function normalizeTournament(value: Partial<TournamentSummary> & Pick<Tou
     provider_game_start_date: value.provider_game_start_date ?? null,
     game_start_date: value.game_start_date ?? null,
     display_order: value.display_order ?? null,
+    deck_registration_phases: value.deck_registration_phases ?? false,
     is_champion_arena: value.is_champion_arena ?? false,
     has_match_data: value.has_match_data ?? true,
   } as TournamentSummary;

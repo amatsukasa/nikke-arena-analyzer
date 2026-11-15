@@ -46,6 +46,7 @@ class TournamentBase(BaseModel):
     provider_game_start_date: Optional[date_type] = None
     game_start_date: Optional[date_type] = None
     display_order: Optional[int] = None
+    deck_registration_phases: bool = False
     is_champion_arena: bool = False
     has_match_data: bool = True
 
