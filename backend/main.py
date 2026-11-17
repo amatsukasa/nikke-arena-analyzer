@@ -1521,12 +1521,28 @@ def merge_characters(
         "source_deleted": not keep_source
     }
 
+TOURNAMENT_ADMIN_FIELDS = frozenset({
+    "game_start_date", "display_order", "is_champion_arena", "has_match_data", "deck_registration_phases",
+})
+
+
+def apply_tournament_admin_settings(tournament, changes, db):
+    if changes.get("deck_registration_phases") is False and tournament.deck_registration_phases:
+        has_history = db.query(models.ArenaDeckRegistration.id).filter_by(tournament_id=tournament.id).first() or db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament.id).first()
+        if has_history:
+            raise HTTPException(409, "Phase history exists; disabling phases would hide active registrations and results")
+    for field in TOURNAMENT_ADMIN_FIELDS & changes.keys():
+        setattr(tournament, field, changes[field])
+
+
 @app.post("/api/tournaments", response_model=schemas.Tournament)
 def create_tournament(
     tournament: schemas.TournamentBase, 
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
+    if current_user.role != "admin" and TOURNAMENT_ADMIN_FIELDS & tournament.model_fields_set:
+        raise HTTPException(403, "Tournament settings are administrator-only")
     # 登録データのベースを作成
     data = tournament.model_dump()
 
@@ -1800,6 +1816,7 @@ def _champion_arena_master_payload(tournament: models.Tournament) -> dict:
         "display_order": tournament.display_order,
         "is_champion_arena": tournament.is_champion_arena,
         "has_match_data": tournament.has_match_data,
+        "deck_registration_phases": bool(tournament.deck_registration_phases),
     }
 
 
@@ -1820,9 +1837,8 @@ def get_admin_champion_arena_tournaments(
     _: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
 ):
-    tournaments = db.query(models.Tournament).filter(
-        models.Tournament.is_champion_arena.is_(True)
-    ).order_by(models.Tournament.display_order.desc().nullslast(), models.Tournament.id.desc()).all()
+    # Administrators must also be able to configure tournaments whose flag is off.
+    tournaments = db.query(models.Tournament).order_by(models.Tournament.display_order.desc().nullslast(), models.Tournament.id.desc()).all()
     return [_champion_arena_master_payload(tournament) for tournament in tournaments]
 
 
@@ -1839,6 +1855,7 @@ def create_champion_arena_tournament(
         display_order=body.display_order,
         is_champion_arena=body.is_champion_arena,
         has_match_data=body.has_match_data,
+        deck_registration_phases=body.deck_registration_phases,
         created_by=admin.id,
         publication_status="draft",
     )
@@ -1858,14 +1875,14 @@ def update_champion_arena_tournament(
     tournament = db.get(models.Tournament, tournament_id)
     if tournament is None:
         raise HTTPException(status_code=404, detail="Tournament not found")
+    changes = body.model_dump(exclude_unset=True)
+    apply_tournament_admin_settings(tournament, changes, db)
     tournament.name = body.title.strip()
-    tournament.game_start_date = body.game_start_date
-    tournament.date = body.game_start_date or tournament.date
-    tournament.display_order = body.display_order
-    tournament.is_champion_arena = body.is_champion_arena
-    tournament.has_match_data = body.has_match_data
+    if "game_start_date" in changes:
+        tournament.date = body.game_start_date or tournament.date
     db.commit()
     db.refresh(tournament)
+    invalidate_dashboard_cache(tournament_id)
     return _champion_arena_master_payload(tournament)
 
 
@@ -1928,11 +1945,15 @@ def get_tournament(
 @app.put("/api/tournaments/{tournament_id}", response_model=schemas.Tournament)
 def update_tournament(
     tournament_id: int, 
-    tournament: schemas.TournamentBase, 
+    tournament: schemas.TournamentUpdate,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
+    changes = tournament.model_dump(exclude_unset=True)
+    restricted = TOURNAMENT_ADMIN_FIELDS | {"date", "season", "owner_name"}
+    if current_user.role != "admin" and restricted & changes.keys():
+        raise HTTPException(403, "Tournament settings are administrator-only")
     db_tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
 
     # registration_scope は作成時に固定する。Pydantic の既定値を
@@ -1948,38 +1969,23 @@ def update_tournament(
         )
 
     try:
-        db_tournament.name = tournament.name
-        db_tournament.date = tournament.date
-
-        # championship_id が更新されたら名前などを再同期
-        if tournament.championship_id:
-            championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
-            if championship:
+        # Only explicitly supplied provider fields are updated. Do not re-sync dates.
+        if "name" in changes:
+            db_tournament.name = tournament.name
+        if "championship_id" in changes:
+            if tournament.championship_id is not None:
+                championship = db.get(models.Championship, tournament.championship_id)
+                if championship is None:
+                    raise HTTPException(404, "Championship not found")
                 db_tournament.name = championship.name
-                db_tournament.championship_id = tournament.championship_id
-                db_tournament.date = championship.date or tournament.date
-
-        db_tournament.season = tournament.season
-        # 提供者情報が紐付け変更されることは原則ないが、ログイン中ユーザー情報で常に上書き保護
-        db_tournament.owner_name = current_user.provider_name or db_tournament.owner_name
-
-        # 省略時は保存値を維持し、明示 null もそのまま保存する。
-        if "provider_game_start_date" in tournament.model_fields_set:
+            db_tournament.championship_id = tournament.championship_id
+        if "provider_game_start_date" in changes:
             db_tournament.provider_game_start_date = tournament.provider_game_start_date
-        if "game_start_date" in tournament.model_fields_set:
-            db_tournament.game_start_date = tournament.game_start_date
-        if "display_order" in tournament.model_fields_set:
-            db_tournament.display_order = tournament.display_order
-        if "is_champion_arena" in tournament.model_fields_set:
-            db_tournament.is_champion_arena = tournament.is_champion_arena
-        if "deck_registration_phases" in tournament.model_fields_set:
-            if db_tournament.deck_registration_phases and not tournament.deck_registration_phases:
-                has_history = db.query(models.ArenaDeckRegistration.id).filter_by(tournament_id=tournament_id).first() or db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament_id).first()
-                if has_history:
-                    raise HTTPException(409, "Phase history exists; disabling phases would hide active registrations and results")
-            db_tournament.deck_registration_phases = tournament.deck_registration_phases
-        if "has_match_data" in tournament.model_fields_set:
-            db_tournament.has_match_data = tournament.has_match_data
+        if current_user.role == "admin":
+            for field in ("date", "season", "owner_name"):
+                if field in changes:
+                    setattr(db_tournament, field, changes[field])
+            apply_tournament_admin_settings(db_tournament, changes, db)
 
         db.commit()
         db.refresh(db_tournament)

@@ -50,6 +50,19 @@ class TournamentBase(BaseModel):
     is_champion_arena: bool = False
     has_match_data: bool = True
 
+class TournamentUpdate(TournamentBase):
+    # A PUT may omit fields; omitted defaults must never overwrite stored values.
+    name: Optional[str] = None
+    date: Optional[date_type] = None
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name", "date", "registration_scope", "deck_registration_phases", "is_champion_arena", "has_match_data")
+    @classmethod
+    def nonnullable_updates(cls, value):
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
+
 class Tournament(TournamentBase):
     @field_validator("deck_registration_phases", mode="before")
     @classmethod
@@ -77,6 +90,7 @@ class ChampionArenaTournamentBase(BaseModel):
     display_order: Optional[int] = None
     is_champion_arena: bool = True
     has_match_data: bool = False
+    deck_registration_phases: bool = False
 
 class ChampionArenaTournament(ChampionArenaTournamentBase):
     id: int
