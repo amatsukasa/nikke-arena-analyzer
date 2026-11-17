@@ -1,4 +1,5 @@
 "use client";
+import { CompositionBestResult, TeamBestResults, TeamRegistrationUsage } from "@/components/TeamStatisticsMeaning";
 
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Users } from "lucide-react";
@@ -11,6 +12,7 @@ export interface CharacterDetailViewProps {
   mode: "cross" | "single";
   characterId: number;
   tournamentId?: number;
+  registrationPhase?: string;
   tournamentIds?: number[];
   stats: {
     character_usage?: any[];
@@ -24,6 +26,7 @@ export default function CharacterDetailView({
   mode,
   characterId,
   tournamentId,
+  registrationPhase="initial",
   tournamentIds,
   stats,
   allCharacters,
@@ -37,7 +40,7 @@ export default function CharacterDetailView({
       router.back();
     } else {
       if (mode === "cross") {
-        router.push(href("/"));
+        router.push(href(`/?registration_phase=${registrationPhase}`));
       } else {
         router.push(href(`/tournament/${tournamentId || ""}`));
       }
@@ -65,7 +68,7 @@ export default function CharacterDetailView({
 
   const usageData = stats?.character_usage?.find((x: any) => x.id === characterId || x.character_id === characterId);
   const usageCount = usageData?.count || 0;
-  const winRate = usageData?.win_rate || 0;
+  const winRate = usageData?.total_matches > 0 ? usageData.win_rate : null;
   const charWins = usageData?.win_count || 0;
   const totalMatches = usageData?.total_matches || 0;
   const charLosses = totalMatches - charWins;
@@ -104,7 +107,7 @@ export default function CharacterDetailView({
           const teamMemberCharacterId = ch.id;
           const href = mode === "cross"
             ? `/character/${teamMemberCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
-            : `/tournament/${tournamentId}/dashboard/character/${teamMemberCharacterId}`;
+            : `/tournament/${tournamentId}/dashboard/character/${teamMemberCharacterId}?registration_phase=${registrationPhase}`;
           return (
               <Link
               key={i}
@@ -216,7 +219,7 @@ export default function CharacterDetailView({
           </div>
           <div className="bg-emerald-500/10 p-5 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
             <p className="text-emerald-400 text-xs font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
-            <p className="text-3xl font-black text-emerald-400">{winRate}<span className="text-lg">%</span></p>
+            <p className="text-3xl font-black text-emerald-400">{winRate==null?t("stats.noMatchRecords"):<>{winRate}<span className="text-lg">%</span></>}</p>
           </div>
           <div className="bg-green-500/10 p-5 rounded-2xl ring-1 ring-green-500/20 flex flex-col items-center justify-center">
             <p className="text-green-400 text-xs font-bold mb-1">{t('match.win')}</p>
@@ -247,7 +250,7 @@ export default function CharacterDetailView({
                 const synergyCharacterId = synergyChar.id;
                 const synergyHref = mode === "cross"
                   ? `/character/${synergyCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
-                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}`;
+                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}?registration_phase=${registrationPhase}`;
                 return (
                   <Link
                     key={synergyCharacterId}
@@ -284,7 +287,7 @@ export default function CharacterDetailView({
                 const synergyCharacterId = synergyChar.id;
                 const synergyHref = mode === "cross"
                   ? `/character/${synergyCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
-                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}`;
+                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}?registration_phase=${registrationPhase}`;
                 return (
                   <Link
                     key={synergyCharacterId}
@@ -321,7 +324,7 @@ export default function CharacterDetailView({
                 const synergyCharacterId = synergyChar.id;
                 const synergyHref = mode === "cross"
                   ? `/character/${synergyCharacterId}?tournaments=${tournamentIds?.join(',') || ''}`
-                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}`;
+                  : `/tournament/${tournamentId}/dashboard/character/${synergyCharacterId}?registration_phase=${registrationPhase}`;
                 return (
                   <Link
                     key={synergyCharacterId}
@@ -382,7 +385,7 @@ export default function CharacterDetailView({
                 <tr>
                   {usageData.position_stats.map((ps: any) => (
                     <td key={ps.position} className="py-3 sm:py-4 px-1 sm:px-4">
-                      {ps.win_rate !== null ? (
+                      {ps.total > 0 && ps.win_rate != null ? (
                         <>
                           <span className={`font-black text-lg sm:text-2xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                             {ps.win_rate}%
@@ -420,7 +423,7 @@ export default function CharacterDetailView({
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('team.position')}</th>
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.usageCount')}</th>
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.winRate')}</th>
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.finalResult')}</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('teamMeaning.compositionBest')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -436,7 +439,7 @@ export default function CharacterDetailView({
                         <span className="text-slate-400 text-xs sm:text-sm">({ps.pct}%)</span>
                       </td>
                       <td className="py-3 sm:py-4 px-2 sm:px-4">
-                        {ps.win_rate !== null ? (
+                        {ps.total > 0 && ps.win_rate != null ? (
                           <>
                             <span className={`font-black text-base sm:text-xl ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                               {ps.win_rate}%
@@ -449,21 +452,7 @@ export default function CharacterDetailView({
                         )}
                       </td>
                       <td className="py-3 sm:py-4 px-2 sm:px-4">
-                        {ps.best_result ? (
-                          <span className={`inline-block px-2.5 py-1 text-xs sm:text-sm font-bold rounded-full ring-1 ${
-                            ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
-                            ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
-                            ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
-                            ps.best_result === "ベスト8" ? "bg-blue-500/20 text-blue-400 ring-blue-500/50" :
-                            ps.best_result === "ベスト16" ? "bg-purple-500/20 text-purple-400 ring-purple-500/50" :
-                            ps.best_result === "ベスト32" ? "bg-slate-700/60 text-slate-400 ring-slate-600/50" :
-                            "bg-slate-800/60 text-slate-500 ring-slate-700/50"
-                          }`}>
-                            {ps.best_result}
-                          </span>
-                        ) : (
-                          <span className="text-slate-600 text-xs sm:text-sm">-</span>
-                        )}
+                        {<CompositionBestResult team={ps}/>}
                       </td>
                     </tr>
                   );
@@ -504,7 +493,7 @@ export default function CharacterDetailView({
                       const tKey = tIds.length > 0 ? [...tIds].map(Number).sort((a, b) => a - b).join("-") : team.canonical_id;
                       router.push(`/?tab=matchups&teamKey=${encodeURIComponent(tKey)}&team=${encodeURIComponent(tKey)}&tournaments=${tournamentIds?.join(',') || ''}`);
                     } else {
-                      router.push(`/tournament/${tournamentId}/dashboard?tab=matchups&team=${encodeURIComponent(team.canonical_id)}`);
+                      router.push(`/tournament/${tournamentId}/dashboard?tab=matchups&registration_phase=${registrationPhase}&team=${encodeURIComponent(team.canonical_id)}`);
                     }
                   }}
                   className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 transition-colors p-4 sm:p-5 rounded-xl ring-1 ring-white/5 hover:ring-purple-500/30 space-y-3 cursor-pointer"
@@ -512,14 +501,10 @@ export default function CharacterDetailView({
                   {/* 編成アイコン行 */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0">
                     <div className="flex justify-center sm:justify-start overflow-x-auto py-1">
-                      <TeamDisplay charIds={team.character_ids || []} />
+                      <div><TeamDisplay charIds={team.character_ids || []} /><TeamRegistrationUsage team={team}/></div>
                     </div>
                     <div className="flex items-center justify-center sm:justify-end space-x-2 shrink-0">
-                      {team.best_result && (
-                        <span className={`inline-block px-2 py-0.5 text-xs font-bold rounded-full ring-1 ${teamResultClass}`}>
-                          {team.best_result}
-                        </span>
-                      )}
+                      <TeamBestResults team={team}/>
                       <span className="text-slate-400 font-bold bg-slate-900 px-2.5 py-1 rounded-lg ring-1 ring-white/10 text-xs">
                         {t('stats.teamPick', { count: team.count })}
                       </span>
@@ -531,7 +516,7 @@ export default function CharacterDetailView({
                       <div className="flex items-center space-x-2">
                         <span className="text-[10px] text-slate-500 font-bold uppercase">{t('stats.winRate')}</span>
                         <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                          {team.win_rate}%
+                          {!team.total_matches || team.win_rate==null?t("stats.noMatchRecords"):`${team.win_rate}%`}
                         </span>
                       </div>
                       <div className="h-4 w-px bg-white/10"></div>

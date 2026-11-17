@@ -1,4 +1,5 @@
 "use client";
+import { CompositionBestResult, RegistrationPhaseLabel } from "@/components/TeamStatisticsMeaning";
 import { useState, useEffect, useRef } from "react";
 import TeamDisplay from "./TeamDisplay";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -8,17 +9,20 @@ interface PaginatedTeamListProps {
   tournamentIds?: number[];
   tournamentId?: number;
   mode?: "single" | "cross";
+  registrationPhase?: string;
   playServer?: string;
   championshipId?: number;
   allCharacters: any[];
   characterIds?: number[];
   excludedCharacterIds?: number[];
-  sortBy?: "count" | "win_rate";
+  sortBy?: "count" | "win_rate" | "composition_best_result";
   sortOrder?: "desc" | "asc";
   minMatches?: number;
   minUsage?: number;
   minWinRate?: number;
   bestResult?: string;
+  compositionBestResult?: string;
+  commanderBestResult?: string;
   onTeamClick: (canonicalId: string, teamObj?: any) => void;
   selectedTeam?: string;
 }
@@ -27,6 +31,7 @@ export default function PaginatedTeamList({
   tournamentIds = [],
   tournamentId,
   mode,
+  registrationPhase="initial",
   playServer,
   championshipId,
   allCharacters,
@@ -38,6 +43,8 @@ export default function PaginatedTeamList({
   minUsage = 0,
   minWinRate = 0,
   bestResult = "",
+  compositionBestResult = "",
+  commanderBestResult = "",
   onTeamClick,
   selectedTeam
 }: PaginatedTeamListProps) {
@@ -68,7 +75,7 @@ export default function PaginatedTeamList({
       const targetId = tournamentId !== undefined ? tournamentId : tournamentIds[0];
       let res;
       if (isSingle && targetId) {
-        let url = `/api/tournaments/${targetId}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}`;
+        let url = `/api/tournaments/${targetId}/dashboard/teams?limit=${limit}&offset=${currentOffset}&sort_by=${sortBy}&sort_order=${sortOrder}&registration_phase=${encodeURIComponent(registrationPhase)}`;
         if (characterIds.length > 0) {
           url += `&character_ids=${characterIds.join(",")}`;
         }
@@ -78,6 +85,8 @@ export default function PaginatedTeamList({
         if (minMatches > 0) url += `&min_matches=${minMatches}`;
         if (minUsage > 0) url += `&min_usage=${minUsage}`;
         if (minWinRate > 0) url += `&min_win_rate=${minWinRate}`;
+        if (compositionBestResult) url += `&composition_best_result=${encodeURIComponent(compositionBestResult)}`;
+        if (commanderBestResult) url += `&commander_best_result=${encodeURIComponent(commanderBestResult)}`;
         if (bestResult) url += `&best_result=${encodeURIComponent(bestResult)}`;
         res = await fetch(url, { headers: authHeaders, signal: controller.signal });
       } else {
@@ -86,6 +95,7 @@ export default function PaginatedTeamList({
           headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({
             tournament_ids: tournamentIds,
+            registration_phase: registrationPhase,
             play_server: playServer,
             championship_id: championshipId,
             limit,
@@ -97,6 +107,8 @@ export default function PaginatedTeamList({
             min_matches: minMatches,
             min_usage: minUsage,
             min_win_rate: minWinRate,
+            composition_best_result: compositionBestResult || undefined,
+            commander_best_result: commanderBestResult || undefined,
             best_result: bestResult || undefined
           }),
           signal: controller.signal,
@@ -153,7 +165,7 @@ export default function PaginatedTeamList({
     setHasMore(true);
     fetchTeams(0, true, generation);
     return () => requestControllerRef.current?.abort();
-  }, [mode, tournamentId, tournamentIds.join(","), playServer, championshipId, characterIds.join(","), excludedCharacterIds.join(","), sortBy, sortOrder, minMatches, minUsage, minWinRate, bestResult]);
+  }, [registrationPhase, mode, tournamentId, tournamentIds.join(","), playServer, championshipId, characterIds.join(","), excludedCharacterIds.join(","), sortBy, sortOrder, minMatches, minUsage, minWinRate, bestResult, compositionBestResult, commanderBestResult]);
 
   const handleLoadMore = () => {
     if (loading || !hasMore) return;
@@ -174,111 +186,26 @@ export default function PaginatedTeamList({
     <div className="space-y-4">
       <div className="space-y-3">
         {teams.map((team: any, idx: number) => {
-          const resultColors: Record<string, string> = {
-            "優勝":   "bg-amber-400/20 text-amber-300 ring-amber-400/50",
-            "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
-            "ベスト4":  "bg-orange-500/20 text-orange-400 ring-orange-500/50",
-            "ベスト8":  "bg-blue-500/20 text-blue-400 ring-blue-500/50",
-            "ベスト16": "bg-purple-500/20 text-purple-400 ring-purple-500/50",
-            "ベスト32": "bg-slate-700/60 text-slate-400 ring-slate-600/50",
-            "ベスト64": "bg-slate-800/60 text-slate-500 ring-slate-700/50",
-          };
-          const resultColor = resultColors[team.best_result] ?? "bg-slate-700/40 text-slate-400 ring-slate-600/40";
-
-          const tIds = team.character_ids || team.characters?.map((c: any) => c.id) || [];
-          const tKeyHyphen = [...tIds].map(Number).sort((a, b) => a - b).join("-");
-          const tKeyComma = [...tIds].map(Number).sort((a, b) => a - b).join(",");
-          const isSelected = selectedTeam && (selectedTeam === team.canonical_id || selectedTeam === tKeyHyphen || selectedTeam === tKeyComma);
-
-          return (
-            <div
-              key={`${team.canonical_id}-${idx}`}
-              onClick={() => onTeamClick(team.canonical_id, team)}
-              className={`bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ${isSelected ? "ring-emerald-500 bg-slate-700/80" : "ring-white/5"}`}
-            >
-              {/* PC表示: 横並び */}
-              <div className="hidden md:flex items-center gap-3 w-full">
-                {/* 順位番号 */}
-                <div className="text-slate-500 font-bold text-sm w-6 text-center shrink-0">
-                  {idx + 1}
-                </div>
-
-                {/* キャラ画像 */}
-                <div className="flex-1 min-w-0">
-                  <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
-                </div>
-
-                {/* 中央：最終成績 / 採用数 / 対戦数 */}
-                <div className="flex flex-col items-end gap-1 shrink-0 text-right">
-                  {team.best_result && (
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ring-1 ${resultColor}`}>
-                      {localizedTournamentResult(team.best_result, t)}
-                    </span>
-                  )}
-                  <span className="text-xs text-slate-400">
-                    {t('stats.usageCount')} <span className="text-slate-200 font-semibold">{team.count}</span>
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    {t('stats.matches')} <span className="text-slate-200 font-semibold">{team.total_matches ?? "-"}</span>
-                  </span>
-                </div>
-
-                {/* 右端：勝率を大きく強調 */}
-                <div className={`px-4 py-1.5 rounded-lg font-black text-lg min-w-[90px] text-center shrink-0 ${
-                  team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
-                }`}>
-                  {team.win_rate}%
-                </div>
-              </div>
-
-              {/* スマホ表示: カード型 */}
-              <div className="md:hidden flex flex-col gap-3 w-full">
-                {/* 1段目：順位・最高成績・勝率 */}
-                <div className="flex items-center justify-between gap-2 border-b border-white/5 pb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-400 font-bold text-base">#{idx + 1}</span>
-                    {team.best_result && (
-                      <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ring-1 ${resultColor}`}>
-                        {localizedTournamentResult(team.best_result, t)}
-                      </span>
-                    )}
-                  </div>
-                  <div className={`px-3 py-1 rounded-lg font-black text-base text-center shrink-0 ${
-                    team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-400" : "bg-amber-400/10 text-amber-400"
-                  }`}>
-                    {t('stats.winRate')}: {team.win_rate}%
-                  </div>
-                </div>
-
-                {/* 2段目：キャラ画像5体 */}
-                <div className="flex justify-center py-1 overflow-x-auto">
-                  <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
-                </div>
-
-                {/* 3段目：採用数・対戦数・勝敗 */}
-                <div className="flex items-center justify-around text-xs text-slate-300 bg-slate-900/40 rounded-lg py-2 px-3 flex-wrap gap-y-1">
-                  <div>
-                    {t('stats.usageCount')}: <span className="font-bold text-slate-100">{team.count}</span>
-                  </div>
-                  <div className="w-px h-3 bg-white/10" />
-                  <div>
-                    {t('stats.matches')}: <span className="font-bold text-slate-100">{team.total_matches ?? "-"}</span>
-                  </div>
-                  {team.win_count != null && (
-                    <>
-                      <div className="w-px h-3 bg-white/10" />
-                      <div>
-                        {t('stats.resultRecord')}: <span className="font-bold text-emerald-400">{team.win_count}W</span>
-                        {team.total_matches != null && (
-                          <span className="font-bold text-rose-400 ml-0.5">{team.total_matches - team.win_count}L</span>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
+          const ids = team.character_ids || team.characters?.map((c:any)=>c.id) || [];
+          const normalized = [...ids].map(Number).sort((a,b)=>a-b);
+          const selected = selectedTeam && [team.canonical_id, normalized.join("-"), normalized.join(",")].includes(selectedTeam);
+          return <button type="button" key={`${team.registration_phase}-${team.canonical_id}-${idx}`} onClick={()=>onTeamClick(team.canonical_id,team)} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-4 rounded-xl p-4 text-left transition-colors ${selected ? "bg-slate-700/80 ring-1 ring-emerald-500" : "bg-slate-800/50 ring-1 ring-white/5 hover:bg-slate-700/60"}`}>
+            <div className="min-w-0 max-w-full flex-1 basis-60 space-y-2">
+              <TeamDisplay charIds={ids} allCharacters={allCharacters}/>
+              <div className="text-xs font-semibold text-blue-300"><RegistrationPhaseLabel phase={team.registration_phase}/></div>
             </div>
-          );
+            <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_8rem] items-center gap-x-1 sm:w-auto sm:grid-cols-[8rem_10rem]">
+            <div className="min-w-0 space-y-2 text-center">
+              <CompositionBestResult team={team}/>
+              <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-slate-400"><span>{t("stats.usageCount")}: <strong className="text-slate-200">{team.count}</strong></span><span>{t("stats.matches")}: <strong className="text-slate-200">{team.total_matches ?? 0}</strong></span></div>
+
+            </div>
+            <div className={`rounded-xl px-4 py-3 text-center ${team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-300" : "bg-amber-400/10 text-amber-300"}`}>
+              <div className="mb-1 text-xs font-semibold text-slate-400">{t("stats.winRate")}</div>
+              <div className={team.total_matches > 0 ? "text-3xl font-black md:tabular-nums" : "text-sm font-bold"}>{team.total_matches > 0 && team.win_rate != null ? `${team.win_rate}%` : t("stats.noMatchRecords")}</div>
+            </div>
+            </div>
+          </button>;
         })}
       </div>
 

@@ -173,6 +173,7 @@ class Player(Base):
     tournament_id = Column(Integer, ForeignKey("tournaments.id"))
     seed_number = Column(Integer, nullable=True) # 1 to 64
     champion_slot = Column(SmallInteger, nullable=True)
+    private_name = Column(String(50), nullable=True)
     name = Column(String, nullable=False)
     icon_url = Column(String, nullable=True) # 追加: プレイヤーアイコンのURL
     created_at = Column(DateTime(timezone=True), server_default=func.now())

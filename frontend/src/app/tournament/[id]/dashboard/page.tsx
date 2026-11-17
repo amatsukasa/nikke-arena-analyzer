@@ -1,10 +1,14 @@
 "use client";
+import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
+import { TeamRegistrationUsage, CompositionBestResult, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
 export const dynamic = 'force-dynamic';
-import { useState, useEffect } from "react";
+import { usePrivatePlayerNames } from "@/hooks/usePrivatePlayerNames";
+import PrivatePlayerNameEditor from "@/components/PrivatePlayerNameEditor";
+
+import { useState, useEffect, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
+import { Layers3, ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "../../../../components/LocalizedLink";
-import ArenaPhaseRegistration from "../../../../components/ArenaPhaseRegistration";
 import PaginatedTeamList from "../../../../components/PaginatedTeamList";
 import SharedTeamDisplay from "../../../../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../../../../components/CharacterUsageByResultRanking";
@@ -32,11 +36,21 @@ const TOURNAMENT_TABS = new Set<DashboardTab>([
   "best8",
 ]);
 
-function LegacyDashboard() {
+export default function Dashboard() { return <DashboardView/>; }
+
+type PhaseViewProps = {phaseOverride?:string;embedded?:boolean;activeTabOverride?:DashboardTab;selectedSeedOverride?:number;onActiveTabChange?:(tab:DashboardTab)=>void};
+function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedSeedOverride,onActiveTabChange}:PhaseViewProps) {
   const { t } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
   const id = params.id;
+  const privateNames=usePrivatePlayerNames(Number(id));
+  const registrationMode = phaseOverride ?? (["legacy","initial","best8","league","championship","final"].includes(searchParams.get("registration_phase") || "") ? searchParams.get("registration_phase")! : "all");
+  const requestedRegistrationPhase = registrationMode === "all" ? "initial" : registrationMode === "best8" ? "championship" : registrationMode;
+  const phaseFetch = (input: string, options?: RequestInit) => {
+    const scoped = /\/api\/tournaments\/\d+\/dashboard\//.test(input);
+    return fetch(scoped ? `${input}${input.includes("?")?"&":"?"}registration_phase=${registrationPhase}` : input, options);
+  };
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
@@ -46,6 +60,9 @@ function LegacyDashboard() {
   const initialTeam = searchParams.get("team");
 
   const [tournament, setTournament] = useState<any>(null);
+  const registrationPhase = tournament && !tournament.deck_registration_phases ? "legacy" :
+    requestedRegistrationPhase === "initial" ? (registrationMode === "all" && tournament?.registration_scope === "champion_8" ? "championship" : "league") : requestedRegistrationPhase;
+  const showAllPhases = !embedded && Boolean(tournament?.deck_registration_phases) && registrationMode === "all" && activeTabOverride !== "winrate";
   const [stats, setStats] = useState<any>(null);
   const [matchups, setMatchups] = useState<any[]>([]);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
@@ -60,10 +77,16 @@ function LegacyDashboard() {
 
   const [authError, setAuthError] = useState(false);
   
-  const [activeTab, setActiveTab] = useState<DashboardTab>(initialTab);
+  const [storedActiveTab, setStoredActiveTab] = useState<DashboardTab>(initialTab);
+  // Initial readiness may choose a default once; a user's tab choice always wins.
+  const tabSelectionTournament = useRef<string | null>(null);
+  const setActiveTab=(tab:DashboardTab)=>{tabSelectionTournament.current=String(id);setStoredActiveTab(tab);if(embedded)onActiveTabChange?.(tab);};
+  const activeTab=activeTabOverride??storedActiveTab;
 
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
+  const [selectedTeamRow, setSelectedTeamRow] = useState<any>(null);
+  const selectedTeamData = stats?.team_usage?.find((team:any)=>team.canonical_id === selectedTeam) ?? (selectedTeamRow?.canonical_id === selectedTeam ? selectedTeamRow : null);
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
 
   // For search
@@ -84,8 +107,13 @@ function LegacyDashboard() {
   const [winrateManufacturer, setWinrateManufacturer] = useState<string>("");
 
   // For team filters
-  const [teamMinMatches, setTeamMinMatches] = useState<number>(10);
-  const [teamBestResult, setTeamBestResult] = useState<string>("");
+  const [teamMinMatches, setTeamMinMatches] = useState<number>(0);
+  const [winRateStage, setWinRateStage] = useState("all");
+  const [searchStage,setSearchStage]=useState("all");
+  const [searchSort,setSearchSort]=useState<"count"|"win_rate"|"composition_best_result">("count");
+  const [searchComposition,setSearchComposition]=useState("");
+  const [searchWinRate,setSearchWinRate]=useState(0);
+  const [teamCompositionBestResult, setTeamCompositionBestResult] = useState<string>("");
     const [teamMinWinRate, setTeamMinWinRate] = useState<number>(0);
   
   // For Character Modal
@@ -94,9 +122,15 @@ function LegacyDashboard() {
 
   useEffect(() => {
     setVisibleTeamCount(10);
-  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
+  }, [stats, teamMinMatches, teamCompositionBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
-  const handleTeamClick = (canonicalId: string) => {
+  const handleTeamClick = (canonicalId: string, team?:any) => {
+    if (team?.registration_phase && team.registration_phase !== registrationPhase) {
+      const query = new URLSearchParams(searchParams.toString());
+      query.set("registration_phase", team.registration_phase); query.set("tab", "matchups"); query.set("team", canonicalId);
+      window.location.assign(`?${query}`); return;
+    }
+    setSelectedTeamRow(team ?? null);
     if (!canonicalId) return;
     setSelectedTeam(canonicalId);
     setActiveTab("matchups");
@@ -105,7 +139,8 @@ function LegacyDashboard() {
   };
 
   // 分析対象のシード番号 (1-64)
-  const [selectedSeed, setSelectedSeed] = useState<number>(1);
+  const [storedSelectedSeed, setSelectedSeed] = useState<number>(1);
+  const selectedSeed=selectedSeedOverride??storedSelectedSeed;
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const seeds = Array.from({length: 64}, (_, i) => i + 1);
 
@@ -132,7 +167,7 @@ function LegacyDashboard() {
   }, [selectedSeed, activeTab]);
 
   const [tournamentId, setTournamentId] = useState<number | null>(null);
-  const analysisKey = tournamentId ? `tournament|${tournamentId}` : null;
+  const analysisKey = tournamentId ? `tournament|${tournamentId}|${registrationPhase}` : null;
   useResetSynergyOnAnalysisChange(analysisKey, () => {
     setIncludedCharacterIds([]);
     setExcludedCharacterIds([]);
@@ -151,7 +186,7 @@ function LegacyDashboard() {
     const controller = new AbortController();
     const fetchCharacters = async () => {
       try {
-        const charsRes = await fetch("/api/characters", {
+        const charsRes = await phaseFetch("/api/characters", {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -170,12 +205,15 @@ function LegacyDashboard() {
     return () => controller.abort();
   }, [isFirstLoad, tournamentId]);
 
+  // Keep tournament format metadata during tab refreshes (especially 8-player
+  // mode); clear it only when navigating to a different tournament.
+  useEffect(() => { setTournament(null); }, [tournamentId]);
+
   useEffect(() => {
     if (isFirstLoad || !tournamentId) return;
 
     const controller = new AbortController();
     setStats(null);
-    setTournament(null);
     setDashboardSummary(null);
     setBracketData(null);
     setMyPlayerDetails(null);
@@ -188,7 +226,7 @@ function LegacyDashboard() {
         const timestamp = Date.now();
         
         const tournUrl = `/api/tournaments/${tournamentId}?t=${timestamp}`;
-        const tournRes = await fetch(tournUrl, { cache: 'no-store', headers: authHeaders, signal: controller.signal });
+        const tournRes = await phaseFetch(tournUrl, { cache: 'no-store', headers: authHeaders, signal: controller.signal });
         if (!tournRes.ok) {
           // Tournament detail access intentionally returns 404 for anonymous
           // and unrelated users, irrespective of publication status.
@@ -207,7 +245,8 @@ function LegacyDashboard() {
           `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`
         ];
-        const responses = await Promise.all(urls.map(url => fetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
+        const requestedUrls = !embedded && registrationMode === "all" && tournData.deck_registration_phases && !(["winrate","team_winrate","search"].includes(activeTab)) ? urls.slice(0,2) : urls;
+        const responses = await Promise.all(requestedUrls.map(url => phaseFetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
 
         for (let i = 0; i < responses.length; i++) {
           const res = responses[i];
@@ -228,7 +267,7 @@ function LegacyDashboard() {
           return;
         }
 
-        const [summaryData, bracketDataRaw, detailsData, best8DataRaw, statsData] = await Promise.all(
+        const [summaryData, bracketDataRaw, detailsData = null, best8DataRaw = [], statsData = null] = await Promise.all(
           responses.map(res => res.json())
         );
 
@@ -237,12 +276,13 @@ function LegacyDashboard() {
         setMyPlayerDetails(detailsData);
         setBest8Data(best8DataRaw);
         setStats(statsData);
-        if (!requestedTab) {
-          setActiveTab(summaryData?.readiness?.can_publish === false ? "review" : "team_winrate");
+        if (!embedded && !requestedTab && tabSelectionTournament.current !== String(id)) {
+          tabSelectionTournament.current = String(id);
+          setStoredActiveTab(summaryData?.readiness?.can_publish === false ? "review" : "team_winrate");
         }
         
-        if (statsData.team_usage && statsData.team_usage.length > 0) {
-          setSelectedTeam(statsData.team_usage[0].canonical_id);
+        if (statsData?.team_usage && statsData.team_usage.length > 0) {
+          setSelectedTeam(current => current || statsData.team_usage[0].canonical_id);
         }
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
@@ -254,9 +294,10 @@ function LegacyDashboard() {
     };
     fetchData();
     return () => controller.abort();
-  }, [id, isFirstLoad, tournamentId, requestedTab]);
+  }, [id, isFirstLoad, tournamentId, requestedTab, registrationPhase, activeTab]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
     if (!isPrivateTournament || !tournamentId || hasFullStats) return;
     if (activeTab !== "overview" && activeTab !== "matchups" && activeTab !== "search") return;
@@ -268,7 +309,7 @@ function LegacyDashboard() {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const url = `/api/tournaments/${tournamentId}/dashboard/stats?t=${Date.now()}`;
-        const res = await fetch(url, { cache: "no-store", headers: authHeaders, signal: controller.signal });
+        const res = await phaseFetch(url, { cache: "no-store", headers: authHeaders, signal: controller.signal });
         if (!res.ok) {
           if (res.status === 401) setAuthError(true);
           else console.error("API error", res.status, url, (await res.text()).slice(0, 300));
@@ -292,8 +333,9 @@ function LegacyDashboard() {
   }, [activeTab, isPrivateTournament, tournamentId, stats, selectedTeam]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     if (!isPrivateTournament || !tournamentId || stats) return;
-    if (activeTab !== "winrate") return;
+    if (!(["winrate","team_winrate","search"].includes(activeTab))) return;
 
     const fetchCharacterWinrates = async () => {
       setAnalysisLoading(true);
@@ -301,7 +343,7 @@ function LegacyDashboard() {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const url = `/api/tournaments/${tournamentId}/dashboard/character-winrates?t=${Date.now()}`;
-        const res = await fetch(url, { cache: "no-store", headers: authHeaders });
+        const res = await phaseFetch(url, { cache: "no-store", headers: authHeaders });
         if (!res.ok) {
           if (res.status === 401) setAuthError(true);
           else console.error("API error", res.status, url, (await res.text()).slice(0, 300));
@@ -325,6 +367,7 @@ function LegacyDashboard() {
   }, [activeTab, isPrivateTournament, tournamentId, stats]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     if (!tournamentId || activeTab !== "my_dashboard") return;
     if (bracketData && myPlayerDetails) return;
 
@@ -338,7 +381,7 @@ function LegacyDashboard() {
           `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
         ];
-        const responses = await Promise.all(urls.map(url => fetch(url, { cache: "no-store", headers: authHeaders })));
+        const responses = await Promise.all(urls.map(url => phaseFetch(url, { cache: "no-store", headers: authHeaders })));
         for (let i = 0; i < responses.length; i++) {
           if (!responses[i].ok) {
             if (responses[i].status === 401) setAuthError(true);
@@ -360,6 +403,7 @@ function LegacyDashboard() {
   }, [activeTab, tournamentId, selectedSeed, bracketData, myPlayerDetails]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     if (activeTab !== "best8" || !tournamentId) return;
     if (best8Data && best8Data.length > 0) return;
 
@@ -368,7 +412,7 @@ function LegacyDashboard() {
         const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const url = `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${Date.now()}`;
-        const res = await fetch(url, { cache: 'no-store', headers: authHeaders });
+        const res = await phaseFetch(url, { cache: 'no-store', headers: authHeaders });
         if (!res.ok) {
           if (res.status === 401) {
             setAuthError(true);
@@ -388,6 +432,7 @@ function LegacyDashboard() {
   }, [activeTab, tournamentId, best8Data]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     if (!selectedCharId) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -399,6 +444,7 @@ function LegacyDashboard() {
   }, [selectedCharId]);
 
   useEffect(() => {
+    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
     if (activeTab !== "matchups") return;
     if (matchups.length > 0 || !tournamentId) return;
 
@@ -408,8 +454,9 @@ function LegacyDashboard() {
         const authHeaders: any = token ? { "Authorization": `Bearer ${token}` } : {};
         const timestamp = Date.now();
         const url = `/api/tournaments/${tournamentId}/dashboard/matchups?t=${timestamp}`;
-        const res = await fetch(url, { cache: 'no-store', headers: authHeaders });
+        const res = await phaseFetch(url, { cache: 'no-store', headers: authHeaders });
         if (!res.ok) {
+          setDataError(t("arenaPhases.error"));
           if (res.status === 401) {
             setAuthError(true);
             return;
@@ -421,11 +468,14 @@ function LegacyDashboard() {
         const matchupsData = await res.json();
         setMatchups(matchupsData.matchups || matchupsData);
       } catch (e) {
+        setDataError(t("arenaPhases.error"));
         console.error(e);
       }
     };
     fetchMatchups();
   }, [activeTab, tournamentId, matchups.length]);
+
+  const searchCandidates=useTeamSearchUsage(activeTab === "search",[Number(id)],Number(id));
 
   if (authError) return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
@@ -458,7 +508,7 @@ function LegacyDashboard() {
   );
 
   if (loading) return (
-    <div className="flex h-screen items-center justify-center">
+    <div className={embedded?"flex h-24 items-center justify-center":"flex h-screen items-center justify-center"}>
       <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full" />
     </div>
   );
@@ -624,8 +674,11 @@ function LegacyDashboard() {
   const showTournamentSelector = activeTab !== "my_dashboard" && activeTab !== "best8";
   const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
 
+  const Container = embedded ? "section" : "main";
+  const formatWinRate = (value:number|null|undefined) => value == null ? t("stats.noMatchRecords") : `${value}%`;
   return (
-    <main className="p-6 md:p-12 max-w-6xl mx-auto space-y-8 pb-24 overflow-x-hidden">
+    <Container className={embedded?"space-y-6":"p-6 md:p-12 max-w-6xl mx-auto space-y-8 pb-24 overflow-x-hidden"}>
+      {!embedded&&<>
       {/* Header */}
       <div className="flex items-center space-x-4 mb-8">
         <Link href={`/tournament/${id}`}>
@@ -643,7 +696,7 @@ function LegacyDashboard() {
         <div className="bg-slate-900/80 backdrop-blur-xl p-4 rounded-2xl ring-2 ring-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.3)] flex items-center space-x-4">
            <div className="text-right hidden md:block">
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{t('dashboard.targetPlayer')}</p>
-              <p className="text-sm font-bold text-slate-200">{t('dashboard.seed', { seed: selectedSeed })}</p>
+              <p className="text-sm font-bold text-slate-200">{privateNames.name({seed:selectedSeed})}</p>
            </div>
            <select 
              value={selectedSeed}
@@ -651,11 +704,13 @@ function LegacyDashboard() {
              className="bg-slate-800 border border-white/20 rounded-lg px-3 py-2 text-sm font-bold text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer hover:bg-slate-700 transition-all"
            >
              {seeds.map(s => (
-                <option key={s} value={s}>{t('dashboard.showSeed', { seed: s })}</option>
+                <option key={s} value={s}>{t('dashboard.showSeed', { seed: s })}{privateNames.players.find(p=>p.seed_number===s)?.private_name?` · ${privateNames.players.find(p=>p.seed_number===s)?.private_name}`:''}</option>
              ))}
            </select>
         </div>
       </div>
+
+      <p className="text-xs text-slate-400">{t("arenaPhases.overallProgressNotice")}</p>
 
       {/* 単体大会分析専用モード */}
 
@@ -715,18 +770,19 @@ function LegacyDashboard() {
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "best8" ? "bg-indigo-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Trophy size={18} />
-          <span>{t('dashboard.best8Tab')}</span>
+          <span>{t("arenaPhases.registeredTeams")}</span>
         </button>
       </div>
 
+      </>}
       {/* Content */}
-      <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 md:p-8 rounded-3xl shadow-2xl min-h-[500px]">
+      <div className={embedded?"space-y-6":"bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 md:p-8 rounded-3xl shadow-2xl min-h-[500px]"}>
         {dataError && (
           <div role="alert" className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-200">
             {dataError}
           </div>
         )}
-        {activeTab === "review" && (
+        {!embedded && activeTab === "review" && (
           <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
@@ -797,7 +853,7 @@ function LegacyDashboard() {
                       {(dashboardSummary.players_without_decks || []).map((player: any) => (
                         <div key={player.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-xs ring-1 ring-white/5">
                           <span className="font-bold text-slate-200">Seed {player.seed_number}</span>
-                          <span className="text-slate-500">{player.name}</span>
+                          <span className="text-slate-500">{privateNames.name(player)}</span>
                         </div>
                       ))}
                       {(dashboardSummary.players_without_decks || []).length === 0 && (
@@ -813,7 +869,7 @@ function LegacyDashboard() {
                         <div key={player.id} className="rounded-lg bg-slate-900 px-3 py-2 text-xs ring-1 ring-white/5">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-slate-200">Seed {player.seed_number}</span>
-                            <span className="text-slate-500">{player.name}</span>
+                            <span className="text-slate-500">{privateNames.name(player)}</span>
                           </div>
                           <p className="mt-1 text-slate-500">Team {player.incomplete_team_numbers.join(", ")}</p>
                         </div>
@@ -832,7 +888,14 @@ function LegacyDashboard() {
             )}
           </div>
         )}
-        {(((activeTab === "overview" || activeTab === "matchups") && !hasFullStats) || (activeTab === "winrate" && !stats)) && (
+        {showAllPhases && activeTab !== "review" && !(["winrate","team_winrate","search"].includes(activeTab)) ? <div className="space-y-10">
+          <p className="text-sm text-slate-400">{t("arenaPhases.separateStatisticsNotice")}</p>
+          {(tournament.registration_scope==="champion_8"?["championship","final"]:["league","championship","final"]).map(phase=><section key={phase} className="space-y-5 border-t border-white/10 pt-6">
+            <h2 className="text-xl font-black text-blue-300">{t(`arenaPhases.${phase}`)}</h2>
+            <DashboardView embedded phaseOverride={phase} activeTabOverride={activeTab} selectedSeedOverride={selectedSeed} onActiveTabChange={setActiveTab}/>
+          </section>)}
+        </div> : <>
+        {(((activeTab === "overview" || activeTab === "matchups") && !hasFullStats) || (activeTab === "winrate" && !tournament)) && (
           <div className="flex h-64 items-center justify-center">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
           </div>
@@ -866,7 +929,7 @@ function LegacyDashboard() {
 
                       <div className="flex-1 text-center md:text-left z-10">
                          <p className="text-amber-400 font-bold mb-1 text-sm tracking-widest uppercase">Player Profile</p>
-                         <h3 className="text-4xl font-black text-white mb-2">{myPlayer.name}</h3>
+                         <h3 className="text-4xl font-black text-white mb-2">{privateNames.name(myPlayer)}</h3>
                          <div className="inline-block bg-amber-500/10 border border-amber-500/30 text-amber-400 px-4 py-2 rounded-full font-black text-lg shadow-inner mt-2">
                             {myTournamentResult}
                          </div>
@@ -904,7 +967,7 @@ function LegacyDashboard() {
                                      <div className="flex flex-col text-right">
                                         <span className="text-[10px] text-slate-500 font-bold uppercase">Win Rate</span>
                                         <span className={`text-xl font-black ${deck.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                           {deck.win_rate}%
+                                           {formatWinRate(deck.win_rate)}
                                         </span>
                                      </div>
                                      <div className="h-8 w-px bg-white/10 mx-2"></div>
@@ -1115,7 +1178,7 @@ function LegacyDashboard() {
                       <th className="p-4 font-medium">{t('stats.character')}</th>
                       <th className="p-4 font-medium text-right w-32">{t('stats.winRate')}</th>
                       <th className="p-4 font-medium text-right w-32">{t('stats.recordWinsLosses')}</th>
-                      <th className="p-4 font-medium text-center w-32">{t('stats.finalResult')}</th>
+                      <th className="p-4 font-medium text-center w-32">{t('teamMeaning.compositionBest')}</th>
                       <th className="p-4 font-medium text-right w-24">{t('stats.usageCount')}</th>
                     </tr>
                   </thead>
@@ -1171,7 +1234,7 @@ function LegacyDashboard() {
                             </td>
                             <td className="p-4 text-right">
                               <span className={`text-xl font-black ${entry.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                {entry.win_rate}%
+                                {formatWinRate(entry.win_rate)}
                               </span>
                             </td>
                             <td className="p-4 text-right">
@@ -1181,13 +1244,7 @@ function LegacyDashboard() {
                                </div>
                             </td>
                             <td className="p-4 text-center">
-                              {entry.best_result ? (
-                                <span className={`inline-block px-3 py-1 text-xs font-bold rounded-full ring-1 ${resultClass}`}>
-                                  {entry.best_result}
-                                </span>
-                              ) : (
-                                <span className="text-slate-600 text-xs">-</span>
-                              )}
+                              {<CompositionBestResult team={entry}/>}
                             </td>
                             <td className="p-4 text-right text-slate-400 font-bold">
                               {entry.count}
@@ -1255,11 +1312,7 @@ function LegacyDashboard() {
                           <div className="min-w-0">
                             <div className="font-bold text-slate-100 truncate text-base">{c.name}</div>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                              {entry.best_result && (
-                                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ring-1 ${resultClass}`}>
-                                  {entry.best_result}
-                                </span>
-                              )}
+                              {<CompositionBestResult team={entry}/>}
                               <span className="text-xs text-slate-400">{t('stats.pickShort', { count: entry.count })}</span>
                             </div>
                           </div>
@@ -1267,7 +1320,7 @@ function LegacyDashboard() {
 
                         <div className="text-right shrink-0">
                           <div className={`text-xl font-black ${entry.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                            {entry.win_rate}%
+                            {formatWinRate(entry.win_rate)}
                           </div>
                           <div className="text-[10px] font-bold text-slate-400">
                             <span className="text-emerald-400">{entry.win_count}W</span>
@@ -1291,7 +1344,7 @@ function LegacyDashboard() {
         {activeTab === "team_winrate" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
             <section>
-              <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
+              <div className="mb-6 flex flex-col gap-4">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-emerald-400" />
                   <span>{t('stats.teamWinRateRanking')}</span>
@@ -1302,34 +1355,26 @@ function LegacyDashboard() {
                   <select
                     value={teamMinMatches}
                     onChange={(e) => setTeamMinMatches(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className={WIN_RATE_FILTER_CLASS}
                   >
-                    {[1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
+                    <option value={0}>{t('filter.matchesAtLeast', { count: 0 })}</option>{[1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
                   </select>
 
                   <select
                     value={teamMinWinRate}
                     onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className={WIN_RATE_FILTER_CLASS}
                   >
                     <option value={0}>{t('filter.winRateAny')}</option>
                     {[50, 60, 70, 80].map((rate) => <option key={rate} value={rate}>{t('filter.winRateAtLeast', { rate })}</option>)}
                   </select>
 
-                  <select
-                    value={teamBestResult}
-                    onChange={(e) => setTeamBestResult(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="">{t('filter.resultAll')}</option>
-                    <option value="優勝">{t('filter.resultOnly', { result: t('result.champion') })}</option>
-                    {['準優勝', 'ベスト4', 'ベスト8', 'ベスト16', 'ベスト32'].map((result) => <option key={result} value={result}>{t('filter.resultAtLeast', { result: localizedTournamentResult(result, t) || result })}</option>)}
-                  </select>
+                  <TeamResultFilters composition={teamCompositionBestResult} onCompositionChange={setTeamCompositionBestResult} stage={winRateStage} onStageChange={setWinRateStage} formal={Boolean(tournament?.deck_registration_phases)}/>
                 </div>
               </div>
 
               <div className="space-y-3">
-                <PaginatedTeamList 
+                <PaginatedTeamList registrationPhase={tournament?.deck_registration_phases ? winRateStage : "all"}
                   mode="single"
                   tournamentId={Number(id)}
                   tournamentIds={[Number(id)]} 
@@ -1340,7 +1385,7 @@ function LegacyDashboard() {
                   minMatches={teamMinMatches}
                   
                   minWinRate={teamMinWinRate}
-                  bestResult={teamBestResult}
+                  compositionBestResult={teamCompositionBestResult}
                 />
               </div>
             </section>
@@ -1377,21 +1422,21 @@ function LegacyDashboard() {
                 <div className="bg-slate-800/50 p-6 rounded-2xl ring-1 ring-white/5 flex flex-col items-center justify-center">
                   <p className="text-slate-400 text-sm mb-2">{t('stats.overallWinRate')}</p>
                   <p className="text-4xl font-black text-white">
-                    {totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : 0}%
+                    {formatWinRate(totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : null)}
                   </p>
                   <p className="text-sm text-slate-500 mt-2">{t('stats.winsLosses', { wins: totalWins, losses: totalLosses })}</p>
                 </div>
                 <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
                   <p className="text-blue-400 text-sm mb-2">{t('stats.attackWinRate')}</p>
                   <p className="text-4xl font-black text-blue-400">
-                    {attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : 0}%
+                    {formatWinRate(attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : null)}
                   </p>
                   <p className="text-sm text-blue-500/60 mt-2">{t('stats.winsLosses', { wins: attackWins, losses: attackLosses })}</p>
                 </div>
                 <div className="bg-red-500/10 p-6 rounded-2xl ring-1 ring-red-500/20 flex flex-col items-center justify-center">
                   <p className="text-red-400 text-sm mb-2">{t('stats.defenseWinRate')}</p>
                   <p className="text-4xl font-black text-red-400">
-                    {defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : 0}%
+                    {formatWinRate(defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : null)}
                   </p>
                   <p className="text-sm text-red-500/60 mt-2">{t('stats.winsLosses', { wins: defenseWins, losses: defenseLosses })}</p>
                 </div>
@@ -1400,7 +1445,7 @@ function LegacyDashboard() {
               <p className="text-slate-500 text-center py-12">{t('stats.teamDataEmpty')}</p>
             )}
 
-            {selectedTeam && <TeamPositionAnalysis positionStats={stats?.team_usage?.find((team: any) => team.canonical_id === selectedTeam)?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
+            {selectedTeam && <TeamPositionAnalysis positionStats={selectedTeamData?.position_stats ?? []} open={isPositionStatsOpen} onToggle={() => setIsPositionStatsOpen((value) => !value)} />}
 
             {selectedTeam && matchupDetails.length > 0 && (
               <TeamMatchupHistory
@@ -1493,7 +1538,7 @@ function LegacyDashboard() {
             <div className="text-center mb-6">
                <h2 className="text-2xl font-black text-slate-100 flex items-center justify-center space-x-3">
                  <Trophy className="text-amber-400" size={28} />
-                 <span>{t('dashboard.best8Teams')}</span>
+                 <span>{t("arenaPhases.registeredTeams")}</span>
                </h2>
                <p className="text-slate-500 mt-2 text-sm italic">{t('dashboard.tapTeamHint')}</p>
             </div>
@@ -1512,7 +1557,7 @@ function LegacyDashboard() {
                             <UserIcon size={20} className="text-slate-600" />
                           )}
                         </div>
-                        <span className="truncate text-sm font-black text-white sm:text-base">{data.player.name}</span>
+                        <span className="truncate text-sm font-black text-white sm:text-base">{privateNames.name(data.player)}</span>
                       </div>
                       <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black ring-1 ${
                         data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
@@ -1559,7 +1604,7 @@ function LegacyDashboard() {
                                 <span className={`mt-0.5 text-sm font-black ${
                                   deck.win_rate >= 50 ? "text-emerald-400" : "text-orange-400"
                                 }`}>
-                                  {deck.win_rate}%
+                                  {formatWinRate(deck.win_rate)}
                                 </span>
                               </div>
                             )}
@@ -1599,7 +1644,7 @@ function LegacyDashboard() {
                                 <UserIcon size={20} className="text-slate-600" />
                               )}
                             </div>
-                            <span className="font-black text-white text-sm whitespace-nowrap">{data.player.name}</span>
+                            <span className="font-black text-white text-sm whitespace-nowrap">{privateNames.name(data.player)}</span>
                           </div>
                         </td>
                       ))}
@@ -1675,7 +1720,7 @@ function LegacyDashboard() {
                             <UserIcon size={20} className="text-slate-600" />
                           )}
                         </div>
-                        <span className="font-black text-white text-base">{data.player.name}</span>
+                        <span className="font-black text-white text-base">{privateNames.name(data.player)}</span>
                       </div>
                       <div className={`px-3 py-1 rounded-full text-xs font-black inline-block ring-1 ${
                         data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
@@ -1784,8 +1829,8 @@ function LegacyDashboard() {
               <SynergyCharacterPicker
                 key={`synergy-picker-single-${analysisKey}`}
                 characters={filteredCharacters}
-                characterUsage={stats?.character_usage ?? stats?.character_stats ?? []}
-                usageState={analysisLoading ? "loading" : dataError || !stats ? "error" : "ready"}
+                characterUsage={searchCandidates.usage}
+                usageState={searchCandidates.state}
                 includedIds={includedCharacterIds}
                 excludedIds={excludedCharacterIds}
                 displayMode={arenaCharacterDisplay}
@@ -1806,11 +1851,12 @@ function LegacyDashboard() {
 
             <div className="space-y-4">
               <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
+              <TeamSearchFilters sort={searchSort} onSortChange={setSearchSort} stage={searchStage} onStageChange={setSearchStage} composition={searchComposition} onCompositionChange={setSearchComposition} winRate={searchWinRate} onWinRateChange={setSearchWinRate} formal={Boolean(tournament?.deck_registration_phases)}/>
               {includedCharacterIds.length === 0 ? (
                 <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
               ) : (
                 <div className="space-y-3">
-                  <PaginatedTeamList 
+                  <PaginatedTeamList registrationPhase={tournament?.deck_registration_phases ? searchStage : "all"}
                     key={`synergy-single-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
                     mode="single"
                     tournamentId={Number(id)}
@@ -1820,7 +1866,9 @@ function LegacyDashboard() {
                     excludedCharacterIds={excludedCharacterIds}
                     onTeamClick={handleTeamClick} 
                     selectedTeam={selectedTeam} 
-                    sortBy="count"
+                    sortBy={searchSort}
+                    compositionBestResult={searchComposition}
+                    minWinRate={searchWinRate}
                   />
                 </div>
               )}
@@ -1828,6 +1876,7 @@ function LegacyDashboard() {
           </div>
         )})()}
 
+        </>}
       </div>
 
       {/* Character Details Modal */}
@@ -1855,7 +1904,7 @@ function LegacyDashboard() {
               
               const usageData = stats?.character_usage?.find((x:any) => x.id === selectedCharId);
               const usageCount = usageData?.count || 0;
-              const winRate = usageData?.win_rate || 0;
+              const winRate = usageData?.win_rate ?? null;
               const charWins = usageData?.win_count || 0;
               const totalMatches = usageData?.total_matches || 0;
               const charLosses = totalMatches - charWins;
@@ -1902,7 +1951,7 @@ function LegacyDashboard() {
                     </div>
                     <div className="flex items-center self-start sm:self-auto">
                       <Link
-                        href={`/tournament/${id}/dashboard/character/${selectedCharId}`}
+                        href={`/tournament/${id}/dashboard/character/${selectedCharId}?registration_phase=${registrationPhase}`}
                         className="flex items-center space-x-1.5 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl text-sm font-bold ring-1 ring-blue-500/30 transition-all whitespace-nowrap"
                         onClick={() => setSelectedCharId(null)}
                       >
@@ -1919,7 +1968,7 @@ function LegacyDashboard() {
                     </div>
                     <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
                       <p className="text-emerald-400 text-sm font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
-                      <p className="text-3xl font-black text-emerald-400">{winRate}%</p>
+                      <p className="text-3xl font-black text-emerald-400">{formatWinRate(winRate)}</p>
                       <p className="text-xs text-emerald-500/60 mt-1">{t('stats.winsLosses', { wins: charWins, losses: charLosses })}</p>
                     </div>
                   </div>
@@ -1956,7 +2005,7 @@ function LegacyDashboard() {
                             <tr>
                               {usageData.position_stats.map((ps: any) => (
                                 <td key={ps.position} className="py-3 px-2">
-                                  {ps.win_rate !== null ? (
+                                  {ps.total > 0 && ps.win_rate != null ? (
                                     <>
                                       <span className={`font-black text-lg ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                         {ps.win_rate}%
@@ -1994,7 +2043,7 @@ function LegacyDashboard() {
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('team.position')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.usageCount')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.winRate')}</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.finalResult')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('teamMeaning.compositionBest')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2010,7 +2059,7 @@ function LegacyDashboard() {
                                     <span className="text-slate-400 text-[10px]">({ps.pct}%)</span>
                                   </td>
                                   <td className="py-2 px-2">
-                                    {ps.win_rate !== null ? (
+                                    {ps.total > 0 && ps.win_rate != null ? (
                                       <>
                                         <span className={`font-bold text-sm ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                           {ps.win_rate}%
@@ -2023,21 +2072,7 @@ function LegacyDashboard() {
                                     )}
                                   </td>
                                   <td className="py-2 px-2">
-                                    {ps.best_result ? (
-                                      <span className={`inline-block px-2 py-0.5 text-[10px] font-bold rounded-full ring-1 ${
-                                        ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
-                                        ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
-                                        ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
-                                        ps.best_result === "ベスト8" ? "bg-blue-500/20 text-blue-400 ring-blue-500/50" :
-                                        ps.best_result === "ベスト16" ? "bg-purple-500/20 text-purple-400 ring-purple-500/50" :
-                                        ps.best_result === "ベスト32" ? "bg-slate-700/60 text-slate-400 ring-slate-600/50" :
-                                        "bg-slate-800/60 text-slate-500 ring-slate-700/50"
-                                      }`}>
-                                        {ps.best_result}
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-600 text-[10px]">-</span>
-                                    )}
+                                    {<CompositionBestResult team={ps}/>}
                                   </td>
                                 </tr>
                               );
@@ -2157,16 +2192,12 @@ function LegacyDashboard() {
                         };
                         const teamResultClass = teamResultColors[team.best_result] ?? "bg-slate-800/60 text-slate-500 ring-slate-700/50";
                         return (
-                          <div key={idx} onClick={() => handleTeamClick(team.canonical_id)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
+                          <div key={idx} onClick={() => handleTeamClick(team.canonical_id, team)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
                             {/* 編成アイコン行 */}
-                            <div className="flex items-center justify-between">
-                              <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div><TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} /><TeamRegistrationUsage team={team}/></div>
                               <div className="flex items-center space-x-2 shrink-0 ml-4">
-                                {team.best_result && (
-                                  <span className={`inline-block px-2 py-0.5 text-xs font-bold rounded-full ring-1 ${teamResultClass}`}>
-                                    {team.best_result}
-                                  </span>
-                                )}
+                                <TeamBestResults team={team}/>
                                 <span className="text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-lg ring-1 ring-white/10 text-xs">
                                   {t('stats.teamPick', { count: team.count })}
                                 </span>
@@ -2178,7 +2209,7 @@ function LegacyDashboard() {
                                 <div className="flex items-center space-x-2">
                                   <span className="text-[10px] text-slate-500 font-bold uppercase">{t('stats.winRate')}</span>
                                   <span className={`text-lg font-black ${team.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                    {team.win_rate}%
+                                    {formatWinRate(team.win_rate)}
                                   </span>
                                 </div>
                                 <div className="h-4 w-px bg-white/10"></div>
@@ -2201,30 +2232,6 @@ function LegacyDashboard() {
           </div>
         </div>
       )}
-    </main>
+    </Container>
   );
-}
-
-
-export default function TournamentDashboardRouter() {
-  const { id } = useParams();
-  const search = useSearchParams();
-  const { t } = useI18n();
-  const [tournament, setTournament] = useState<{ id: number; deck_registration_phases: boolean } | null>(null);
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    const controller = new AbortController();
-    setTournament(null); setError(false);
-    fetch(`/api/tournaments/${id}`, { cache: "no-store", signal: controller.signal }).then(async response => {
-      if (!response.ok) throw new Error();
-      setTournament(await response.json());
-    }).catch(e => { if (e.name !== "AbortError") setError(true); });
-    return () => controller.abort();
-  }, [id]);
-  if (error) return <p role="alert">{t("arenaPhases.error")}</p>;
-  if (!tournament) return <p>{t("arenaPhases.loading")}</p>;
-  if (!tournament.deck_registration_phases) return <LegacyDashboard />;
-  const initialDetails = search.get("initial_details") === "1";
-  return <><div className="mx-auto max-w-7xl p-4"><Link className="text-blue-300" href={`/tournament/${tournament.id}/dashboard${initialDetails ? "" : "?initial_details=1"}`}>{t(initialDetails ? "arenaPhases.title" : "arenaPhases.initialDetails")}</Link>{initialDetails && <p>{t("arenaPhases.top8Notice")}</p>}</div>{initialDetails ? <LegacyDashboard /> : <ArenaPhaseRegistration tournamentId={tournament.id} />}</>;
-
 }

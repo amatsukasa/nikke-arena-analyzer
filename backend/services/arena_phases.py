@@ -7,11 +7,67 @@ from collections import Counter
 from hashlib import sha256
 import json
 
+from contextlib import contextmanager
+from sqlalchemy.orm import selectinload, joinedload
 from fastapi import HTTPException
 import models
 from services.collection_classifier import COLLECTION_VALUES
 
 PHASES = ("initial", "best8", "final")
+
+
+
+# Analytics names are independent of persisted registration/revision values.
+ANALYSIS_STAGES = ("league", "championship", "final")
+
+def canonical_analysis_stage(value):
+    # Public analytics aliases describe tournament stages, NOT storage phases.
+    return {"initial": "league", "best8": "championship"}.get(value, value)
+
+
+def normalized_stage(tournament, stored):
+    if tournament is None:
+        return None
+    if not tournament.deck_registration_phases:
+        return "legacy"
+    scope = tournament.registration_scope
+    if stored == "final" and scope in ("full_64", "champion_8"):
+        return "final"
+    if scope == "full_64":
+        return {"initial": "league", "best8": "championship"}.get(stored)
+    if scope == "champion_8" and stored == "initial":
+        return "championship"
+    return None
+
+def stored_analysis_phase(tournament, stage):
+    if stage in ("initial", "best8", "final", "legacy"):
+        return "initial" if stage == "legacy" else stage
+    return next((p for p in PHASES if normalized_stage(tournament, p) == stage), None)
+
+def analysis_applicable(tournament, stage):
+    if not tournament.deck_registration_phases:
+        return stage == "legacy"
+    if stage == "legacy":
+        return False
+    stored = stored_analysis_phase(tournament, stage)
+    return stored is not None and normalized_stage(tournament, stored) is not None
+
+def matches_analysis_phase(db, match, stage):
+    if stage in ("initial", "best8", "final", "legacy"):
+        return getattr(match, "arena_phase", "initial") == ("initial" if stage == "legacy" else stage)
+    scope = db.info.get("arena_analysis_scope")
+    tournament = scope["tournaments"].get(match.tournament_id) if scope else getattr(match, "tournament", None)
+    return bool(tournament and tournament.deck_registration_phases and
+        normalized_stage(tournament, getattr(match, "arena_phase", "initial")) == stage)
+
+def analysis_qualified_ids(tournament, db, stage, player_ids):
+    stored = stored_analysis_phase(tournament, stage)
+    if stored is None:
+        return set()
+    if stored == "initial":
+        return set(player_ids)
+    _, _, qualifications, _ = context(tournament, db)
+    return {pid for pid, phase in qualifications if phase == stored}
 
 
 def fingerprint(value):
@@ -22,14 +78,55 @@ def supported(tournament):
     return bool(tournament.deck_registration_phases)
 
 
-def legacy_teams(player, db):
-    decks = db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).order_by(models.DeckSet.id).all()
-    # Ambiguous legacy sets must never silently become a complete registration.
-    if len(decks) != 1:
-        return []
-    return [{"team_number": t.team_number, "characters": [
+
+@contextmanager
+def analysis_scope(db, tournament_ids):
+    """Bulk read data for one aggregate request; never reused by write paths."""
+    previous = db.info.get("arena_analysis_scope")
+    ids = set(tournament_ids)
+    if previous is not None and ids.issubset(previous["tournaments"]):
+        yield previous
+        return
+    tournaments = db.query(models.Tournament).filter(models.Tournament.id.in_(ids)).all()
+    players = db.query(models.Player).filter(models.Player.tournament_id.in_(ids)).all()
+    player_ids = [p.id for p in players]
+    decks = db.query(models.DeckSet).options(selectinload(models.DeckSet.teams)).filter(models.DeckSet.player_id.in_(player_ids)).order_by(models.DeckSet.id).all() if player_ids else []
+    matches = db.query(models.Match).options(selectinload(models.Match.round_results),
+        joinedload(models.Match.tournament), joinedload(models.Match.attacker), joinedload(models.Match.defender)).filter(models.Match.tournament_id.in_(ids)).order_by(models.Match.id).all()
+    revisions = db.query(models.ArenaMatchRevision).filter(models.ArenaMatchRevision.tournament_id.in_(ids)).order_by(models.ArenaMatchRevision.id).all()
+    registrations = db.query(models.ArenaDeckRegistration).filter(models.ArenaDeckRegistration.tournament_id.in_(ids)).order_by(models.ArenaDeckRegistration.id).all()
+    scope = {"tournaments": {t.id: t for t in tournaments}, "players": players,
+        "decks": decks, "matches": matches, "revisions": revisions,
+        "registrations": registrations, "contexts": {}}
+    db.info["arena_analysis_scope"] = scope
+    try:
+        yield scope
+    finally:
+        if previous is None:
+            db.info.pop("arena_analysis_scope", None)
+        else:
+            db.info["arena_analysis_scope"] = previous
+
+
+def legacy_teams_by_player(players, db):
+    """Load legacy sets and their teams once, preserving ambiguity checks."""
+    by_player = {p.id: [] for p in players}
+    if not by_player:
+        return {}
+    scope = db.info.get("arena_analysis_scope")
+    decks = ([d for d in scope["decks"] if d.player_id in by_player] if scope is not None else
+        db.query(models.DeckSet).options(selectinload(models.DeckSet.teams)).filter(
+            models.DeckSet.player_id.in_(by_player)).order_by(models.DeckSet.id).all())
+    for deck in decks:
+        by_player[deck.player_id].append(deck)
+    return {pid: ([{"team_number": t.team_number, "characters": [
         {"id": getattr(t, f"char{i}_id"), "collection_level": getattr(t, f"collection{i}")}
-        for i in range(1, 6)]} for t in sorted(decks[0].teams, key=lambda t: t.team_number)]
+        for i in range(1, 6)]} for t in sorted(sets[0].teams, key=lambda t: t.team_number)]
+        if len(sets) == 1 else []) for pid, sets in by_player.items()}
+
+
+def legacy_teams(player, db):
+    return legacy_teams_by_player([player], db)[player.id]
 
 
 def complete(teams):
@@ -59,14 +156,21 @@ def definitions(tournament):
 
 
 def context(tournament, db):
-    players = db.query(models.Player).filter(models.Player.tournament_id == tournament.id).all()
+    scope = db.info.get("arena_analysis_scope")
+    if scope is not None and tournament.id in scope["contexts"]:
+        return scope["contexts"][tournament.id]
+    players = ([p for p in scope["players"] if p.tournament_id == tournament.id] if scope is not None else
+        db.query(models.Player).filter(models.Player.tournament_id == tournament.id).all())
     by_position = {(p.champion_slot if tournament.registration_scope == "champion_8" else p.seed_number): p.id for p in players}
-    legacy = db.query(models.Match).filter(models.Match.tournament_id == tournament.id).order_by(models.Match.id).all()
-    revisions = db.query(models.ArenaMatchRevision).filter(models.ArenaMatchRevision.tournament_id == tournament.id).order_by(models.ArenaMatchRevision.id).all()
+    legacy = ([m for m in scope["matches"] if m.tournament_id == tournament.id] if scope is not None else
+        db.query(models.Match).options(selectinload(models.Match.round_results)).filter(models.Match.tournament_id == tournament.id).order_by(models.Match.id).all())
+    revisions = ([r for r in scope["revisions"] if r.tournament_id == tournament.id] if scope is not None else
+        db.query(models.ArenaMatchRevision).filter(models.ArenaMatchRevision.tournament_id == tournament.id).order_by(models.ArenaMatchRevision.id).all())
     latest = {r.match_key: r for r in revisions}
-    registrations = db.query(models.ArenaDeckRegistration).filter(models.ArenaDeckRegistration.tournament_id == tournament.id).order_by(models.ArenaDeckRegistration.id).all()
+    registrations = ([r for r in scope["registrations"] if r.tournament_id == tournament.id] if scope is not None else
+        db.query(models.ArenaDeckRegistration).filter(models.ArenaDeckRegistration.tournament_id == tournament.id).order_by(models.ArenaDeckRegistration.id).all())
     latest_registration = {(r.player_id, r.phase): r for r in registrations}
-    legacy_by_player = {p.id: legacy_teams(p, db) for p in players}
+    legacy_by_player = legacy_teams_by_player(players, db)
     nodes = {}
     qualifications = {(p.id, "initial"): "initial" for p in players}
 
@@ -116,13 +220,17 @@ def context(tournament, db):
             "teams": [t[0] for t in teams], "registration_ids": [t[1] for t in teams],
             "revision_id": active.id if active else None, "legacy_match_id": legacy_match.id if legacy_match else None,
             "result_phase": active.phase if active else "initial" if legacy_match else phase,
+            "result_registration_ids": [active.attacker_registration_id, active.defender_registration_id] if active else [None, None],
             "rounds": active.rounds if active else [r.winner_id for r in sorted(legacy_match.round_results, key=lambda r: r.round_number)] if legacy_match else [],
             "result_teams": [active.attacker_teams, active.defender_teams] if active else [legacy_by_player.get(legacy_match.attacker_id, []), legacy_by_player.get(legacy_match.defender_id, [])] if legacy_match else [],
             "result_participants": [active.attacker_id, active.defender_id] if active else [legacy_match.attacker_id, legacy_match.defender_id] if legacy_match else [],
             "legacy_lineage": stored is None and all(nodes[k]["legacy_lineage"] for k in sources),
             "advancement": fingerprint([definition["key"], active.id if active else f"legacy:{legacy_match.id}" if legacy_match else None, winner_id])}
         nodes[definition["key"]] = node
-    return players, nodes, qualifications, registration
+    result = (players, nodes, qualifications, registration)
+    if scope is not None:
+        scope["contexts"][tournament.id] = result
+    return result
 
 
 def phase_statistics(phase, nodes, player_decks):
@@ -192,7 +300,7 @@ def validate_teams(teams, db):
     return sorted(cleaned, key=lambda t: t["team_number"])
 
 
-def save_registration(tournament, player_id, phase, payload, db):
+def save_registration(tournament, player_id, phase, payload, db, *, commit=True):
     _, _, qualifications, _ = context(tournament, db)
     qualification = qualifications.get((player_id, phase))
     if qualification is None:
@@ -204,7 +312,9 @@ def save_registration(tournament, player_id, phase, payload, db):
         raise HTTPException(409, "Registration changed; reload before saving")
     teams = validate_teams(payload.get("teams"), db)
     db.add(models.ArenaDeckRegistration(tournament_id=tournament.id, player_id=player_id, phase=phase, qualification=qualification, teams=teams))
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()
     return state(tournament, db)
 
 
@@ -269,44 +379,55 @@ def publication_readiness(tournament, db):
 
 # Read adapters keep existing initial-registration analytics separate from later phases.
 # These are transient objects: they are never attached to the Session or persisted.
-def projected_deck(player_id, teams, identity):
+def projected_deck(player_id, teams, identity, *, registration_id=None):
     from types import SimpleNamespace
     rows = []
     for team in teams:
-        fields = {"team_number": team["team_number"], "deck_set_id": identity}
+        fields = {"id": identity * 10 - team["team_number"], "team_number": team["team_number"], "deck_set_id": identity}
         for index, c in enumerate(team["characters"], 1):
             fields[f"char{index}_id"] = c["id"]
             fields[f"collection{index}"] = c.get("collection_level")
         rows.append(SimpleNamespace(**fields))
-    return SimpleNamespace(id=identity, player_id=player_id, teams=rows, created_at=0)
+    return SimpleNamespace(id=identity, player_id=player_id, teams=rows, created_at=0, registration_id=registration_id)
 
 
 def initial_deck_sets(db, player_ids):
-    players = db.query(models.Player).filter(models.Player.id.in_(player_ids)).all()
+    scope = db.info.get("arena_analysis_scope")
+    wanted = set(player_ids)
+    players = ([p for p in scope["players"] if p.id in wanted] if scope is not None else
+        db.query(models.Player).filter(models.Player.id.in_(wanted)).all())
     tids = {p.tournament_id for p in players}
-    arenas = {t.id: t for t in db.query(models.Tournament).filter(models.Tournament.id.in_(tids)).all() if supported(t)}
-    regular_ids = [p.id for p in players if p.tournament_id not in arenas]
-    result = db.query(models.DeckSet).filter(models.DeckSet.player_id.in_(regular_ids)).all() if regular_ids else []
+    tournaments = ([t for t in scope["tournaments"].values() if t.id in tids] if scope is not None else
+        db.query(models.Tournament).filter(models.Tournament.id.in_(tids)).all())
+    arenas = {t.id: t for t in tournaments if supported(t)}
+    regular_ids = {p.id for p in players if p.tournament_id not in arenas}
+    result = ([d for d in scope["decks"] if d.player_id in regular_ids] if scope is not None else
+        db.query(models.DeckSet).options(selectinload(models.DeckSet.teams)).filter(models.DeckSet.player_id.in_(regular_ids)).all() if regular_ids else [])
     for tournament in arenas.values():
-        revisions = db.query(models.ArenaDeckRegistration).filter_by(tournament_id=tournament.id, phase="initial").order_by(models.ArenaDeckRegistration.id).all()
+        revisions = ([r for r in scope["registrations"] if r.tournament_id == tournament.id and r.phase == "initial"] if scope is not None else
+            db.query(models.ArenaDeckRegistration).filter_by(tournament_id=tournament.id, phase="initial").order_by(models.ArenaDeckRegistration.id).all())
         latest = {r.player_id: r for r in revisions}
+        fallback = legacy_teams_by_player([p for p in players if p.tournament_id == tournament.id and p.id not in latest], db)
         for player in players:
             if player.tournament_id != tournament.id:
                 continue
             revision = latest.get(player.id)
-            teams = revision.teams if revision else legacy_teams(player, db)
+            teams = revision.teams if revision else fallback[player.id]
             if teams:
-                result.append(projected_deck(player.id, teams, -player.id))
+                result.append(projected_deck(player.id, teams, -player.id, registration_id=revision.id if revision else None))
     return result
 
 
 def effective_matches(db, tournament_ids):
     from types import SimpleNamespace
-    tournaments = db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all()
+    scope = db.info.get("arena_analysis_scope")
+    tournaments = ([t for t in scope["tournaments"].values() if t.id in tournament_ids] if scope is not None else
+        db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all())
     result = []
     for tournament in tournaments:
         if not supported(tournament):
-            result.extend(db.query(models.Match).filter_by(tournament_id=tournament.id).all())
+            result.extend([m for m in scope["matches"] if m.tournament_id == tournament.id] if scope is not None else
+                db.query(models.Match).options(selectinload(models.Match.round_results)).filter_by(tournament_id=tournament.id).all())
             continue
         players, nodes, _, _ = context(tournament, db)
         by_id = {p.id: p for p in players}
@@ -322,7 +443,9 @@ def effective_matches(db, tournament_ids):
                 bracket_slot=node["slot"] if tournament.registration_scope == "champion_8" else None,
                 attacker_id=pid1, defender_id=pid2, winner_id=node["winner_id"],
                 round_results=[SimpleNamespace(match_id=identity, round_number=i+1, winner_id=pid) for i, pid in enumerate(node["rounds"])],
-                arena_phase=node["result_phase"],
+                arena_phase=node["result_phase"], arena_deck_history_verified=bool(node["revision_id"]),
+                arena_remaining=node["remaining"],
+                arena_registration_ids=dict(zip(node["result_participants"], node["result_registration_ids"])),
                 arena_decks={pid: projected_deck(pid, teams, -pid) for pid, teams in zip(node["result_participants"], node["result_teams"])}))
     return result
 
@@ -330,4 +453,61 @@ def effective_matches(db, tournament_ids):
 def deck_for_match(match, player_id, db):
     if hasattr(match, "arena_decks"):
         return match.arena_decks.get(player_id)
+    scope = db.info.get("arena_analysis_scope")
+    if scope is not None:
+        return next((d for d in scope["decks"] if d.player_id == player_id), None)
     return db.query(models.DeckSet).filter_by(player_id=player_id).first()
+
+
+
+def validate_analysis_phase(tournament, phase):
+    if phase in ("league", "championship"):
+        if not analysis_applicable(tournament, phase):
+            raise HTTPException(422, "Registration stage does not apply to this tournament")
+        phase = stored_analysis_phase(tournament, phase)
+    if not supported(tournament):
+        # "initial" remains a compatibility alias for unpartitioned beta data.
+        if phase not in ("initial", "legacy"):
+            raise HTTPException(422, "Beta tournaments have no registration phases")
+        return
+    allowed = ("initial", "final") if tournament.registration_scope == "champion_8" else PHASES
+    if phase not in allowed or (phase != "initial" and not supported(tournament)):
+        raise HTTPException(422, "Registration phase does not apply to this tournament")
+
+
+def phase_deck_sets(db, player_ids, phase="initial"):
+    if phase in ("league", "championship"):
+        scope = db.info.get("arena_analysis_scope")
+        if scope is None:
+            players = db.query(models.Player).filter(models.Player.id.in_(player_ids)).all()
+            with analysis_scope(db, {p.tournament_id for p in players}):
+                return phase_deck_sets(db, player_ids, phase)
+        wanted = set(player_ids)
+        result = []
+        for tournament in scope["tournaments"].values():
+            if not analysis_applicable(tournament, phase):
+                continue
+            ids = [p.id for p in scope["players"] if p.id in wanted and p.tournament_id == tournament.id]
+            if ids:
+                result.extend(phase_deck_sets(db, ids, stored_analysis_phase(tournament, phase)))
+        return result
+    if phase in ("initial", "legacy"):
+        return initial_deck_sets(db, player_ids)
+    scope = db.info.get("arena_analysis_scope")
+    wanted = set(player_ids)
+    players = ([p for p in scope["players"] if p.id in wanted] if scope is not None else
+        db.query(models.Player).filter(models.Player.id.in_(wanted)).all())
+    result = []
+    tids = {p.tournament_id for p in players}
+    tournaments = ([t for t in scope["tournaments"].values() if t.id in tids] if scope is not None else
+        db.query(models.Tournament).filter(models.Tournament.id.in_(tids)).all())
+    for tournament in tournaments:
+        validate_analysis_phase(tournament, phase)
+        _, _, qualifications, registration = context(tournament, db)
+        for player in players:
+            if player.tournament_id != tournament.id or (player.id, phase) not in qualifications:
+                continue
+            teams, revision_id = registration(player.id, phase)
+            if teams:
+                result.append(projected_deck(player.id, teams, -player.id, registration_id=revision_id))
+    return result

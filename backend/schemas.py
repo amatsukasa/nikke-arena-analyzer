@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime
 
@@ -51,6 +51,11 @@ class TournamentBase(BaseModel):
     has_match_data: bool = True
 
 class Tournament(TournamentBase):
+    @field_validator("deck_registration_phases", mode="before")
+    @classmethod
+    def legacy_null_phase_flag(cls, value):
+        return False if value is None else value
+
     id: int
     created_at: datetime
     created_by: Optional[int] = None
@@ -174,6 +179,7 @@ class ChampionRoundResultInput(BaseModel):
 
 
 class ChampionMatchUpsert(BaseModel):
+    phase_context: Optional[dict] = None
     winner_id: int
     round_results: List[ChampionRoundResultInput]
     model_config = ConfigDict(extra="forbid")
@@ -194,6 +200,7 @@ class ChampionRoundResultResponse(BaseModel):
 
 
 class ChampionBracketMatchResponse(BaseModel):
+    phase_context: Optional[dict] = None
     bracket_stage: Literal["quarterfinal", "semifinal", "final"]
     bracket_slot: int
     name: str

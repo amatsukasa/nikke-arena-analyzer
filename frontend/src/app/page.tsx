@@ -1,4 +1,6 @@
 "use client";
+import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
+import { TeamRegistrationUsage, RegistrationPhaseLabel, CompositionBestResult, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
@@ -73,6 +75,17 @@ function DashboardContent() {
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
+  const [registrationPhase, setRegistrationPhase] = useState(() => {
+    const phase = searchParams.get("registration_phase");
+    return phase && ["legacy", "league", "championship", "final"].includes(phase) ? phase : phase === "initial" ? "league" : "championship";
+  });
+  const previousRegistrationPhase = useRef(registrationPhase);
+  useEffect(() => {
+    if (previousRegistrationPhase.current === registrationPhase) return;
+    previousRegistrationPhase.current = registrationPhase;
+    setKnownTeamsMap({}); setSelectedTeam(""); setSelectedCharId(null);
+  }, [registrationPhase]);
+
   const initialTab = requestedTab && PUBLIC_TABS.has(requestedTab)
     ? requestedTab
     : "team_winrate";
@@ -132,7 +145,12 @@ function DashboardContent() {
 
   // For team filters
   const [teamMinMatches, setTeamMinMatches] = useState<number>(10);
-  const [teamBestResult, setTeamBestResult] = useState<string>("");
+  const [winRateStage, setWinRateStage] = useState("all");
+  const [searchStage,setSearchStage]=useState("all");
+  const [searchSort,setSearchSort]=useState<"count"|"win_rate"|"composition_best_result">("count");
+  const [searchComposition,setSearchComposition]=useState("");
+  const [searchWinRate,setSearchWinRate]=useState(0);
+  const [teamCompositionBestResult, setTeamCompositionBestResult] = useState<string>("");
     const [teamMinWinRate, setTeamMinWinRate] = useState<number>(0);
   
   // For Character Modal
@@ -145,6 +163,11 @@ function DashboardContent() {
 
   const handleTeamClick = (canonicalId: string, teamObj?: any) => {
     if (!canonicalId) return;
+    const clickedPhase = teamObj?.registration_phase;
+    if (clickedPhase && clickedPhase !== registrationPhase) {
+      previousRegistrationPhase.current = clickedPhase;
+      setRegistrationPhase(clickedPhase);
+    }
     const tIds = teamObj?.character_ids || teamObj?.characters?.map((c: any) => c.id) || [];
     const teamKey = tIds.length > 0 ? makeTeamKey(tIds) : makeTeamKey(canonicalId);
     const targetVal = teamKey || canonicalId;
@@ -167,6 +190,7 @@ function DashboardContent() {
 
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", "matchups");
+    params.set("registration_phase", teamObj?.registration_phase ?? registrationPhase);
     params.set("teamKey", targetVal);
     params.set("team", targetVal);
     if (selectedTournamentIds.length > 0) {
@@ -261,9 +285,22 @@ function DashboardContent() {
     fetchTournaments();
   }, [isFirstLoad, user?.game_start_date]);
 
-  const selectedChampionshipId = allTournaments.find(t => t.play_server === filterServer && t.season === filterSeason)?.championship_id;
+  const seasonTournaments = allTournaments.filter(item => item.play_server === filterServer && (item.season || "β30") === filterSeason);
+  const hasFormal = seasonTournaments.some(item => item.deck_registration_phases);
+  const changeRegistrationPhase = (phase:string) => {
+    setLoading(true); setStats(null); setRegistrationPhase(phase);
+    const query = new URLSearchParams(searchParams.toString()); query.set("registration_phase",phase);
+    router.replace(`/?${query.toString()}`,{scroll:false});
+  };
+  useEffect(()=>{
+    if (!seasonTournaments.length) return;
+    if (!hasFormal && registrationPhase !== "legacy") changeRegistrationPhase("legacy");
+    else if (hasFormal && registrationPhase === "legacy") changeRegistrationPhase("championship");
+  },[hasFormal,seasonTournaments.length]);
+  const selectedChampionshipId = seasonTournaments[0]?.championship_id;
+  const hasSelectedFormal = allTournaments.some(item=>selectedTournamentIds.includes(item.id) && Boolean(item.deck_registration_phases));
   const analysisKey = allTournaments.length > 0 && selectedChampionshipId && selectedTournamentIds.length > 0
-    ? [filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
+    ? [registrationPhase, filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
     : null;
   useResetSynergyOnAnalysisChange(analysisKey, () => {
     setIncludedCharacterIds([]);
@@ -281,7 +318,7 @@ function DashboardContent() {
       const validSpecificIds = selectedSpecificTournamentIds.filter(id => filtered.some(t => t.id === id));
       setSelectedTournamentIds(validSpecificIds.length > 0 ? validSpecificIds : filtered.map(t => t.id));
     }
-  }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments]);
+  }, [filterServer, filterSeason, isAllTournamentsSelected, selectedSpecificTournamentIds, allTournaments, registrationPhase]);
 
   // フィルタ状態を localStorage に保存
   useEffect(() => {
@@ -296,7 +333,7 @@ function DashboardContent() {
 
   useEffect(() => {
     setVisibleTeamCount(10);
-  }, [stats, teamMinMatches, teamBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
+  }, [stats, teamMinMatches, teamCompositionBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
   useEffect(() => {
     if (!selectedCharId || selectedTournamentIds.length === 0) {
@@ -304,14 +341,17 @@ function DashboardContent() {
       return;
     }
 
+    const controller = new AbortController();
     const fetchCharacterDetail = async () => {
       setSelectedCharacterDetailLoading(true);
       try {
         const res = await fetch("/api/dashboard/cross-tournament/character-detail", {
           method: "POST",
+          signal: controller.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             character_id: selectedCharId,
+            registration_phase: registrationPhase,
             tournament_ids: selectedTournamentIds,
             play_server: filterServer,
             championship_id: selectedChampionshipId,
@@ -325,16 +365,18 @@ function DashboardContent() {
         }
 
         const data = await res.json();
-        setSelectedCharacterDetail(data);
+        if (!controller.signal.aborted) setSelectedCharacterDetail(data);
       } catch (e) {
+        if (controller.signal.aborted) return;
         console.error("failed to fetch selected character detail", e);
       } finally {
-        setSelectedCharacterDetailLoading(false);
+        if (!controller.signal.aborted) setSelectedCharacterDetailLoading(false);
       }
     };
 
     fetchCharacterDetail();
-  }, [selectedCharId, selectedTournamentIds, filterServer, selectedChampionshipId]);
+    return () => controller.abort();
+  }, [selectedCharId, selectedTournamentIds, filterServer, selectedChampionshipId, registrationPhase]);
 
   useEffect(() => {
     if (!selectedCharId) return;
@@ -397,7 +439,8 @@ function DashboardContent() {
         const reqBody = { 
           tournament_ids: selectedTournamentIds,
           play_server: filterServer,
-          championship_id: selectedChampionshipId
+          championship_id: selectedChampionshipId,
+          registration_phase: registrationPhase
         };
         
         const statsRes = await fetch(`/api/dashboard/cross-tournament/stats?t=${timestamp}`, {
@@ -407,6 +450,7 @@ function DashboardContent() {
         
         if (statsRes.ok) {
           const statsData = await statsRes.json();
+          if (controller.signal.aborted) return;
           setStats(statsData);
           
           if (statsData.team_usage && Array.isArray(statsData.team_usage)) {
@@ -439,9 +483,10 @@ function DashboardContent() {
     };
     fetchData();
     return () => controller.abort();
-  }, [selectedTournamentIds, filterServer, filterSeason, selectedChampionshipId, isFirstLoad]);
+  }, [selectedTournamentIds, filterServer, filterSeason, selectedChampionshipId, isFirstLoad, registrationPhase]);
 
   const matchupsRequestKey = [
+    registrationPhase,
     [...selectedTournamentIds].sort((a, b) => a - b).join(","),
     filterServer,
     selectedChampionshipId ?? "",
@@ -479,7 +524,8 @@ function DashboardContent() {
         const reqBody = { 
           tournament_ids: selectedTournamentIds,
           play_server: filterServer,
-          championship_id: selectedChampionshipId
+          championship_id: selectedChampionshipId,
+          registration_phase: registrationPhase
         };
         const res = await fetch(`/api/dashboard/cross-tournament/matchups?t=${Date.now()}`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reqBody),
@@ -504,6 +550,8 @@ function DashboardContent() {
     fetchMatchups();
     return () => controller.abort();
   }, [activeTab, matchupsRequestKey, matchupsLoadedKey, matchupsRetry]);
+
+  const searchCandidates=useTeamSearchUsage(activeTab === "search",selectedTournamentIds);
 
   if (loading) return (
     <div className="flex h-screen items-center justify-center">
@@ -576,7 +624,7 @@ function DashboardContent() {
       ...Object.values(knownTeamsMap)
     ];
     sourceTeams.forEach((t: any) => {
-      if (!t) return;
+      if (!t || (t.registration_phase && t.registration_phase !== registrationPhase)) return;
       const key = makeTeamKey(t.character_ids || t.characters?.map((c: any) => c.id) || t.canonical_id);
       if (!key) return;
       if (!map.has(key)) {
@@ -646,6 +694,8 @@ function DashboardContent() {
     <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
       <h1 className="sr-only">{t('dashboard.title')}</h1>
 
+
+
       <div className="flex flex-col xl:flex-row gap-4 xl:gap-8">
         {/* Sidebar for Filters */}
         <aside className="w-full xl:w-64 shrink-0 space-y-3 xl:space-y-6">
@@ -678,6 +728,7 @@ function DashboardContent() {
               <span>{t('filter.title')}</span>
             </h3>
             
+
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-3 xl:block xl:space-y-6">
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">{t('filter.server')}</div>
@@ -952,7 +1003,7 @@ function DashboardContent() {
         {activeTab === "team_winrate" && (
            <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
             <section>
-              <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 space-y-4 md:space-y-0">
+              <div className="mb-6 flex flex-col gap-4">
                 <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                   <Trophy className="text-emerald-400" />
                   <span>{t('stats.teamWinRateRanking')}</span>
@@ -963,34 +1014,26 @@ function DashboardContent() {
                   <select
                     value={teamMinMatches}
                     onChange={(e) => setTeamMinMatches(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className={WIN_RATE_FILTER_CLASS}
                   >
-                    {[1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
+                    {[0, 1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
                   </select>
 
                   <select
                     value={teamMinWinRate}
                     onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className={WIN_RATE_FILTER_CLASS}
                   >
                     <option value={0}>{t('filter.winRateAny')}</option>
                     {[50, 60, 70, 80].map((rate) => <option key={rate} value={rate}>{t('filter.winRateAtLeast', { rate })}</option>)}
                   </select>
 
-                  <select
-                    value={teamBestResult}
-                    onChange={(e) => setTeamBestResult(e.target.value)}
-                    className="bg-slate-800 text-slate-200 border border-slate-600 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="">{t('filter.resultAll')}</option>
-                    <option value="優勝">{t('filter.resultOnly', { result: t('result.champion') })}</option>
-                    {['準優勝', 'ベスト4', 'ベスト8', 'ベスト16', 'ベスト32'].map((result) => <option key={result} value={result}>{t('filter.resultAtLeast', { result: localizedTournamentResult(result, t) || result })}</option>)}
-                  </select>
+                  <TeamResultFilters composition={teamCompositionBestResult} onCompositionChange={setTeamCompositionBestResult} stage={winRateStage} onStageChange={setWinRateStage} formal={hasSelectedFormal}/>
                 </div>
               </div>
 
               <div className="space-y-3">
-                <PaginatedTeamList 
+                <PaginatedTeamList registrationPhase={hasSelectedFormal ? winRateStage : "all"}
                   mode="cross"
                   tournamentIds={selectedTournamentIds} 
                   playServer={filterServer}
@@ -1002,7 +1045,7 @@ function DashboardContent() {
                   minMatches={teamMinMatches}
                   
                   minWinRate={teamMinWinRate}
-                  bestResult={teamBestResult}
+                  compositionBestResult={teamCompositionBestResult}
                 />
               </div>
             </section>
@@ -1066,21 +1109,21 @@ function DashboardContent() {
                 <div className="bg-slate-800/50 p-6 rounded-2xl ring-1 ring-white/5 flex flex-col items-center justify-center">
                   <p className="text-slate-400 text-sm mb-2">{t('stats.overallWinRate')}</p>
                   <p className="text-4xl font-black text-white">
-                    {totalWins + totalLosses > 0 ? Math.round((totalWins / (totalWins + totalLosses)) * 100) : 0}%
+                    {totalWins + totalLosses > 0 ? `${Math.round((totalWins / (totalWins + totalLosses)) * 100)}%` : t("stats.noMatchRecords")}
                   </p>
                   <p className="text-sm text-slate-500 mt-2">{t('stats.winsLosses', { wins: totalWins, losses: totalLosses })}</p>
                 </div>
                 <div className="bg-blue-500/10 p-6 rounded-2xl ring-1 ring-blue-500/20 flex flex-col items-center justify-center">
                   <p className="text-blue-400 text-sm mb-2">{t('stats.attackWinRate')}</p>
                   <p className="text-4xl font-black text-blue-400">
-                    {attackWins + attackLosses > 0 ? Math.round((attackWins / (attackWins + attackLosses)) * 100) : 0}%
+                    {attackWins + attackLosses > 0 ? `${Math.round((attackWins / (attackWins + attackLosses)) * 100)}%` : t("stats.noMatchRecords")}
                   </p>
                   <p className="text-sm text-blue-500/60 mt-2">{t('stats.winsLosses', { wins: attackWins, losses: attackLosses })}</p>
                 </div>
                 <div className="bg-red-500/10 p-6 rounded-2xl ring-1 ring-red-500/20 flex flex-col items-center justify-center">
                   <p className="text-red-400 text-sm mb-2">{t('stats.defenseWinRate')}</p>
                   <p className="text-4xl font-black text-red-400">
-                    {defenseWins + defenseLosses > 0 ? Math.round((defenseWins / (defenseWins + defenseLosses)) * 100) : 0}%
+                    {defenseWins + defenseLosses > 0 ? `${Math.round((defenseWins / (defenseWins + defenseLosses)) * 100)}%` : t("stats.noMatchRecords")}
                   </p>
                   <p className="text-sm text-red-500/60 mt-2">{t('stats.winsLosses', { wins: defenseWins, losses: defenseLosses })}</p>
                 </div>
@@ -1313,8 +1356,8 @@ function DashboardContent() {
               <SynergyCharacterPicker
                 key={`synergy-picker-cross-${analysisKey}`}
                 characters={filteredCharacters}
-                characterUsage={stats?.character_usage ?? stats?.character_stats ?? []}
-                usageState={loading ? "loading" : statsError || !stats ? "error" : "ready"}
+                characterUsage={searchCandidates.usage}
+                usageState={searchCandidates.state}
                 includedIds={includedCharacterIds}
                 excludedIds={excludedCharacterIds}
                 displayMode={arenaCharacterDisplay}
@@ -1335,11 +1378,12 @@ function DashboardContent() {
 
             <div className="space-y-4">
               <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
+              <TeamSearchFilters sort={searchSort} onSortChange={setSearchSort} stage={searchStage} onStageChange={setSearchStage} composition={searchComposition} onCompositionChange={setSearchComposition} winRate={searchWinRate} onWinRateChange={setSearchWinRate} formal={hasSelectedFormal}/>
               {includedCharacterIds.length === 0 ? (
                 <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
               ) : (
                 <div className="space-y-3">
-                  <PaginatedTeamList 
+                  <PaginatedTeamList registrationPhase={hasSelectedFormal ? searchStage : "all"}
                     key={`synergy-cross-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
                     mode="cross"
                     tournamentIds={selectedTournamentIds} 
@@ -1350,7 +1394,9 @@ function DashboardContent() {
                     excludedCharacterIds={excludedCharacterIds}
                     onTeamClick={handleTeamClick} 
                     selectedTeam={selectedTeam} 
-                    sortBy="count"
+                    sortBy={searchSort}
+                    compositionBestResult={searchComposition}
+                    minWinRate={searchWinRate}
                   />
                 </div>
               )}
@@ -1395,7 +1441,7 @@ function DashboardContent() {
                 character_ids: t.character_ids || (t.characters || []).map((ch: any) => typeof ch === 'object' ? ch.id : ch)
               }));
               const usageCount = usageData?.count || 0;
-              const winRate = usageData?.win_rate || 0;
+              const winRate = usageData?.total_matches > 0 ? usageData.win_rate : null;
               const charWins = usageData?.win_count || 0;
               const totalMatches = usageData?.total_matches || 0;
               const charLosses = totalMatches - charWins;
@@ -1443,7 +1489,7 @@ function DashboardContent() {
                     </div>
                     <div className="flex items-center self-start sm:self-auto">
                       <Link
-                        href={`/character/${selectedCharId}?tournaments=${selectedTournamentIds.join(',')}`}
+                        href={`/character/${selectedCharId}?tournaments=${selectedTournamentIds.join(',')}&registration_phase=${registrationPhase}`}
                         className="flex items-center space-x-1.5 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl text-sm font-bold ring-1 ring-blue-500/30 transition-all whitespace-nowrap"
                         onClick={() => setSelectedCharId(null)}
                       >
@@ -1460,7 +1506,7 @@ function DashboardContent() {
                     </div>
                     <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20 flex flex-col items-center justify-center">
                       <p className="text-emerald-400 text-sm font-bold mb-1">{t('stats.nonMirrorWinRate')}</p>
-                      <p className="text-3xl font-black text-emerald-400">{winRate}%</p>
+                      <p className="text-3xl font-black text-emerald-400">{winRate == null ? t("stats.noMatchRecords") : `${winRate}%`}</p>
                       <p className="text-xs text-emerald-500/60 mt-1">{t('stats.winsLosses', { wins: charWins, losses: charLosses })}</p>
                     </div>
                   </div>
@@ -1497,7 +1543,7 @@ function DashboardContent() {
                             <tr>
                               {usageData.position_stats.map((ps: any) => (
                                 <td key={ps.position} className="py-3 px-2">
-                                  {ps.win_rate !== null ? (
+                                  {ps.total > 0 && ps.win_rate != null ? (
                                     <>
                                       <span className={`font-black text-lg ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                         {ps.win_rate}%
@@ -1535,7 +1581,7 @@ function DashboardContent() {
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('team.position')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.usageCount')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.winRate')}</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.finalResult')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('teamMeaning.compositionBest')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1551,7 +1597,7 @@ function DashboardContent() {
                                     <span className="text-slate-400 text-[10px]">({ps.pct}%)</span>
                                   </td>
                                   <td className="py-2 px-2">
-                                    {ps.win_rate !== null ? (
+                                    {ps.total > 0 && ps.win_rate != null ? (
                                       <>
                                         <span className={`font-bold text-sm ${ps.win_rate >= 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
                                           {ps.win_rate}%
@@ -1564,21 +1610,7 @@ function DashboardContent() {
                                     )}
                                   </td>
                                   <td className="py-2 px-2">
-                                    {ps.best_result ? (
-                                      <span className={`inline-block px-2 py-0.5 text-[10px] font-bold rounded-full ring-1 ${
-                                        ps.best_result === "優勝" ? "bg-amber-400/20 text-amber-300 ring-amber-400/50" :
-                                        ps.best_result === "準優勝" ? "bg-slate-300/20 text-slate-200 ring-slate-300/50" :
-                                        ps.best_result === "ベスト4" ? "bg-orange-500/20 text-orange-400 ring-orange-500/50" :
-                                        ps.best_result === "ベスト8" ? "bg-blue-500/20 text-blue-400 ring-blue-500/50" :
-                                        ps.best_result === "ベスト16" ? "bg-purple-500/20 text-purple-400 ring-purple-500/50" :
-                                        ps.best_result === "ベスト32" ? "bg-slate-700/60 text-slate-400 ring-slate-600/50" :
-                                        "bg-slate-800/60 text-slate-500 ring-slate-700/50"
-                                      }`}>
-                                        {ps.best_result}
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-600 text-[10px]">-</span>
-                                    )}
+                                    {<CompositionBestResult team={ps}/>}
                                   </td>
                                 </tr>
                               );
@@ -1700,14 +1732,10 @@ function DashboardContent() {
                         return (
                           <div key={idx} onClick={() => handleTeamClick(team.canonical_id, team)} className="flex flex-col bg-slate-800/50 hover:bg-slate-700/60 cursor-pointer transition-colors p-4 rounded-xl ring-1 ring-white/5 space-y-3">
                             {/* 編成アイコン行 */}
-                            <div className="flex items-center justify-between">
-                              <TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} />
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div><TeamDisplay charIds={team.character_ids} allCharacters={allCharacters} /><TeamRegistrationUsage team={team}/></div>
                               <div className="flex items-center space-x-2 shrink-0 ml-4">
-                                {team.best_result && (
-                                  <span className={`inline-block px-2 py-0.5 text-xs font-bold rounded-full ring-1 ${teamResultClass}`}>
-                                    {team.best_result}
-                                  </span>
-                                )}
+                                <TeamBestResults team={team}/>
                                 <span className="text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-lg ring-1 ring-white/10 text-xs">
                                   {t('stats.teamPick', { count: team.count })}
                                 </span>
