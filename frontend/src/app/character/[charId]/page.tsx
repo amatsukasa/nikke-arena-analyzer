@@ -13,6 +13,8 @@ function CrossTournamentCharacterDetailContent() {
   const router = useRouter();
   const charId = Number(params.charId);
 
+  const requestedPhase = searchParams.get("registration_phase");
+  const registrationPhase = requestedPhase && ["legacy", "league", "championship", "final"].includes(requestedPhase) ? requestedPhase : "initial";
   const tournamentsParam = searchParams.get("tournaments");
   const tournamentIds = (tournamentsParam || "")
     .split(",")
@@ -39,6 +41,7 @@ function CrossTournamentCharacterDetailContent() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               character_id: charId,
+              registration_phase: registrationPhase,
               tournament_ids: tournamentIds,
             }),
           }),
@@ -60,7 +63,7 @@ function CrossTournamentCharacterDetailContent() {
     };
 
     fetchData();
-  }, [charId, tournamentsParam]);
+  }, [charId, tournamentsParam, registrationPhase]);
 
   if (tournamentIds.length === 0) {
     return (
@@ -92,6 +95,7 @@ function CrossTournamentCharacterDetailContent() {
   return (
     <CharacterDetailView
       mode="cross"
+      registrationPhase={registrationPhase}
       characterId={charId}
       tournamentIds={tournamentIds}
       stats={stats}

@@ -141,6 +141,7 @@ class Tournament(Base):
     display_order = Column(Integer, nullable=True)
     is_champion_arena = Column(Boolean, nullable=False, default=False, server_default="false")
     has_match_data = Column(Boolean, nullable=False, default=True, server_default="true")
+    deck_registration_phases = Column(Boolean, nullable=False, default=False, server_default="false")
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
@@ -172,6 +173,7 @@ class Player(Base):
     tournament_id = Column(Integer, ForeignKey("tournaments.id"))
     seed_number = Column(Integer, nullable=True) # 1 to 64
     champion_slot = Column(SmallInteger, nullable=True)
+    private_name = Column(String(50), nullable=True)
     name = Column(String, nullable=False)
     icon_url = Column(String, nullable=True) # 追加: プレイヤーアイコンのURL
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -260,3 +262,36 @@ class TournamentSnapshot(Base):
 
     tournament = relationship("Tournament")
 
+
+
+class ArenaDeckRegistration(Base):
+    """Append-only phase revisions; legacy DeckSet rows remain initial registration."""
+    __tablename__ = "arena_deck_registrations"
+    id = Column(Integer, primary_key=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False, index=True)
+    phase = Column(String(16), nullable=False)
+    qualification = Column(String(64), nullable=False)
+    teams = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (CheckConstraint("phase IN ('initial', 'best8', 'final')", name="ck_arena_registration_phase"),)
+
+
+class ArenaMatchRevision(Base):
+    """Immutable result and exact deck snapshots, including original legacy results."""
+    __tablename__ = "arena_match_revisions"
+    id = Column(Integer, primary_key=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)
+    match_key = Column(String(32), nullable=False)
+    phase = Column(String(16), nullable=False)
+    upstream = Column(String(64), nullable=False)
+    attacker_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    defender_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    winner_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    attacker_registration_id = Column(Integer, ForeignKey("arena_deck_registrations.id"), nullable=True)
+    defender_registration_id = Column(Integer, ForeignKey("arena_deck_registrations.id"), nullable=True)
+    attacker_teams = Column(JSON, nullable=False)
+    defender_teams = Column(JSON, nullable=False)
+    rounds = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (CheckConstraint("phase IN ('initial', 'best8', 'final')", name="ck_arena_match_phase"),)

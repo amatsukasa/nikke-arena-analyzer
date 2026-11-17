@@ -9,6 +9,7 @@ export default function SingleTournamentCharacterDetailPage() {
   const { t, href } = useI18n();
   const params = useParams();
   const searchParams = useSearchParams();
+  const registrationPhase = searchParams.get("registration_phase") || "initial";
   const router = useRouter();
   const tournamentId = Number(params.id);
   const charId = Number(params.charId);
@@ -48,7 +49,7 @@ export default function SingleTournamentCharacterDetailPage() {
         }
         const [cRes, sRes] = await Promise.all([
           fetch("/api/characters"),
-          fetch(`/api/tournaments/${tournamentId}/dashboard/character/${charId}`)
+          fetch(`/api/tournaments/${tournamentId}/dashboard/character/${charId}?registration_phase=${encodeURIComponent(registrationPhase)}`)
         ]);
 
         const tData = await tRes.json();
@@ -70,7 +71,7 @@ export default function SingleTournamentCharacterDetailPage() {
     };
 
     fetchData();
-  }, [tournamentId, charId]);
+  }, [registrationPhase, tournamentId, charId]);
 
   if (loading || tournamentsParam) {
     return (
@@ -87,6 +88,7 @@ export default function SingleTournamentCharacterDetailPage() {
   return (
     <CharacterDetailView
       mode="single"
+      registrationPhase={registrationPhase}
       characterId={charId}
       tournamentId={tournamentId}
       stats={stats}

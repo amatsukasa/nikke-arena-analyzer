@@ -1,4 +1,6 @@
 export const TOURNAMENT_RESULT_LABELS: Record<string, string> = {
+  finalist: "決勝進出",
+  qualified_best8: "ベスト8進出",
   best64: "ベスト64",
   best32: "ベスト32",
   best16: "ベスト16",
@@ -9,6 +11,8 @@ export const TOURNAMENT_RESULT_LABELS: Record<string, string> = {
 };
 
 export const TOURNAMENT_RESULT_COLORS: Record<string, string> = {
+  "決勝進出": "bg-blue-400/20 text-blue-200 ring-blue-400/50",
+  "ベスト8進出": "bg-blue-500/20 text-blue-300 ring-blue-500/50",
   "優勝": "bg-amber-400/20 text-amber-300 ring-amber-400/50",
   "準優勝": "bg-slate-300/20 text-slate-200 ring-slate-300/50",
   "ベスト4": "bg-orange-500/20 text-orange-400 ring-orange-500/50",
@@ -31,6 +35,7 @@ export function tournamentResultClass(result?: string | null) {
 }
 
 const TRANSLATION_KEYS: Record<string, string> = {
+  finalist: "result.finalist", qualified_best8: "result.qualifiedBest8",
   "優勝": "result.champion", champion: "result.champion",
   "準優勝": "result.runnerUp", runner_up: "result.runnerUp",
   "ベスト64": "result.best64", best64: "result.best64",

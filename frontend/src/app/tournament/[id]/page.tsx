@@ -1,20 +1,24 @@
 "use client";
 export const dynamic = 'force-dynamic';
 import { useState, useRef, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ShieldAlert, Trophy, Swords, BarChart3 } from "lucide-react";
 import Link from "../../../components/LocalizedLink";
 import ChampionTournamentRegistrationShell from "../../../components/ChampionTournamentRegistrationShell";
 import DeckRegistrationEditor from "../../../components/DeckRegistrationEditor";
 import DeckRegistrationViewport from "../../../components/DeckRegistrationViewport";
 import DeckRegistrationViewer from "../../../components/DeckRegistrationViewer";
+import { usePrivatePlayerNames } from "@/hooks/usePrivatePlayerNames";
+import PrivatePlayerNameEditor from "@/components/PrivatePlayerNameEditor";
 import PlayerIconEditor from "../../../components/PlayerIconEditor";
+import { analyzeRegistrationDecks, saveRegistrationDecks } from "../../../lib/deckRegistrationApi";
+import TournamentBracketViewport from "@/components/TournamentBracketViewport";
 import TournamentPlayerPill from "../../../components/TournamentPlayerPill";
 import MatchResultEditor from "../../../components/MatchResultEditor";
 import { useAuth } from "../../../context/AuthContext";
 import { apiErrorMessage, normalizeTournament, TournamentSummary } from "../../../lib/tournaments";
 import { prepareAnalysisImage } from "../../../lib/deckImagePreparation";
-import { hasCompleteRegistrationStructure, normalizeAnalyzedRegistrationTeams, normalizeSavedRegistrationTeams, registrationSaveConfirmation, registrationTeamsPayload, validateRegistrationTeams } from "../../../lib/deckRegistration";
+import { hasCompleteRegistrationStructure, normalizeSavedRegistrationTeams, registrationSaveConfirmation, validateRegistrationTeams } from "../../../lib/deckRegistration";
 import { full64MatchPayload, MatchEditorResult, normalizeFull64MatchAnalysis } from "../../../lib/matchRegistration";
 import { usePlayerIconCropSettings } from "../../../hooks/usePlayerIconCropSettings";
 import { useCharacterCatalog } from "../../../hooks/useCharacterCatalog";
@@ -73,14 +77,17 @@ export default function TournamentDetailRouter() {
         publicationStatus={tournament.publication_status}
         providerGameStartDate={tournament.provider_game_start_date}
         canEdit={canEdit}
+        registrationPhases={Boolean(tournament.deck_registration_phases)}
       />
     );
   }
   const canEdit = Boolean(user && (user.role === "admin" || user.id === tournament.created_by || user.email === tournament.creator_email));
-  return <Full64TournamentDetail canEdit={canEdit} />;
+  return <Full64TournamentDetail canEdit={canEdit} registrationPhases={Boolean(tournament.deck_registration_phases)} published={tournament.publication_status === "published"} />;
 }
 
-function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
+function Full64TournamentDetail({ canEdit, registrationPhases, published }: { canEdit: boolean; registrationPhases: boolean; published: boolean }) {
+  const { t } = useI18n();
+  const search = useSearchParams();
   const params = useParams();
   const id = params.id;
   const router = useRouter();
@@ -103,6 +110,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const [full64MatchDirty,setFull64MatchDirty]=useState(false);
 
   // フォーム用プレイヤー情報
+  const privateNames = usePrivatePlayerNames(Number(id));
   const [formPlayerIcon, setFormPlayerIcon] = useState("");
   const [registeredDecks, setRegisteredDecks] = useState<any[]>([]);
   const [isLoadingRegisteredDecks, setIsLoadingRegisteredDecks] = useState(false);
@@ -113,13 +121,24 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
 
   // トーナメント表データ
   const [bracketData, setBracketData] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<number | "champion">(1);
+  const [activeTab, setActiveTab] = useState<number | "champion">(search.get("tab") === "champion" ? "champion" : 1);
+  const phasePlayers = (bracketData?.groups || []).flatMap((group: any) => group.players || []);
+  const phaseAttacker = phasePlayers.find((player: any) => player.seed === attackerSeed);
+  const phaseDefender = phasePlayers.find((player: any) => player.seed === defenderSeed);
+  const remaining = matchStage.toUpperCase() === "FINAL" ? 2 : Number(matchStage.match(/Best\s+(\d+)/i)?.[1]);
+  const phaseMatch = registrationPhases ? bracketData?.phase_matches?.find((match: any) =>
+    (!remaining || match.remaining === remaining) && match.participants.includes(phaseAttacker?.id) && match.participants.includes(phaseDefender?.id)
+  ) : null;
+  const phaseResult = phaseMatch ? { rounds: (phaseMatch.rounds.length ? phaseMatch.rounds : [null,null,null,null,null]).map((winner: number | null, index: number) => ({roundNumber:index+1,winner:winner == null ? null : winner === phaseAttacker?.id ? "left" as const : "right" as const})), issues: [] } : null;
+
 
   const [tournamentId, setTournamentId] = useState<number | null>(null);
 
+  useEffect(() => { if (search.get("tab") === "champion") setActiveTab("champion"); }, [search]);
+
   const fetchBracket = async () => {
     if (!tournamentId) return;
-    const res = await fetch(`/api/tournaments/${tournamentId}/bracket`);
+    const res = await fetch(`/api/tournaments/${tournamentId}/bracket`, {cache:"no-store"});
     const data = await res.json();
     setBracketData(data);
   };
@@ -166,11 +185,28 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       loadPlayerDetails(seed);
     }
   }, [seed, mode, tournamentId]);
-  useEffect(()=>{if(mode!=="match"||!tournamentId)return;const controller=new AbortController();Promise.all([attackerSeed,defenderSeed].map(async playerSeed=>{const response=await fetch(`/api/tournaments/${tournamentId}/players/${playerSeed}/details`,{cache:"no-store",signal:controller.signal});if(!response.ok)return [];return normalizeSavedRegistrationTeams(await response.json());})).then(([attacker,defender])=>setFull64MatchTeams({attacker,defender})).catch(error=>{if(!(error instanceof DOMException&&error.name==="AbortError"))setFull64MatchTeams({attacker:[],defender:[]});});return()=>controller.abort();},[mode,tournamentId,attackerSeed,defenderSeed]);
+  useEffect(()=>{if(mode!=="match"||!tournamentId)return;if(registrationPhases){
+    const participants = phaseMatch?.rounds.length ? phaseMatch.result_participants : phaseMatch?.participants || [];
+    const snapshots = phaseMatch?.rounds.length ? phaseMatch.result_teams : phaseMatch?.teams || [];
+    setFull64MatchTeams({attacker:snapshots[participants.indexOf(phaseAttacker?.id)] || [],defender:snapshots[participants.indexOf(phaseDefender?.id)] || []});return;
+  }const controller=new AbortController();Promise.all([attackerSeed,defenderSeed].map(async playerSeed=>{const response=await fetch(`/api/tournaments/${tournamentId}/players/${playerSeed}/details`,{cache:"no-store",signal:controller.signal});if(!response.ok)return [];return normalizeSavedRegistrationTeams(await response.json());})).then(([attacker,defender])=>setFull64MatchTeams({attacker,defender})).catch(error=>{if(!(error instanceof DOMException&&error.name==="AbortError"))setFull64MatchTeams({attacker:[],defender:[]});});return()=>controller.abort();},[mode,tournamentId,attackerSeed,defenderSeed,registrationPhases,bracketData,matchStage]);
+
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible") void fetchBracket().catch(()=>{}); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [tournamentId]);
 
   const seeds = Array.from({ length: 64 }, (_, i) => i + 1);
 
   const handlePlayerClick = (s: number) => {
+    if (registrationPhases && activeTab === "champion") {
+      if ((deckDirty || full64MatchDirty) && !window.confirm(t("arenaPhases.discard"))) return;
+      const player = getPlayerBySeed(s);
+      if (player?.id) router.push(`/tournament/${id}/registration/best8?player=${player.id}&returnTab=champion`);
+      return;
+    }
     if (mode==="match"&&full64MatchDirty&&!window.confirm("未保存の勝敗入力を破棄してPlayer登録へ移動しますか？")) return;
     setFull64MatchDirty(false);
     setMode("deck");
@@ -191,24 +227,14 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     setAttackerSeed(s1);
     setDefenderSeed(s2);
     setMatchStage(stage);
-    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   const analyzeFull64Teams = async (preparedImages: { file: File; preCropped: boolean }[]) => {
     if (!tournamentId) return;
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append("tournament_id", tournamentId.toString());
-    formData.append("seed_number", seed.toString());
-    preparedImages.forEach(({ file, preCropped }) => {
-      formData.append("images", file);
-      formData.append("image_pre_cropped", preCropped ? "true" : "false");
-    });
     try {
-      const response = await fetch("/api/analyze/deck", { method: "POST", body: formData });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.detail || "画像解析に失敗しました。");
-      setSelectedTeams(normalizeAnalyzedRegistrationTeams(data));
+      setSelectedTeams(await analyzeRegistrationDecks({format:"full_64", tournamentId, seedNumber:seed}, preparedImages));
       setDeckScreen("edit");
       setDeckDirty(true);
     } finally {
@@ -217,6 +243,8 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   };
 
   const handleSave = async () => {
+    // The champion tab must never submit through the initial-registration API.
+    if (registrationPhases && activeTab === "champion") return;
     const issues = validateRegistrationTeams(selectedTeams, new Set(characters.map(character => character.id)));
     if (issues.length) { alert(issues.join("\n")); return; }
     const names = new Map<number,string>(characters.map(character => [character.id, character.name]));
@@ -224,19 +252,14 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
 
     if (!tournamentId) return;
     try {
-      const res = await fetch(`/api/tournaments/${tournamentId}/teams`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          seed_number: seed,
-          teams: registrationTeamsPayload(selectedTeams),
-          player_icon_url: formPlayerIcon ? formPlayerIcon.split("?")[0] : null
-        })
+      const data = await saveRegistrationDecks(`/api/tournaments/${tournamentId}/teams`, "POST", selectedTeams, {
+        seed_number: seed, player_icon_url: formPlayerIcon ? formPlayerIcon.split("?")[0] : null,
       });
-      if (res.ok) {
-        const data = await res.json();
+      {
         const catalogUpdated = await refreshCharacters();
-        if (data.is_update) {
+        if (data.history_preserved) {
+          alert(t("arenaPhases.savedVersion"));
+        } else if (data.is_update) {
           alert(catalogUpdated ? "既存の編成データを上書きしました！（古いデータは自動削除済み）" : "編成は上書きされましたが、Character画像情報を更新できませんでした。再度Playerを開くかページを再読み込みしてください。");
         } else {
           alert(catalogUpdated ? "編成データを保存しました！" : "編成は保存されましたが、Character画像情報を更新できませんでした。再度Playerを開くかページを再読み込みしてください。");
@@ -250,11 +273,9 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
           window.requestAnimationFrame(() => seedFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
         }
         fetchBracket();
-      } else {
-        alert("保存に失敗しました。");
       }
     } catch (err) {
-      alert("エラーが発生しました。");
+      alert(err instanceof Error ? err.message : "エラーが発生しました。");
     }
   };
 
@@ -302,7 +323,12 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
     if (!player) return null;
     const iconUrl = getPlayerIconUrl(player);
     const isUnknown = !player.id && player.name === "未確定";
-    return <TournamentPlayerPill name={player.name} eyebrow={`SEED ${player.seed}`} iconUrl={iconUrl} align={align} scale={scale} winner={isWinner} selected={mode==="deck"&&(player.original_seed||player.seed)===seed} disabled={isUnknown} onClick={()=>handlePlayerClick(player.original_seed||player.seed)}/>;
+    const best8 = registrationPhases && activeTab === "champion";
+    const node = best8 ? bracketData?.phase_matches?.find((match:any)=>match.remaining===8&&match.participants.includes(player.id)) : null;
+    const participantIndex = node?.participants.indexOf(player.id) ?? -1;
+    const registered = best8 ? participantIndex>=0 && hasCompleteRegistrationStructure(node.teams[participantIndex]||[]) : Boolean(player.has_deck);
+    const phaseLabel = registrationPhases ? `${t(best8?"arenaPhases.championship":"arenaPhases.league")} · ` : "";
+    return <TournamentPlayerPill name={privateNames.name({id:player.id,seed:player.original_seed||player.seed})} eyebrow={`SEED ${player.original_seed||player.seed}`} registrationLabel={`${phaseLabel}${t(registered?"arenaPhases.complete":"arenaPhases.incomplete")}`} registered={registered} iconUrl={iconUrl} align={align} scale={scale} winner={isWinner} selected={!best8&&mode==="deck"&&(player.original_seed||player.seed)===seed} disabled={isUnknown||(best8&&!node)} onClick={()=>handlePlayerClick(player.original_seed||player.seed)}/>;
   };
 
   const analyzeFull64Match = async (file: File): Promise<MatchEditorResult> => {
@@ -319,20 +345,35 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
   const saveFull64Match = async (result: MatchEditorResult) => {
     if (!tournamentId) return;
     const payload=full64MatchPayload(result,tournamentId,matchStage,attackerSeed,defenderSeed);
-    const response=await fetch(`/api/tournaments/${tournamentId}/matches`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const response=await fetch(`/api/tournaments/${tournamentId}/matches`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,...(registrationPhases ? {phase_context:phaseMatch} : {})})});
     if(!response.ok)throw new Error("保存に失敗しました。両プレイヤーの編成が登録されている必要があります。");
     window.alert("勝敗データを保存しました！"); await fetchBracket(); window.scrollTo({top:0,behavior:"smooth"});
   };
 
   const MatchCard = ({ p1, p2, winner, label, scale = 1, align = "left" }: { p1: any, p2: any, winner: any, label: string, scale?: number, align?: "left" | "right" | "center" }) => {
-    const isReady = p1 && p2 && p1.id && p2.id;
+    const pairKnown = Boolean(p1?.id && p2?.id);
+    const cardRemaining = label.toUpperCase() === "FINAL" ? 2 : Number(label.match(/Best\s+(\d+)/i)?.[1]);
+    const currentMatch = registrationPhases ? bracketData?.phase_matches?.find((match:any)=>match.remaining===cardRemaining&&(cardRemaining===2||(pairKnown&&match.participants.includes(p1.id)&&match.participants.includes(p2.id)))) : null;
+    const canOpen = pairKnown && (registrationPhases ? currentMatch?.can_register === true : true);
     const isResolved = !!winner?.id;
+    const finalRegistration = registrationPhases && activeTab === "champion" && cardRemaining === 2;
+    const finalistButton = (player:any) => {
+      const index=currentMatch?.participants.indexOf(player?.id)??-1;
+      const complete=index>=0&&hasCompleteRegistrationStructure(currentMatch.teams[index]||[]);
+      return <TournamentPlayerPill wide name={player?.id?privateNames.name({id:player.id,seed:player.original_seed||player.seed}):t("arenaPhases.pending")} eyebrow={t("arenaPhases.final")} registered={complete} registrationLabel={t(complete?"arenaPhases.complete":"arenaPhases.incomplete")} scale={.75} iconUrl={getPlayerIconUrl(player)} disabled={!player?.id} onClick={()=>{if((deckDirty||full64MatchDirty)&&!window.confirm(t("arenaPhases.discard")))return;router.push(`/tournament/${id}/registration/final?player=${player.id}&returnTab=champion`);}}/>;
+    };
     const iconUrl = isResolved ? getPlayerIconUrl(winner) : null;
 
     return (
+      <div className="relative">
+      {finalRegistration&&<div className="absolute bottom-full left-1/2 -translate-x-1/2 pb-8">{finalistButton(p1)}</div>}
       <div
-        onClick={() => { if (isReady) handlePairClick(p1.original_seed || p1.seed, p2.original_seed || p2.seed, label); }}
-        className={`group relative z-30 flex items-center gap-2 p-1.5 rounded-full border transition-all backdrop-blur-md ${isReady ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'} ${isResolved ? 'bg-slate-900/90 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.3)]' : 'bg-slate-900/60 border-slate-700 border-dashed'} ${align === 'right' ? 'flex-row-reverse' : ''}`}
+        onClick={() => {
+          if (canOpen) handlePairClick(p1.original_seed || p1.seed, p2.original_seed || p2.seed, label);
+        }}
+        role="button" aria-disabled={!canOpen} tabIndex={canOpen ? 0 : -1}
+        onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if(canOpen) handlePairClick(p1.original_seed||p1.seed,p2.original_seed||p2.seed,label); } }}
+        className={`group relative z-30 flex items-center gap-2 p-1.5 rounded-full border transition-all backdrop-blur-md ${canOpen ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'} ${isResolved ? 'bg-slate-900/90 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.3)]' : 'bg-slate-900/60 border-slate-700 border-dashed'} ${align === 'right' ? 'flex-row-reverse' : ''}`}
         style={{ transform: `scale(${scale})` }}
       >
         <div className={`relative w-10 h-10 rounded-full shrink-0 border-2 overflow-hidden flex items-center justify-center ${isResolved ? 'border-amber-400 bg-slate-800' : 'border-slate-700 bg-slate-900'}`}>
@@ -353,11 +394,13 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
           <div className={`text-xs font-black truncate w-full ${isResolved ? 'text-amber-400' : 'text-slate-500 italic'}`}>{isResolved ? winner.name : "未確定"}</div>
         </div>
 
-        {isReady && (
+        {canOpen && (
           <div className="absolute inset-0 flex items-center justify-center bg-blue-600/90 rounded-full opacity-0 group-hover:opacity-100 transition-all z-40">
             <span className="text-white text-[10px] font-black px-2 text-center leading-tight">{isResolved ? "結果を修正" : "勝敗を登録"}</span>
           </div>
         )}
+      </div>
+      {finalRegistration&&<div className="absolute top-full left-1/2 -translate-x-1/2 pt-6">{finalistButton(p2)}</div>}
       </div>
     );
   };
@@ -392,10 +435,12 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
 
     const LX = 15; const MX = 32; const CX = 50; const RX = 85; const RMX = 68;
     const Y1 = 12; const Y2 = 28; const Y3 = 72; const Y4 = 88;
-    const YM1 = 20; const YM2 = 80; const YS1 = 35; const YS2 = 65; const YF = 50;
+    const YM1 = 20; const YM2 = 80;
+    const YS1 = isChampion&&registrationPhases?30:35; const YS2 = isChampion&&registrationPhases?70:65; const YF = 50;
 
     return (
-      <div className="relative w-full aspect-[9/16] md:aspect-[3/4] lg:aspect-square max-w-4xl mx-auto bg-slate-950/50 rounded-3xl overflow-hidden border border-white/5 p-4 shadow-inner">
+      <TournamentBracketViewport>
+      <div className={`relative w-full aspect-square mx-auto bg-slate-950/50 rounded-3xl overflow-hidden border border-white/5 p-4 shadow-inner ${isChampion&&registrationPhases?"min-h-[60rem]":""}`}>
         <div className="absolute inset-0 opacity-10 pointer-events-none flex items-center justify-center"><Trophy size={400} className="text-blue-500 blur-3xl" /></div>
         <div className="absolute top-2 left-1/2 -translate-x-1/2 text-center z-10 w-full">
           <div className="text-xs md:text-sm text-blue-400 font-bold tracking-widest">{isChampion ? "CHAMPION FINALS" : "GROUP QUALIFIERS"}</div>
@@ -442,6 +487,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
           </div>
         </div>
       </div>
+      </TournamentBracketViewport>
     );
   };
 
@@ -507,7 +553,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
       </div>
 
       {/* Upload Form Area */}
-      <div ref={formRef} className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl flex flex-col mt-12 scroll-mt-24">
+      {!(registrationPhases && activeTab === "champion" && mode === "deck") && <div ref={formRef} className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl flex flex-col mt-12 scroll-mt-24">
         <h2 className="text-2xl font-black mb-6 text-center text-slate-200">データ登録フォーム</h2>
 
         {/* Mode Switcher */}
@@ -546,7 +592,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
                 <p className="py-4 text-center text-sm text-slate-500">編成を読み込んでいます...</p>
               ) : registeredDecks.length > 0 && deckScreen === "view" ? (
                 <DeckRegistrationViewer
-                  playerName={`Player ${seed}`}
+                  playerName={privateNames.name({seed})}
                   playerDetail={`シード ${seed} / 編成登録完了`}
                   playerIconUrl={formPlayerIcon || null}
                   teams={selectedTeams}
@@ -557,6 +603,7 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
                 />
               ) : (
                 <div className="space-y-6" data-registration-mode="edit">
+                  <PrivatePlayerNameEditor tournamentId={Number(tournamentId)} seedNumber={seed} value={privateNames.players.find(p=>p.seed_number===seed)?.private_name??null} onSaved={privateNames.refresh}/>
                   <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} cropSettings={playerIconCropSettings} onCropSettingsChange={setPlayerIconCropSettings} />
                   <DeckRegistrationEditor
                     key={`full64-${tournamentId}-${seed}`}
@@ -585,14 +632,16 @@ function Full64TournamentDetail({ canEdit }: { canEdit: boolean }) {
             attackerTeams={full64MatchTeams.attacker}
             defenderTeams={full64MatchTeams.defender}
             characters={characters}
-            disabled={!canEdit}
+            initialResult={registrationPhases ? phaseResult : undefined}
+            existing={registrationPhases && Boolean(phaseMatch?.rounds.length)}
+            disabled={!canEdit || (registrationPhases && (published || !phaseMatch?.can_register))}
             busy={isUploading}
             onAnalyze={analyzeFull64Match}
             onSave={saveFull64Match}
             onDirtyChange={setFull64MatchDirty}
           /></>}
         </DeckRegistrationViewport>
-      </div>
+      </div>}
 
     </main>
   );

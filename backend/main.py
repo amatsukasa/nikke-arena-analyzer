@@ -243,7 +243,10 @@ from services.champion_bracket import (
     participant_ids,
 )
 from services.champion_result import normalize_champion_result
+from services import arena_phases
 from services.champion_publication import validate_champion_publication
+from copy import deepcopy
+from services import cross_analytics, team_statistics_display
 from services.champion_snapshot import enrich_champion_snapshot_stats
 from services.tournament_results import (
     RESULT_SCORES as TOURNAMENT_RESULT_SCORES,
@@ -1625,6 +1628,8 @@ def get_published_tournament_ids(
 
 
 def get_publication_readiness(tournament: models.Tournament, db: Session):
+    if tournament.deck_registration_phases:
+        return arena_phases.publication_readiness(tournament, db)
     if tournament.registration_scope == "champion_8":
         return validate_champion_publication(tournament, db)
     players = db.query(models.Player).filter(
@@ -1694,20 +1699,14 @@ def get_dashboard_summary_data(tournament: models.Tournament, db: Session):
         models.Player.tournament_id == tournament.id
     ).order_by(models.Player.seed_number).all()
     player_ids = [player.id for player in players]
-    matches_count = db.query(models.Match).filter(
-        models.Match.tournament_id == tournament.id
-    ).count()
-    deck_sets = db.query(models.DeckSet).filter(
-        models.DeckSet.player_id.in_(player_ids)
-    ).all() if player_ids else []
+    matches_count = len(arena_phases.effective_matches(db, [tournament.id]))
+    deck_sets = arena_phases.initial_deck_sets(db, player_ids) if player_ids else []
     deck_sets_by_player: dict[int, list[models.DeckSet]] = {}
     for deck_set in deck_sets:
         deck_sets_by_player.setdefault(deck_set.player_id, []).append(deck_set)
 
     deck_set_ids = [deck_set.id for deck_set in deck_sets]
-    deck_teams = db.query(models.DeckTeam).filter(
-        models.DeckTeam.deck_set_id.in_(deck_set_ids)
-    ).all() if deck_set_ids else []
+    deck_teams = [team for deck in deck_sets for team in deck.teams] if deck_set_ids else []
     deck_teams_by_set: dict[int, list[models.DeckTeam]] = {}
     for team in deck_teams:
         deck_teams_by_set.setdefault(team.deck_set_id, []).append(team)
@@ -1934,6 +1933,7 @@ def update_tournament(
     current_user: models.AppUser = Depends(auth_module.get_current_user)
 ):
     db_tournament = require_tournament_manager(tournament_id, db, current_user)
+    db_tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
 
     # registration_scope は作成時に固定する。Pydantic の既定値を
     # 「クライアントが明示した値」と誤認しないよう fields_set を使う。
@@ -1972,6 +1972,12 @@ def update_tournament(
             db_tournament.display_order = tournament.display_order
         if "is_champion_arena" in tournament.model_fields_set:
             db_tournament.is_champion_arena = tournament.is_champion_arena
+        if "deck_registration_phases" in tournament.model_fields_set:
+            if db_tournament.deck_registration_phases and not tournament.deck_registration_phases:
+                has_history = db.query(models.ArenaDeckRegistration.id).filter_by(tournament_id=tournament_id).first() or db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament_id).first()
+                if has_history:
+                    raise HTTPException(409, "Phase history exists; disabling phases would hide active registrations and results")
+            db_tournament.deck_registration_phases = tournament.deck_registration_phases
         if "has_match_data" in tournament.model_fields_set:
             db_tournament.has_match_data = tournament.has_match_data
 
@@ -2028,7 +2034,8 @@ def update_tournament_publication(
         try:
             if publish:
                 stats = _compute_dashboard_stats(tournament_id, db, current_user)
-                stats = enrich_champion_snapshot_stats(stats, tournament_id, db)
+                if not tournament.deck_registration_phases:
+                    stats = enrich_champion_snapshot_stats(stats, tournament_id, db)
                 apply_snapshot(tournament_id, stats, db)
                 tournament.publication_status = "published"
                 tournament.published_at = datetime.now(timezone.utc)
@@ -2088,6 +2095,8 @@ def delete_tournament(
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     with icon_mutation_lock(PLAYER_ICONS_DIR):
         db_tournament = require_tournament_manager(tournament_id, db, current_user)
+        if db.query(models.ArenaDeckRegistration.id).filter_by(tournament_id=tournament_id).first() or db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament_id).first():
+            raise HTTPException(409, "Phase history exists; export and review a separate deletion plan first")
         invalidate_dashboard_cache(tournament_id)
         db.delete(db_tournament)
         db.commit()
@@ -2409,6 +2418,7 @@ def validate_owned_champion_crop_url(
     player_id: int,
     *,
     require_lossless: bool = False,
+    seed_number: int | None = None,
 ) -> Path:
     source_path = path_from_upload_url(url)
     match = CHAMPION_CROP_NAME.fullmatch(source_path.name) if source_path else None
@@ -2417,7 +2427,7 @@ def validate_owned_champion_crop_url(
         or not _is_within(source_path, CROPPED_DIR)
         or match is None
         or int(match.group("tournament")) != tournament_id
-        or int(match.group("player")) != player_id
+        or (match.group("player") != str(player_id) if seed_number is None else match.group("seed") != str(seed_number))
         or (require_lossless and source_path.suffix.lower() != ".png")
         or not source_path.is_file()
     ):
@@ -2432,6 +2442,7 @@ def load_champion_template_source(
     character: schemas.ChampionTeamCharacterInput,
     tournament_id: int,
     player_id: int,
+    *, seed_number: int | None = None,
 ):
     """Load only a live crop issued for the current tournament and Player."""
     if character.template_source_url:
@@ -2440,6 +2451,7 @@ def load_champion_template_source(
             tournament_id,
             player_id,
             require_lossless=True,
+            seed_number=seed_number,
         )
         source_size = source_path.stat().st_size
         if not 0 < source_size <= CHAMPION_TEMPLATE_SOURCE_MAX_BYTES:
@@ -2612,6 +2624,7 @@ def upsert_champion_slot(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
     validate_champion_slot(champion_slot)
     validate_champion_seed(champion_slot, body.seed_number)
     tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
@@ -2646,6 +2659,12 @@ def upsert_champion_slot(
         )
         db.add(player)
     else:
+        if tournament.deck_registration_phases and player.seed_number != body.seed_number and (
+            db.query(models.ArenaDeckRegistration.id).filter_by(player_id=player.id).first() or
+            db.query(models.Match.id).filter(models.Match.tournament_id==tournament_id).first() or
+            db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament_id).first()
+        ):
+            raise HTTPException(409, "Registered seed identity is protected once phase history exists")
         player.seed_number = body.seed_number
         player.name = generated_name
 
@@ -2993,6 +3012,91 @@ async def analyze_champion_deck(
             delete_upload_file(path)
 
 
+def prepare_registration_assets(normalized, tournament_id, player_id, *, seed_number=None):
+    temporary_crop_urls = [
+        url
+        for _, _, _, characters in normalized
+        for character in characters
+        for url in (character.image_url, character.template_source_url)
+        if url
+    ]
+    owned_crop_paths = {
+        validate_owned_champion_crop_url(url, tournament_id, player_id, seed_number=seed_number)
+        for url in temporary_crop_urls
+    }
+    template_sources = []
+    total_template_bytes = 0
+    for _, _, _, characters in normalized:
+        for character in characters:
+            if not character.add_to_templates:
+                continue
+            if character.id == EMPTY_SLOT_CHARACTER_ID:
+                raise HTTPException(status_code=422, detail="The empty slot cannot be added as a Character template")
+            if not (
+                character.was_unrecognized
+                or character.original_predicted_id != character.id
+            ):
+                raise HTTPException(status_code=422, detail="Templates may only be added for manually corrected analysis results")
+            source_image, source_bytes = load_champion_template_source(
+                character, tournament_id, player_id, seed_number=seed_number
+            )
+            total_template_bytes += source_bytes
+            if total_template_bytes > CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES:
+                raise HTTPException(status_code=422, detail="Corrected template sources exceed the total size limit")
+            template_sources.append((character, source_image))
+
+    return owned_crop_paths, template_sources
+
+
+def install_registration_templates(template_sources, tournament, player, actor, db, created_paths):
+    for character_payload, source_image in template_sources:
+        created_path = install_champion_character_template(character_payload.id, source_image, db)
+        if created_path is not None:
+            created_paths.append(created_path)
+        corrected_path = representative_template(Path(UPLOAD_DIR) / "templates", character_payload.id)
+        add_template_correction_review(db, payload=character_payload,
+            corrected_template_filename=corrected_path.name if corrected_path else None,
+            tournament=tournament, player=player, actor=actor)
+
+
+def remove_registration_assets(paths, reason):
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"[registration-assets] {reason} failed file={path.name}: {exc}")
+
+
+def finish_registration_assets(created_paths, crop_paths):
+    if created_paths:
+        _invalidate_template_matcher_cache()
+    remove_registration_assets(crop_paths, "committed crop cleanup")
+
+
+def save_phase_registration_with_assets(tournament, player, phase, payload, db, actor):
+    # Resolve eligibility/version conflicts before creating any template files.
+    # Registration, template metadata and correction review share one DB commit.
+    created_paths = []
+    try:
+        arena_phases.save_registration(tournament, player.id, phase, payload, db, commit=False)
+        from pydantic import ValidationError
+        try:
+            parsed = schemas.ChampionTeamsUpsert(teams=payload["teams"])
+        except ValidationError as exc:
+            raise HTTPException(422, "Invalid registration character metadata") from exc
+        normalized = validate_champion_teams_payload(parsed)
+        crop_paths, sources = prepare_registration_assets(normalized, tournament.id, player.id,
+            seed_number=player.seed_number if tournament.registration_scope == "full_64" else None)
+        install_registration_templates(sources, tournament, player, actor, db, created_paths)
+        db.commit()
+    except Exception:
+        db.rollback()
+        remove_registration_assets(created_paths, "rollback")
+        raise
+    finish_registration_assets(created_paths, crop_paths)
+    return arena_phases.state(tournament, db)
+
+
 @app.put(
     "/api/tournaments/{tournament_id}/players/by-id/{player_id}/teams",
     response_model=schemas.ChampionTeamsResponse,
@@ -3004,21 +3108,12 @@ def save_champion_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
     tournament, player = require_locked_champion_player_manager(
         tournament_id, player_id, db, current_user
     )
     normalized = validate_champion_teams_payload(data)
-    temporary_crop_urls = [
-        url
-        for _, _, _, characters in normalized
-        for character in characters
-        for url in (character.image_url, character.template_source_url)
-        if url
-    ]
-    owned_crop_paths = {
-        validate_owned_champion_crop_url(url, tournament_id, player_id)
-        for url in temporary_crop_urls
-    }
+    owned_crop_paths, template_sources = prepare_registration_assets(normalized, tournament_id, player_id)
     character_ids = {
         character_id
         for _, ids, _, _ in normalized
@@ -3035,70 +3130,40 @@ def save_champion_teams(
     if missing:
         raise HTTPException(status_code=422, detail=f"Unknown character IDs: {missing}")
 
-    template_sources = []
-    total_template_bytes = 0
-    for _, _, _, characters in normalized:
-        for character in characters:
-            if not character.add_to_templates:
-                continue
-            if character.id == EMPTY_SLOT_CHARACTER_ID:
-                raise HTTPException(status_code=422, detail="The empty slot cannot be added as a Character template")
-            if not (
-                character.was_unrecognized
-                or character.original_predicted_id != character.id
-            ):
-                raise HTTPException(status_code=422, detail="Templates may only be added for manually corrected analysis results")
-            source_image, source_bytes = load_champion_template_source(
-                character, tournament_id, player_id
-            )
-            total_template_bytes += source_bytes
-            if total_template_bytes > CHAMPION_TEMPLATE_SOURCE_TOTAL_MAX_BYTES:
-                raise HTTPException(status_code=422, detail="Corrected template sources exceed the total size limit")
-            template_sources.append((character, source_image))
-
-    existing_sets = db.query(models.DeckSet).filter(
-        models.DeckSet.player_id == player.id
-    ).order_by(models.DeckSet.id).all()
-    deck_set = existing_sets[0] if existing_sets else models.DeckSet(player_id=player.id)
-    if not existing_sets:
+    phase_initial = tournament.deck_registration_phases
+    existing_sets = [] if phase_initial else db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).order_by(models.DeckSet.id).all()
+    deck_set = None if phase_initial else existing_sets[0] if existing_sets else models.DeckSet(player_id=player.id)
+    if not phase_initial and not existing_sets:
         db.add(deck_set)
     created_template_paths: list[Path] = []
     committed = False
     response_data = None
     try:
-        for extra_set in existing_sets[1:]:
-            db.delete(extra_set)
-        for old_team in list(deck_set.teams):
-            db.delete(old_team)
-        db.flush()
-        for team_number, ids, collections, _ in normalized:
-            db.add(models.DeckTeam(
-                deck_set=deck_set,
-                team_number=team_number,
-                char1_id=ids[0], char2_id=ids[1], char3_id=ids[2],
-                char4_id=ids[3], char5_id=ids[4],
-                collection1=collections[0], collection2=collections[1],
-                collection3=collections[2], collection4=collections[3],
-                collection5=collections[4],
-            ))
-        for character_payload, source_image in template_sources:
-            character_id = character_payload.id
-            created_path = install_champion_character_template(character_id, source_image, db)
-            if created_path is not None:
-                created_template_paths.append(created_path)
-            corrected_path = representative_template(Path(UPLOAD_DIR) / "templates", character_id)
-            add_template_correction_review(
-                db,
-                payload=character_payload,
-                corrected_template_filename=corrected_path.name if corrected_path else None,
-                tournament=tournament,
-                player=player,
-                actor=current_user,
-            )
+        if phase_initial:
+            db.add(models.ArenaDeckRegistration(tournament_id=tournament_id,player_id=player.id,phase="initial",qualification="initial",teams=[
+                {"team_number":number,"characters":[{"id":cid,"collection_level":level} for cid,level in zip(ids,collections)]}
+                for number,ids,collections,_ in normalized]))
+        else:
+            for extra_set in existing_sets[1:]:
+                db.delete(extra_set)
+            for old_team in list(deck_set.teams):
+                db.delete(old_team)
+            db.flush()
+            for team_number, ids, collections, _ in normalized:
+                db.add(models.DeckTeam(
+                    deck_set=deck_set,
+                    team_number=team_number,
+                    char1_id=ids[0], char2_id=ids[1], char3_id=ids[2],
+                    char4_id=ids[3], char5_id=ids[4],
+                    collection1=collections[0], collection2=collections[1],
+                    collection3=collections[2], collection4=collections[3],
+                    collection5=collections[4],
+                ))
+        install_registration_templates(template_sources, tournament, player, current_user, db, created_template_paths)
         db.flush()
         db.commit()
         committed = True
-        response_data = champion_teams_response(player, deck_set)
+        response_data = champion_teams_response(player, arena_phases.initial_deck_sets(db,[player.id])[0] if phase_initial else deck_set)
     except IntegrityError as exc:
         db.rollback()
         for path in created_template_paths:
@@ -3116,13 +3181,7 @@ def save_champion_teams(
             except OSError as cleanup_error:
                 print(f"[champion-template] rollback cleanup failed file={path.name}: {cleanup_error}")
         raise
-    if created_template_paths:
-        _invalidate_template_matcher_cache()
-    for path in owned_crop_paths:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as cleanup_error:
-            print(f"[champion-crop] committed crop cleanup failed file={path.name}: {cleanup_error}")
+    finish_registration_assets(created_template_paths, owned_crop_paths)
     try:
         invalidate_dashboard_cache(tournament_id)
     except Exception as exc:
@@ -3148,6 +3207,9 @@ def get_champion_teams(
     ).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
+    if db.query(models.Tournament).filter_by(id=tournament_id).one().deck_registration_phases:
+        decks = arena_phases.initial_deck_sets(db, [player.id])
+        return champion_teams_response(player, decks[0] if decks else None)
     deck_set = db.query(models.DeckSet).filter(
         models.DeckSet.player_id == player.id
     ).order_by(models.DeckSet.id).first()
@@ -3183,6 +3245,15 @@ def champion_match_is_complete(
 
 
 def champion_bracket_context(tournament_id: int, db: Session):
+    tournament = db.query(models.Tournament).filter_by(id=tournament_id).one()
+    if tournament.deck_registration_phases:
+        players, nodes, _, _ = arena_phases.context(tournament, db)
+        matches = arena_phases.effective_matches(db, [tournament_id])
+        stage = {8:"quarterfinal",4:"semifinal",2:"final"}
+        return ({p.id:p for p in players}, {p.champion_slot:p.id for p in players},
+            {(m.bracket_stage,m.bracket_slot):m for m in matches},
+            {(stage[n["remaining"]],n["slot"]):n["winner_id"] for n in nodes.values() if n["winner_id"]},
+            {(stage[n["remaining"]],n["slot"]):tuple(n["participants"]) for n in nodes.values()})
     players = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.champion_slot.isnot(None),
@@ -3254,7 +3325,17 @@ def get_champion_bracket(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
 ):
-    require_champion_tournament_viewer(tournament_id, db, current_user)
+    tournament = require_champion_tournament_viewer(tournament_id, db, current_user)
+    if tournament.deck_registration_phases:
+        players, nodes, _, _ = arena_phases.context(tournament, db)
+        by_id = {p.id: p for p in players}
+        return {"tournament_id": tournament_id, "matches": [{
+            "bracket_stage": {8: "quarterfinal", 4: "semifinal", 2: "final"}[node["remaining"]],
+            "bracket_slot": node["slot"], "name": "Final" if node["remaining"] == 2 else f"{ 'QF' if node['remaining'] == 8 else 'SF'}{node['slot']}",
+            "status": node["status"], "attacker": by_id.get(node["participants"][0]), "defender": by_id.get(node["participants"][1]),
+            "match_id": -node["revision_id"] if node["revision_id"] else node["legacy_match_id"], "winner": by_id.get(node["winner_id"]),
+            "round_results": [{"round_number": i+1, "winner_id": pid} for i, pid in enumerate(node["rounds"])], "upstream": node["sources"], "phase_context": node
+        } for node in nodes.values()]}
     players_by_id, _, matches_by_key, _, expected_by_key = champion_bracket_context(
         tournament_id, db
     )
@@ -3323,6 +3404,23 @@ def save_champion_match(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    if phase_tournament.deck_registration_phases:
+        if phase_tournament.registration_scope != "champion_8":
+            raise HTTPException(409, "Use the result/registration API for this tournament format")
+        require_unpublished_champion_edit(phase_tournament)
+        remaining = {"quarterfinal": 8, "semifinal": 4, "final": 2}.get(bracket_stage)
+        if remaining is None:
+            raise HTTPException(422, "Invalid bracket stage")
+        _, nodes, _, _ = arena_phases.context(phase_tournament, db)
+        node = nodes.get(f"{remaining}:{bracket_slot}")
+        if node is None:
+            raise HTTPException(422, "Invalid bracket slot")
+        validate_champion_match_result(data, tuple(node["participants"]))
+        payload = result_revision_payload(node, [r.winner_id for r in sorted(data.round_results, key=lambda r: r.round_number)], data.phase_context)
+        arena_phases.save_result(phase_tournament, node["key"], payload, db)
+        invalidate_dashboard_cache_safely(tournament_id)
+        return next(m for m in get_champion_bracket(tournament_id, db, current_user)["matches"] if m["bracket_stage"] == bracket_stage and m["bracket_slot"] == bracket_slot)
     tournament = require_locked_champion_tournament_manager(tournament_id, db, current_user)
     require_unpublished_champion_edit(tournament)
     definition = get_bracket_definition(bracket_stage, bracket_slot)
@@ -3420,12 +3518,19 @@ async def analyze_champion_match_result(
     defender = players_by_id.get(expected[1])
     if attacker is None or defender is None or attacker.id == defender.id:
         raise HTTPException(status_code=409, detail="Fixed match participants are invalid")
-    if not (
-        champion_player_has_complete_deck(attacker.id, db)
-        and champion_player_has_complete_deck(defender.id, db)
-    ):
-        raise HTTPException(status_code=409, detail="Both participants must have complete decks")
-
+    tournament = db.query(models.Tournament).filter_by(id=tournament_id).one()
+    if tournament.deck_registration_phases:
+        _, nodes, _, _ = arena_phases.context(tournament, db)
+        remaining = {"quarterfinal":8,"semifinal":4,"final":2}[bracket_stage]
+        node = nodes[f"{remaining}:{bracket_slot}"]
+        if not node["can_register"]:
+            raise HTTPException(409, "Both participants need complete registrations for this phase")
+    else:
+        if not (
+            champion_player_has_complete_deck(attacker.id, db)
+            and champion_player_has_complete_deck(defender.id, db)
+        ):
+            raise HTTPException(status_code=409, detail="Both participants must have complete decks")
     try:
         # Parse once, then enforce the exact multipart contract below. Limits
         # remain finite for resource safety; parser-limit errors are normalized
@@ -3526,20 +3631,23 @@ def get_player_details(
     return _get_player_details_data(tournament_id, seed_number, db)
 
 
-def _get_player_details_data(tournament_id: int, seed_number: int, db: Session):
+def _get_player_details_data(tournament_id: int, seed_number: int, db: Session, registration_phase="initial"):
     player = db.query(models.Player).filter(
         models.Player.tournament_id == tournament_id,
         models.Player.seed_number == seed_number
     ).first()
 
-    return _get_player_details_by_player(tournament_id, player, db)
+    return _get_player_details_by_player(tournament_id, player, db, registration_phase)
 
 
-def _get_player_details_by_player(tournament_id: int, player: models.Player | None, db: Session):
+def _get_player_details_by_player(tournament_id: int, player: models.Player | None, db: Session, registration_phase="initial", *, registration_sets=None, resolved_matches=None):
+    if registration_phase == "legacy":
+        registration_phase = "initial"
     if not player:
         return {"player": None, "decks": []}
         
-    deck_set = db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).first()
+    initial_sets = arena_phases.phase_deck_sets(db, [player.id], registration_phase) if registration_sets is None else registration_sets
+    deck_set = initial_sets[0] if initial_sets else None
     if not deck_set:
         return {
             "player": {
@@ -3552,17 +3660,22 @@ def _get_player_details_by_player(tournament_id: int, player: models.Player | No
         }
         
     # Get matches where this player participated and the match was resolved
-    matches = db.query(models.Match).filter(
-        models.Match.tournament_id == tournament_id,
-        (models.Match.attacker_id == player.id) | (models.Match.defender_id == player.id),
-        models.Match.winner_id.isnot(None)
-    ).all()
-    
+    matches = [m for m in (arena_phases.effective_matches(db, [tournament_id]) if resolved_matches is None else resolved_matches) if m.tournament_id == tournament_id and m.winner_id is not None and player.id in (m.attacker_id, m.defender_id) and arena_phases.matches_analysis_phase(db, m, registration_phase)]
+
     # Pre-calculate win/loss per team number
     team_stats = {1: {"wins": 0, "losses": 0}, 2: {"wins": 0, "losses": 0}, 3: {"wins": 0, "losses": 0}, 4: {"wins": 0, "losses": 0}, 5: {"wins": 0, "losses": 0}}
     
+    current_teams = {team.team_number: team for team in deck_set.teams}
+    def composition(team):
+        return tuple(sorted(getattr(team, f"char{i}_id") for i in range(1, 6) if getattr(team, f"char{i}_id") is not None))
     for m in matches:
+        used_set = arena_phases.deck_for_match(m, player.id, db)
+        used_teams = {team.team_number: team for team in used_set.teams} if used_set else {}
         for r in m.round_results:
+            current = current_teams.get(r.round_number)
+            used = used_teams.get(r.round_number)
+            if current is None or used is None or composition(current) != composition(used):
+                continue
             if r.winner_id == player.id:
                 team_stats[r.round_number]["wins"] += 1
             else:
@@ -3591,7 +3704,7 @@ def _get_player_details_by_player(tournament_id: int, player: models.Player | No
         ]
         stats = team_stats.get(team.team_number, {"wins": 0, "losses": 0})
         total = stats["wins"] + stats["losses"]
-        win_rate = round((stats["wins"] / total * 100)) if total > 0 else 0
+        win_rate = round((stats["wins"] / total * 100)) if total > 0 else None
         
         canon_id = ",".join(map(str, sorted(char_ids)))
         
@@ -3602,6 +3715,7 @@ def _get_player_details_by_player(tournament_id: int, player: models.Player | No
             "canonical_id": canon_id,
             "wins": stats["wins"],
             "losses": stats["losses"],
+            "total_matches": total,
             "win_rate": win_rate
         })
         
@@ -3719,6 +3833,23 @@ async def save_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    if phase_tournament.deck_registration_phases:
+        if phase_tournament.registration_scope != "full_64":
+            raise HTTPException(409, "Use the result/registration API for this tournament format")
+        require_unpublished_champion_edit(phase_tournament)
+        seed = data.get("seed_number") if isinstance(data, dict) else None
+        if type(seed) is not int or seed not in range(1, 65):
+            raise HTTPException(422, "seed_number must be between 1 and 64")
+        player = db.query(models.Player).filter_by(tournament_id=tournament_id, seed_number=seed).first()
+        is_update = player is not None and bool(arena_phases.initial_deck_sets(db, [player.id]))
+        if player is None:
+            player = models.Player(tournament_id=tournament_id, seed_number=seed, name=automatic_player_name(seed))
+            db.add(player)
+            db.flush()
+        save_initial_arena_registration(phase_tournament, player, data.get("teams"), db, current_user)
+        invalidate_dashboard_cache_safely(tournament_id)
+        return {"ok": True, "is_update": is_update, "history_preserved": True}
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     tournament = require_tournament_manager(tournament_id, db, current_user)
@@ -4093,7 +4224,7 @@ def get_tournament_bracket(
     # 全プレイヤーと試合結果を取得
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
     player_by_seed = {p.seed_number: p for p in players}
-    matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
+    matches = arena_phases.effective_matches(db, [tournament_id])
     
     def get_winner(p1_id, p2_id):
         if not p1_id or not p2_id:
@@ -4105,6 +4236,10 @@ def get_tournament_bracket(
                     return m.winner_id
         return None
 
+    initial_sets = arena_phases.initial_deck_sets(db, [p.id for p in players])
+    complete_ids = {ds.player_id for ds in initial_sets if len(ds.teams) == 5 and all(all(getattr(t, f"char{i}_id") is not None for i in range(1, 6)) for t in ds.teams)}
+    if not tournament.deck_registration_phases:
+        complete_ids = {p.id for p in players if p.deck_sets}
     groups = []
     champion_seeds = [None] * 8
     
@@ -4125,12 +4260,12 @@ def get_tournament_bracket(
             group_players.append({
                 "seed": s1, "id": p1_id, "name": p1.name if p1 else f"Player {s1}",
                 "icon_url": p1.icon_url if p1 else None,
-                "has_deck": len(p1.deck_sets) > 0 if p1 else False
+                "has_deck": p1.id in complete_ids if p1 else False
             })
             group_players.append({
                 "seed": s2, "id": p2_id, "name": p2.name if p2 else f"Player {s2}",
                 "icon_url": p2.icon_url if p2 else None,
-                "has_deck": len(p2.deck_sets) > 0 if p2 else False
+                "has_deck": p2.id in complete_ids if p2 else False
             })
             
             w_id = get_winner(p1_id, p2_id)
@@ -4182,13 +4317,14 @@ def get_tournament_bracket(
             "name": p.name, 
             "original_seed": p.seed_number,
             "icon_url": p.icon_url,
-            "has_deck": len(p.deck_sets) > 0
+            "has_deck": p.id in complete_ids
         }
         
     champ_players = [get_p_info(champion_seeds[i], i+1) for i in range(8)]
     
     return set_private_dashboard_cache(tournament, "bracket", {
         "groups": groups,
+        "phase_matches": arena_phases.state(tournament, db)["matches"] if tournament.deck_registration_phases else [],
         "champion_finals": {
             "players": champ_players,
             "qf_winners": champ_qf_winners,
@@ -4204,6 +4340,32 @@ async def save_match(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
+    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    if phase_tournament.deck_registration_phases:
+        if phase_tournament.registration_scope != "full_64":
+            raise HTTPException(409, "Use the result/registration API for this tournament format")
+        require_unpublished_champion_edit(phase_tournament)
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise HTTPException(422, "JSON object required")
+        attacker = db.query(models.Player).filter_by(tournament_id=tournament_id, seed_number=data.get("attacker_seed")).first()
+        defender = db.query(models.Player).filter_by(tournament_id=tournament_id, seed_number=data.get("defender_seed")).first()
+        if not attacker or not defender or attacker.id == defender.id:
+            raise HTTPException(422, "Invalid participants")
+        _, nodes, _, _ = arena_phases.context(phase_tournament, db)
+        node = next((n for n in nodes.values() if set(n["participants"]) == {attacker.id, defender.id}), None)
+        if node is None:
+            raise HTTPException(409, "Participants are not qualified for this match")
+        rounds = data.get("rounds", [])
+        if not isinstance(rounds, list) or len(rounds) != 5 or any(not isinstance(r, dict) for r in rounds) or sorted(r.get("round", 0) for r in rounds) != [1,2,3,4,5]:
+            raise HTTPException(422, "Exactly five numbered rounds are required")
+        if any((r.get("left"), r.get("right")) not in {("WIN", "LOSE"), ("LOSE", "WIN")} for r in rounds):
+            raise HTTPException(422, "Round winners are unresolved")
+        winners = [attacker.id if r["left"] == "WIN" else defender.id for r in sorted(rounds, key=lambda r: r["round"])]
+        payload = result_revision_payload(node, winners, data.get("phase_context"))
+        arena_phases.save_result(phase_tournament, node["key"], payload, db)
+        invalidate_dashboard_cache_safely(tournament_id)
+        return {"ok": True, "history_preserved": True}
     require_tournament_manager(tournament_id, db, current_user)
     data = await request.json()
     attacker_seed = data.get("attacker_seed")
@@ -4286,13 +4448,17 @@ def get_dashboard_stats(
     seed: int = None,
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    params = {"seed": seed}
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    params = {"seed": seed, "registration_phase": registration_phase}
     cached = get_private_dashboard_cache(tournament, "stats", params)
     if cached is not None:
         return cached
-    stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+    stats = _compute_dashboard_stats(tournament_id, db, current_user, seed, registration_phase)
     if "team_usage" in stats:
         stats["team_usage"] = stats["team_usage"][:50]
     return set_private_dashboard_cache(tournament, "stats", stats, params)
@@ -4371,20 +4537,35 @@ def _compute_dashboard_stats(
     db: Session,
     current_user: models.AppUser | None = None,
     seed: int = None,
+    registration_phase: str = "initial",
 ):
-    require_tournament_viewer(tournament_id, db, current_user)
-    query = db.query(models.Player).filter(models.Player.tournament_id == tournament_id)
-    if seed:
-        query = query.filter(models.Player.seed_number == seed)
-    
-    players = query.all()
+    tournament = require_tournament_viewer(tournament_id, db, current_user)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    display_phase = (arena_phases.normalized_stage(tournament, arena_phases.stored_analysis_phase(tournament, registration_phase))
+        if tournament.deck_registration_phases else "legacy")
+    registration_phase = arena_phases.stored_analysis_phase(tournament, registration_phase)
+    all_players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
+    players = [p for p in all_players if not seed or p.seed_number == seed]
+    all_phase_decks = arena_phases.phase_deck_sets(db, [p.id for p in all_players], registration_phase)
+    if registration_phase != "initial":
+        # Denominator includes qualified but not-yet-registered participants.
+        _, _, qualifications, _ = arena_phases.context(tournament, db)
+        players = [p for p in players if (p.id, registration_phase) in qualifications]
     player_ids = [p.id for p in players]
-    
-    deck_sets = db.query(models.DeckSet).filter(models.DeckSet.player_id.in_(player_ids)).all()
+    selected_players = set(player_ids)
+    deck_sets = [deck for deck in all_phase_decks if deck.player_id in selected_players]
+    all_matches = arena_phases.effective_matches(db, [tournament_id])
+    character_ids = {getattr(team, f"char{i}_id") for deck in all_phase_decks for team in deck.teams for i in range(1, 6)} - {None}
+    character_by_id = {c.id: c for c in db.query(models.Character).filter(models.Character.id.in_(character_ids)).all()}
+    team_players = {}
+    for deck in all_phase_decks:
+        for team in deck.teams:
+            key = frozenset(getattr(team, f"char{i}_id") for i in range(1, 6) if getattr(team, f"char{i}_id") is not None)
+            team_players.setdefault(key, set()).add(deck.player_id)
     deck_set_ids = [ds.id for ds in deck_sets]
     ds_to_player = {ds.id: ds.player_id for ds in deck_sets}
     
-    deck_teams = db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id.in_(deck_set_ids)).all()
+    deck_teams = [team for deck in deck_sets for team in deck.teams]
     
     char_usage = {}
     char_position = {}  # {char_id: {1: count, 2: count, ..., 5: count}}
@@ -4432,18 +4613,20 @@ def _compute_dashboard_stats(
                     team_usage[sorted_chars]["position_stats"][t_pos]["players"].add(pid)
 
     # 勝敗集計用のデータ
-    matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
+    matches = all_matches
     char_match_stats = {} # {char_id: {"wins": 0, "total": 0}}
     team_match_stats = {} # {canonical_id: {"wins": 0, "total": 0}}
     char_position_match_stats = {} # {char_id: {pos: {"wins": 0, "total": 0}}}
 
     for match in matches:
+        if not arena_phases.matches_analysis_phase(db, match, registration_phase):
+            continue
         attacker_id = match.attacker_id
         defender_id = match.defender_id
         
         # プレイヤーの編成セットを取得
-        attacker_ds = db.query(models.DeckSet).filter(models.DeckSet.player_id == attacker_id).first()
-        defender_ds = db.query(models.DeckSet).filter(models.DeckSet.player_id == defender_id).first()
+        attacker_ds = arena_phases.deck_for_match(match, attacker_id, db)
+        defender_ds = arena_phases.deck_for_match(match, defender_id, db)
         
         if not attacker_ds or not defender_ds:
             continue
@@ -4537,111 +4720,12 @@ def _compute_dashboard_stats(
     # ============================================================
     # 各プレイヤーの最終成績を計算する
     # ============================================================
-    all_players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
-    all_matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
     player_by_id = {p.id: p for p in all_players}
-
-    # player_id -> 成績スコア（小さいほど良い）と成績文字列
-
-
-    def get_winner_between(pid1, pid2):
-        """2人のプレイヤー間の試合勝者IDを返す"""
-        for m in all_matches:
-            if m.winner_id and (
-                (m.attacker_id == pid1 and m.defender_id == pid2) or
-                (m.attacker_id == pid2 and m.defender_id == pid1)
-            ):
-                return m.winner_id
-        return None
-
-    def calc_player_result(player_id):
-        """player_id の最終成績文字列を返す"""
-        # 1. グループ内ステージを追う（シード番号からグループを特定）
-        p = player_by_id.get(player_id)
-        if not p or p.seed_number is None:
-            return "ベスト64"
-
-        g_idx = (p.seed_number - 1) // 8
-        base_seed = g_idx * 8
-
-        group_all = [player_by_id.get(all_players_in_grp.id)
-                     for all_players_in_grp in all_players
-                     if all_players_in_grp.seed_number is not None
-                     and (all_players_in_grp.seed_number - 1) // 8 == g_idx]
-
-        # Best64 : グループの1回戦(4試合)
-        qf_winners = []
-        for i in range(4):
-            s1 = base_seed + i * 2 + 1
-            s2 = base_seed + i * 2 + 2
-            p1 = next((x for x in all_players if x.seed_number == s1 and x.tournament_id == tournament_id), None)
-            p2 = next((x for x in all_players if x.seed_number == s2 and x.tournament_id == tournament_id), None)
-            w = get_winner_between(p1.id if p1 else None, p2.id if p2 else None)
-            qf_winners.append(w)
-
-        if player_id not in qf_winners:
-            return "ベスト64"
-
-        # Best32 : グループ準決勝
-        sf_winners = []
-        for i in range(2):
-            w = get_winner_between(qf_winners[i * 2], qf_winners[i * 2 + 1])
-            sf_winners.append(w)
-
-        if player_id not in sf_winners:
-            return "ベスト32"
-
-        # Best16 : グループ決勝
-        group_winner = get_winner_between(sf_winners[0], sf_winners[1])
-        if player_id != group_winner:
-            return "ベスト16"
-
-        # Best8 : チャンピオン対抗戦（各グループ優勝者8名）
-        # グループ優勝者を収集
-        group_winners = []
-        for gi in range(8):
-            base = gi * 8
-            qf_w = []
-            for i in range(4):
-                s1 = base + i * 2 + 1
-                s2 = base + i * 2 + 2
-                p1 = next((x for x in all_players if x.seed_number == s1 and x.tournament_id == tournament_id), None)
-                p2 = next((x for x in all_players if x.seed_number == s2 and x.tournament_id == tournament_id), None)
-                w = get_winner_between(p1.id if p1 else None, p2.id if p2 else None)
-                qf_w.append(w)
-            sf_w = []
-            for i in range(2):
-                w = get_winner_between(qf_w[i * 2], qf_w[i * 2 + 1])
-                sf_w.append(w)
-            gw = get_winner_between(sf_w[0], sf_w[1])
-            group_winners.append(gw)
-
-        champ_qf_winners = []
-        for i in range(4):
-            w = get_winner_between(group_winners[i * 2], group_winners[i * 2 + 1])
-            champ_qf_winners.append(w)
-
-        if player_id not in champ_qf_winners:
-            return "ベスト8"
-
-        champ_sf_winners = []
-        for i in range(2):
-            w = get_winner_between(champ_qf_winners[i * 2], champ_qf_winners[i * 2 + 1])
-            champ_sf_winners.append(w)
-
-        if player_id not in champ_sf_winners:
-            return "ベスト4"
-
-        champ_winner = get_winner_between(champ_sf_winners[0], champ_sf_winners[1])
-        if player_id != champ_winner:
-            return "準優勝"
-
-        return "優勝"
 
     # キャラIDをプレイヤーにマッピング
     # {char_id: set(player_id)}
     char_to_players = {}
-    for ds in db.query(models.DeckSet).filter(models.DeckSet.player_id.in_([p.id for p in all_players])).all():
+    for ds in all_phase_decks:
         for team in ds.teams:
             for c_id in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id]:
                 if c_id is not None:
@@ -4649,14 +4733,10 @@ def _compute_dashboard_stats(
                         char_to_players[c_id] = set()
                     char_to_players[c_id].add(ds.player_id)
 
-    # 各プレイヤーの成績を一度だけ計算してキャッシュ
-    player_result_cache = {}
-    for pid in set(p for pids in char_to_players.values() for p in pids):
-        player_result_cache[pid] = calc_player_result(pid)
     player_result_cache = {
         player_id: result_label(code)
         for player_id, code in calculate_player_results(
-            require_tournament_viewer(tournament_id, db, current_user),
+            tournament,
             all_players,
             all_matches,
         ).items()
@@ -4680,10 +4760,10 @@ def _compute_dashboard_stats(
     # ============================================================
     char_list = []
     for c_id, count in char_usage.items():
-        char = db.query(models.Character).filter(models.Character.id == c_id).first()
+        char = character_by_id.get(c_id)
         if char:
             m_stats = char_match_stats.get(c_id, {"wins": 0, "total": 0})
-            win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else 0
+            win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else None
             # 配置順統計
             pos_data = char_position.get(c_id, {1:0, 2:0, 3:0, 4:0, 5:0})
             pos_match = char_position_match_stats.get(c_id, {})
@@ -4723,7 +4803,8 @@ def _compute_dashboard_stats(
                     "wins": p_ms["wins"],
                     "total": p_ms["total"],
                     "win_rate": p_wr,
-                    "best_result": best_res
+                    "best_result": best_res,
+                    "commander_results": team_statistics_display.finish_counts(p_ms["players"], player_result_cache)
                 })
                 
             user_ids = char_to_players.get(c_id, set())
@@ -4736,8 +4817,9 @@ def _compute_dashboard_stats(
                 "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
-                "win_rate": round(win_rate, 1),
+                "win_rate": round(win_rate, 1) if win_rate is not None else None,
                 "best_result": get_best_result_for_char(c_id),
+                "commander_results": team_statistics_display.finish_counts(user_ids, player_result_cache),
                 "position_stats": position_stats,
                 "team_position_stats": team_position_stats
             })
@@ -4749,13 +4831,13 @@ def _compute_dashboard_stats(
         original_order = data["original_order"]
         team_chars = []
         for c_id in original_order:
-            char = db.query(models.Character).filter(models.Character.id == c_id).first()
+            char = character_by_id.get(c_id)
             if char:
                 team_chars.append({"id": char.id, "name": char.name, "rarity": char.rarity})
         
         canon_id = ",".join(map(str, sorted_chars))
         m_stats = team_match_stats.get(canon_id, {"wins": 0, "total": 0})
-        win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else 0
+        win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else None
 
         pos_stats_out = []
         for p in range(1, 6):
@@ -4780,13 +4862,8 @@ def _compute_dashboard_stats(
 
         # この編成を使ったプレイヤーの最良成績を計算
         team_char_set = set(sorted_chars)
-        team_player_ids = set()
-        for ds in db.query(models.DeckSet).filter(models.DeckSet.player_id.in_([p.id for p in all_players])).all():
-            for team in ds.teams:
-                team_ids = set(c for c in [team.char1_id, team.char2_id, team.char3_id, team.char4_id, team.char5_id] if c is not None)
-                if team_ids == team_char_set:
-                    team_player_ids.add(ds.player_id)
-        
+        team_player_ids = team_players.get(frozenset(sorted_chars), set())
+
         best_team_score = 999
         best_team_result = "ベスト64"
         for pid in team_player_ids:
@@ -4799,9 +4876,9 @@ def _compute_dashboard_stats(
         # この編成を採用したプレイヤー情報を収集
         adopted_players = []
         for pid in team_player_ids:
-            player = db.query(models.Player).filter(models.Player.id == pid).first()
+            player = player_by_id.get(pid)
             if player:
-                t = db.query(models.Tournament).filter(models.Tournament.id == player.tournament_id).first()
+                t = tournament
                 adopted_players.append({
                     "player_name": player.name,
                     "tournament_name": t.name if t else "不明",
@@ -4820,20 +4897,23 @@ def _compute_dashboard_stats(
             "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
-            "win_rate": round(win_rate, 1),
+            "win_rate": round(win_rate, 1) if win_rate is not None else None,
             "best_result": best_team_result if team_player_ids else None,
             "adopted_players": adopted_players,
             "position_stats": pos_stats_out
         })
+    team_statistics_display.annotate(team_list, team_statistics_display.metadata(
+        deck_sets, all_matches, player_result_cache, display_phase, {tournament_id: tournament}, all_players), display_phase)
     team_list.sort(key=lambda x: x["count"], reverse=True)
     
     return {
+        "registration_phase": display_phase,
         "character_usage": char_list,
         "character_stats": char_list,
-        "character_usage_by_result": _compute_character_usage_by_result([tournament_id], db),
+        "character_usage_by_result": _compute_character_usage_by_result([tournament_id], db, registration_phase, prepared_scope={"players": all_players, "decks": all_phase_decks, "matches": all_matches, "tournaments": {tournament_id: tournament}, "characters": character_by_id, "eligible_player_ids": {pid for pid, phase in qualifications if phase == registration_phase} if registration_phase != "initial" else set(player_ids)}),
         "team_usage": team_list,
         "total_players": len(player_ids),
-        "total_matches": len(matches)
+        "total_matches": sum(arena_phases.matches_analysis_phase(db, m, registration_phase) for m in matches)
     }
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/matchups")
@@ -4842,9 +4922,15 @@ def get_dashboard_matchups(
     seed: int = None,
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    params = {"seed": seed}
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    if registration_phase == "legacy":
+        registration_phase = "initial"
+    params = {"seed": seed, "registration_phase": registration_phase}
     cached = get_private_dashboard_cache(tournament, "matchups", params)
     if cached is not None:
         return cached
@@ -4856,12 +4942,16 @@ def get_dashboard_matchups(
         else:
             return {"matchups": []}
 
-    matches = query.all()
+    matches = arena_phases.effective_matches(db, [tournament_id])
+    if seed:
+        matches = [m for m in matches if player.id in (m.attacker_id, m.defender_id)]
     matchup_results = []
     
     for match in matches:
-        attacker_ds = db.query(models.DeckSet).filter(models.DeckSet.player_id == match.attacker_id).first()
-        defender_ds = db.query(models.DeckSet).filter(models.DeckSet.player_id == match.defender_id).first()
+        if not arena_phases.matches_analysis_phase(db, match, registration_phase):
+            continue
+        attacker_ds = arena_phases.deck_for_match(match, match.attacker_id, db)
+        defender_ds = arena_phases.deck_for_match(match, match.defender_id, db)
         
         if not attacker_ds or not defender_ds:
             continue
@@ -4935,20 +5025,46 @@ def get_best8_decks(
     tournament_id: int,
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     """ベスト8進出者のプレイヤー名、成績、登録編成をまとめて取得する"""
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    cached = get_private_dashboard_cache(tournament, "best8-decks")
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    cached = get_private_dashboard_cache(tournament, "best8-decks", {"registration_phase":registration_phase})
     if cached is not None:
         return cached
     all_players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).all()
-    all_matches = db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all()
+    all_matches = arena_phases.effective_matches(db, [tournament_id])
+    if tournament.deck_registration_phases:
+        _, _, qualifications, registration = arena_phases.context(tournament, db)
+        stored_phase = arena_phases.stored_analysis_phase(tournament, registration_phase)
+        result_codes = calculate_player_results(tournament, all_players, all_matches)
+        results = []
+        for player in all_players:
+            if (player.id, stored_phase) not in qualifications:
+                continue
+            teams, _ = registration(player.id, stored_phase)
+            if not teams:
+                continue
+            details = _get_player_details_by_player(tournament_id, player, db, registration_phase,
+                registration_sets=[arena_phases.projected_deck(player.id, teams, -player.id)], resolved_matches=all_matches)
+            if not details["decks"]:
+                continue
+            code = result_codes.get(player.id, "best8" if tournament.registration_scope == "champion_8" else "best64")
+            results.append({"player": {"id": player.id, "seed": player.seed_number, "original_seed": player.seed_number,
+                "champion_slot": player.champion_slot, "name": player.name, "icon_url": player.icon_url, "has_deck": True},
+                "result": result_label(code), "sort_score": TOURNAMENT_RESULT_SCORES[code],
+                "registration_phase": registration_phase, "decks": details["decks"]})
+        results.sort(key=lambda item: (item["sort_score"], item["player"]["original_seed"] or 0))
+        return set_private_dashboard_cache(tournament, "best8-decks", results, {"registration_phase": registration_phase})
     if tournament.registration_scope == "champion_8":
         result_codes = calculate_player_results(tournament, all_players, all_matches)
         results = []
         for player in sorted(all_players, key=lambda item: item.champion_slot or 999):
             result_code = result_codes.get(player.id, "best8")
-            details = _get_player_details_by_player(tournament_id, player, db)
+            details = _get_player_details_by_player(tournament_id, player, db, registration_phase)
             results.append({
                 "player": {
                     "id": player.id,
@@ -4961,10 +5077,11 @@ def get_best8_decks(
                 },
                 "result": result_label(result_code),
                 "sort_score": TOURNAMENT_RESULT_SCORES[result_code],
+                "registration_phase": registration_phase,
                 "decks": details["decks"],
             })
         results.sort(key=lambda item: (item["sort_score"], item["player"]["champion_slot"]))
-        return set_private_dashboard_cache(tournament, "best8-decks", results)
+        return set_private_dashboard_cache(tournament, "best8-decks", results, {"registration_phase":registration_phase})
 
     bracket = get_tournament_bracket(tournament_id, db, current_user)
     best8_players = bracket["champion_finals"]["players"]
@@ -4989,11 +5106,12 @@ def get_best8_decks(
             sort_score = TOURNAMENT_RESULT_SCORES[result_code]
                 
             # 認証済みの内部処理としてプレイヤー詳細データを取得
-            details = _get_player_details_data(tournament_id, p_info["original_seed"], db)
+            details = _get_player_details_data(tournament_id, p_info["original_seed"], db, registration_phase)
             results.append({
                 "player": p_info,
                 "result": result_label_value,
                 "sort_score": sort_score,
+                "registration_phase": registration_phase,
                 "decks": details["decks"]
             })
         else:
@@ -5007,14 +5125,14 @@ def get_best8_decks(
     # 成績が良い順（sort_scoreの昇順）にソート
     results.sort(key=lambda x: x["sort_score"])
     
-    return set_private_dashboard_cache(tournament, "best8-decks", results)
+    return set_private_dashboard_cache(tournament, "best8-decks", results, {"registration_phase":registration_phase})
 
 
 # ============================================================
 # 大会横断検索 API
 # ============================================================
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel as PydanticBaseModel, field_validator
 def resolve_cross_tournament_ids(db, tournament_ids, play_server, championship_id):
     if not play_server or not championship_id:
         return tournament_ids if tournament_ids else []
@@ -5104,7 +5222,7 @@ CHARACTER_USAGE_RESULT_FILTERS = (
 )
 
 
-def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
+def _compute_character_usage_by_result(tournament_ids: List[int], db: Session, registration_phase="initial", *, prepared_scope=None):
     """最終成績の条件ごとに、各選手が採用したキャラクターを集計する。"""
     empty_result = {
         key: {"label": label, "denominator": 0, "characters": []}
@@ -5113,24 +5231,26 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
     if not tournament_ids:
         return empty_result
 
-    players = db.query(models.Player).filter(
+    scope = db.info.get("arena_analysis_scope")
+    if prepared_scope is None and scope is not None:
+        scoped_players = [p for p in scope["players"] if p.tournament_id in tournament_ids]
+        prepared_scope = {"players": scoped_players,
+            "matches": arena_phases.effective_matches(db, tournament_ids),
+            "decks": arena_phases.phase_deck_sets(db, [p.id for p in scoped_players], registration_phase),
+            "tournaments": {tid: scope["tournaments"][tid] for tid in tournament_ids},
+            "characters": {c.id: c for c in db.query(models.Character).all()}}
+    players = prepared_scope["players"] if prepared_scope is not None else db.query(models.Player).filter(
         models.Player.tournament_id.in_(tournament_ids)
     ).all()
     if not players:
         return empty_result
 
     player_ids = [player.id for player in players]
-    matches = db.query(models.Match).filter(
-        models.Match.tournament_id.in_(tournament_ids)
-    ).all()
-    deck_sets = db.query(models.DeckSet).filter(
-        models.DeckSet.player_id.in_(player_ids)
-    ).all()
+    matches = prepared_scope["matches"] if prepared_scope is not None else arena_phases.effective_matches(db, tournament_ids)
+    deck_sets = prepared_scope["decks"] if prepared_scope is not None else arena_phases.phase_deck_sets(db, player_ids, registration_phase)
     deck_set_ids = [deck_set.id for deck_set in deck_sets]
     deck_teams = (
-        db.query(models.DeckTeam).filter(
-            models.DeckTeam.deck_set_id.in_(deck_set_ids)
-        ).all()
+        [team for deck in deck_sets for team in deck.teams]
         if deck_set_ids
         else []
     )
@@ -5142,77 +5262,7 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
     for match in matches:
         matches_by_tournament.setdefault(match.tournament_id, []).append(match)
 
-    result_score_by_player = {}
-    for tournament_id, tournament_players in players_by_tournament.items():
-        seed_to_player = {
-            player.seed_number: player
-            for player in tournament_players
-            if player.seed_number is not None
-        }
-        winner_by_pair = {}
-        for match in matches_by_tournament.get(tournament_id, []):
-            if match.winner_id and match.attacker_id and match.defender_id:
-                winner_by_pair[
-                    frozenset((match.attacker_id, match.defender_id))
-                ] = match.winner_id
-
-        def winner_between(player_id_1, player_id_2):
-            if not player_id_1 or not player_id_2:
-                return None
-            return winner_by_pair.get(frozenset((player_id_1, player_id_2)))
-
-        group_rounds = []
-        for group_index in range(8):
-            base_seed = group_index * 8
-            quarterfinal_winners = []
-            for pair_index in range(4):
-                player_1 = seed_to_player.get(base_seed + pair_index * 2 + 1)
-                player_2 = seed_to_player.get(base_seed + pair_index * 2 + 2)
-                quarterfinal_winners.append(winner_between(
-                    player_1.id if player_1 else None,
-                    player_2.id if player_2 else None,
-                ))
-            semifinal_winners = [
-                winner_between(quarterfinal_winners[0], quarterfinal_winners[1]),
-                winner_between(quarterfinal_winners[2], quarterfinal_winners[3]),
-            ]
-            group_winner = winner_between(semifinal_winners[0], semifinal_winners[1])
-            group_rounds.append((quarterfinal_winners, semifinal_winners, group_winner))
-
-        group_winners = [round_data[2] for round_data in group_rounds]
-        best4_players = [
-            winner_between(group_winners[0], group_winners[1]),
-            winner_between(group_winners[2], group_winners[3]),
-            winner_between(group_winners[4], group_winners[5]),
-            winner_between(group_winners[6], group_winners[7]),
-        ]
-        finalists = [
-            winner_between(best4_players[0], best4_players[1]),
-            winner_between(best4_players[2], best4_players[3]),
-        ]
-        champion = winner_between(finalists[0], finalists[1])
-
-        for player in tournament_players:
-            score = 64
-            if player.seed_number is not None:
-                group_index = (player.seed_number - 1) // 8
-                if 0 <= group_index < len(group_rounds):
-                    quarterfinal_winners, semifinal_winners, group_winner = group_rounds[group_index]
-                    if player.id in quarterfinal_winners:
-                        score = 32
-                    if player.id in semifinal_winners:
-                        score = 16
-                    if player.id == group_winner:
-                        score = 8
-                    if player.id in best4_players:
-                        score = 4
-                    if player.id in finalists:
-                        score = 2
-                    if player.id == champion:
-                        score = 1
-            result_score_by_player[player.id] = score
-
-    tournaments_by_id = {
+    tournaments_by_id = prepared_scope["tournaments"] if prepared_scope is not None else {
         tournament.id: tournament
         for tournament in db.query(models.Tournament).filter(
             models.Tournament.id.in_(list(players_by_tournament))
@@ -5253,7 +5303,7 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
                 characters_by_player[player_id].add(character_id)
                 used_character_ids.add(character_id)
 
-    characters = (
+    characters = list(prepared_scope["characters"].values()) if prepared_scope is not None else (
         db.query(models.Character).filter(
             models.Character.id.in_(used_character_ids)
         ).all()
@@ -5266,6 +5316,14 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
 
     result = {}
     all_player_ids = set(player_ids)
+    if registration_phase != "initial":
+        qualified_ids = prepared_scope.get("eligible_player_ids") if prepared_scope is not None else None
+        if qualified_ids is None:
+            qualified_ids = set()
+            for tournament in tournaments_by_id.values():
+                _, _, qualifications, _ = arena_phases.context(tournament, db)
+                qualified_ids.update(pid for pid, phase in qualifications if phase == registration_phase)
+        all_player_ids.intersection_update(qualified_ids)
     for key, label, maximum_score in CHARACTER_USAGE_RESULT_FILTERS:
         eligible_player_ids = (
             all_player_ids
@@ -5273,7 +5331,7 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
             else {
                 player_id
                 for player_id, score in result_score_by_player.items()
-                if score <= maximum_score
+                if player_id in all_player_ids and score <= maximum_score
             }
         )
         denominator = len(eligible_player_ids)
@@ -5311,23 +5369,32 @@ def _compute_character_usage_by_result(tournament_ids: List[int], db: Session):
     return result
 
 
-class CrossTournamentRequest(PydanticBaseModel):
+class CrossAnalysisPhaseRequest(PydanticBaseModel):
+    @field_validator("registration_phase", mode="before", check_fields=False)
+    @classmethod
+    def normalize_stage_filter(cls, value):
+        return arena_phases.canonical_analysis_stage(value)
+
+
+class CrossTournamentRequest(CrossAnalysisPhaseRequest):
     """大会横断検索リクエスト"""
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
     registration_scope: Literal["all", "full_64", "champion_8"] = "all"
+    registration_phase: Literal["legacy", "initial", "best8", "league", "championship", "final", "all"] = "championship"
 
 
-class CrossTournamentCharacterDetailRequest(PydanticBaseModel):
+class CrossTournamentCharacterDetailRequest(CrossAnalysisPhaseRequest):
     character_id: int
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
     registration_scope: Literal["all", "full_64", "champion_8"] = "all"
+    registration_phase: Literal["legacy", "initial", "best8", "league", "championship", "final", "all"] = "championship"
 
 
-def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope="all"):
+def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope="all", registration_phase=None):
     query = db.query(models.Tournament).filter(
         models.Tournament.publication_status == "published"
     )
@@ -5335,13 +5402,17 @@ def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope=
         query = query.filter(models.Tournament.id.in_(tournament_ids))
     if registration_scope != "all":
         query = query.filter(models.Tournament.registration_scope == registration_scope)
+    if registration_phase == "legacy":
+        query = query.filter(or_(models.Tournament.deck_registration_phases.is_(False), models.Tournament.deck_registration_phases.is_(None)))
+    elif registration_phase in (*arena_phases.PHASES, *arena_phases.ANALYSIS_STAGES):
+        query = query.filter(models.Tournament.deck_registration_phases.is_(True))
     allowed = {tournament.id for tournament in query.all()}
     if tournament_ids:
         return [tournament_id for tournament_id in tournament_ids if tournament_id in allowed]
     return sorted(allowed)
 
 
-def cross_registration_breakdown(tournament_ids, db: Session):
+def cross_registration_breakdown(tournament_ids, db: Session, registration_phase="initial"):
     if not tournament_ids:
         return {
             "total_tournaments": 0, "full_64_tournaments": 0, "champion_8_tournaments": 0,
@@ -5349,11 +5420,20 @@ def cross_registration_breakdown(tournament_ids, db: Session):
             "champion_8_registered_players": 0, "total_teams": 0,
             "total_matches": 0, "total_round_results": 0,
         }
-    tournaments = db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all()
-    players = db.query(models.Player).filter(models.Player.tournament_id.in_(tournament_ids)).all()
+    scope = db.info.get("arena_analysis_scope")
+    tournaments = ([t for t in scope["tournaments"].values() if t.id in tournament_ids] if scope is not None else
+        db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all())
+    players = ([p for p in scope["players"] if p.tournament_id in tournament_ids] if scope is not None else
+        db.query(models.Player).filter(models.Player.tournament_id.in_(tournament_ids)).all())
+    if registration_phase != "initial":
+        qualifications = set()
+        for tournament in tournaments:
+            qualifications.update(arena_phases.analysis_qualified_ids(tournament, db, registration_phase,
+                [p.id for p in players if p.tournament_id == tournament.id]))
+        players = [p for p in players if p.id in qualifications]
     player_ids = [player.id for player in players]
-    deck_set_ids = [row[0] for row in db.query(models.DeckSet.id).filter(models.DeckSet.player_id.in_(player_ids)).all()] if player_ids else []
-    matches = db.query(models.Match).filter(models.Match.tournament_id.in_(tournament_ids)).all()
+    initial_sets = arena_phases.phase_deck_sets(db, player_ids, registration_phase)
+    matches = [m for m in arena_phases.effective_matches(db, tournament_ids) if arena_phases.matches_analysis_phase(db, m, registration_phase)]
     match_ids = [match.id for match in matches]
     scope_by_tournament = {tournament.id: tournament.registration_scope for tournament in tournaments}
     return {
@@ -5363,9 +5443,9 @@ def cross_registration_breakdown(tournament_ids, db: Session):
         "total_registered_players": len(players),
         "full_64_registered_players": sum(scope_by_tournament[p.tournament_id] == "full_64" for p in players),
         "champion_8_registered_players": sum(scope_by_tournament[p.tournament_id] == "champion_8" for p in players),
-        "total_teams": db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id.in_(deck_set_ids)).count() if deck_set_ids else 0,
+        "total_teams": sum(len(deck.teams) for deck in initial_sets),
         "total_matches": len(matches),
-        "total_round_results": db.query(models.RoundResult).filter(models.RoundResult.match_id.in_(match_ids)).count() if match_ids else 0,
+        "total_round_results": sum(len(match.round_results) for match in matches),
     }
 
 
@@ -5405,6 +5485,73 @@ def cross_snapshot_has_distinct_counts(snapshot, db: Session, registered_players
 
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
+    ids = _cross_target_ids(body, db)
+    if body.registration_phase == "all":
+        with contextlib.ExitStack() as shared_scope:
+            return {"registration_phase": "all", "by_phase": {
+                phase: _cross_aggregate(ids, db, phase, shared_scope=shared_scope)
+                for phase in ("legacy", *arena_phases.ANALYSIS_STAGES)}}
+    stats = _cross_aggregate(ids, db, body.registration_phase)
+    # Preserve the response limit, but keep the full list in the shared cache.
+    stats["team_usage"] = stats.get("team_usage", [])[:50]
+    return stats
+
+
+def _cross_target_ids(body, db):
+    ids = body.tournament_ids or resolve_cross_tournament_ids(
+        db, body.tournament_ids, body.play_server, body.championship_id)
+    if not ids:
+        return []
+    return sorted(set(filter_cross_tournament_ids(db, ids, body.registration_scope, body.registration_phase)))
+
+
+def _team_display_metadata(ids, db, phase):
+    def compute():
+        with arena_phases.analysis_scope(db, ids) as scope:
+            matches = arena_phases.effective_matches(db, ids)
+            players = [p for p in scope["players"] if p.tournament_id in ids]
+            decks = arena_phases.phase_deck_sets(db, [p.id for p in players], phase)
+            results = {}
+            for tid in ids:
+                codes = calculate_player_results(scope["tournaments"][tid],
+                    [p for p in players if p.tournament_id == tid],
+                    [m for m in matches if m.tournament_id == tid])
+                results.update({pid: result_label(code) for pid, code in codes.items()})
+            return team_statistics_display.metadata(decks, matches, results, phase, {tid: scope["tournaments"][tid] for tid in ids}, players)
+    return cross_analytics.cached(db, ids, phase, "team-display-v3-semantic-stage", compute)
+
+
+def _cross_aggregate(ids, db, phase, *, shared_scope=None):
+    phase = arena_phases.canonical_analysis_stage(phase)
+    if phase == "all":
+        def compute_all():
+            with arena_phases.analysis_scope(db, ids):
+                sections = {stage: _cross_aggregate(ids, db, stage) for stage in ("legacy", *arena_phases.ANALYSIS_STAGES)}
+            return {"registration_phase": "all", "by_phase": sections,
+                "team_usage": [row for value in sections.values() for row in value.get("team_usage", [])]}
+        return cross_analytics.cached(db, ids, phase, "aggregate-all-v1-semantic-stage", compute_all)
+
+    if not ids:
+        return {**empty_cross_tournament_stats(db), "registration_phase": phase}
+    def compute():
+        if shared_scope is not None and db.info.get("arena_analysis_scope") is None:
+            shared_scope.enter_context(arena_phases.analysis_scope(db, ids))
+        with arena_phases.analysis_scope(db, ids) as scope:
+            applicable = [t.id for t in scope["tournaments"].values()
+                if arena_phases.analysis_applicable(t, phase)]
+            if not applicable:
+                return {**empty_cross_tournament_stats(db), "registration_phase": phase}
+            if phase == "legacy":
+                value = _cross_snapshot_stats(CrossTournamentRequest(tournament_ids=applicable), db)
+                team_statistics_display.annotate(value.get("team_usage", []),
+                    _team_display_metadata(applicable, db, phase), phase)
+                value["registration_phase"] = phase
+                return value
+            return _compute_cross_tournament_stats(applicable, db, phase)
+    return cross_analytics.cached(db, ids, phase, "aggregate-v4-semantic-stage", compute)
+
+
+def _cross_snapshot_stats(body: CrossTournamentRequest, db: Session):
     if body.tournament_ids:
         target_ids = body.tournament_ids
     else:
@@ -5434,9 +5581,10 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
         models.Player.tournament_id.in_(target_ids)
     ).group_by(models.Player.tournament_id).all()) if target_ids else {}
 
+    arena_ids = {t.id for t in db.query(models.Tournament).filter(models.Tournament.id.in_(target_ids), models.Tournament.deck_registration_phases.is_(True)).all()}
     usable_snaps = [
         snapshot for snapshot in snaps
-        if cross_snapshot_has_distinct_counts(
+        if snapshot.tournament_id not in arena_ids and cross_snapshot_has_distinct_counts(
             snapshot, db, player_counts.get(snapshot.tournament_id, 0)
         )
     ]
@@ -5557,10 +5705,11 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
         stats = {
             "total_players": total_players,
             "total_matches": total_matches,
+            "registration_phase": "initial",
             "character_usage": char_list,
             "character_stats": char_list,
             "character_usage_by_result": _compute_character_usage_by_result(target_ids, db),
-            "team_usage": team_list[:50],
+            "team_usage": team_list,
             "matchups": [] # Usually cross matchups are fetched via their own endpoint
         }
         stats["registration_breakdown"] = cross_registration_breakdown(target_ids, db)
@@ -5568,39 +5717,36 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     else:
         print("[cross stats] fallback raw compute")
         stats = _compute_cross_tournament_stats(target_ids, db)
-        if "team_usage" in stats:
-            stats["team_usage"] = stats["team_usage"][:50]
         return stats
 
 
-def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session):
+def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session, registration_phase="initial"):
     """複数大会を横断したキャラ採用率・編成使用率・勝率を集計する"""
+    display_phase = registration_phase
+    if registration_phase == "legacy":
+        registration_phase = "initial"
     tournament_ids = get_published_tournament_ids(tournament_ids_input, db)
     if not tournament_ids:
-        return empty_cross_tournament_stats(db)
+        return {**empty_cross_tournament_stats(db), "registration_phase": display_phase}
 
-    tournaments_by_id = {
-        tournament.id: tournament
-        for tournament in db.query(models.Tournament).filter(
-            models.Tournament.id.in_(tournament_ids)
-        ).all()
-    }
-
-    # 対象大会の全プレイヤーを取得
-    all_players = db.query(models.Player).filter(
-        models.Player.tournament_id.in_(tournament_ids)
-    ).all()
+    scope = db.info.get("arena_analysis_scope")
+    tournaments_by_id = ({tid: scope["tournaments"][tid] for tid in tournament_ids} if scope is not None else {
+        t.id: t for t in db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all()})
+    scope_players = ([p for p in scope["players"] if p.tournament_id in tournament_ids] if scope is not None else
+        db.query(models.Player).filter(models.Player.tournament_id.in_(tournament_ids)).all())
+    all_players = scope_players
+    if registration_phase != "initial":
+        qualified = set()
+        for tournament in tournaments_by_id.values():
+            qualified.update(arena_phases.analysis_qualified_ids(tournament, db, registration_phase,
+                [p.id for p in scope_players if p.tournament_id == tournament.id]))
+        all_players = [p for p in scope_players if p.id in qualified]
     player_ids = [p.id for p in all_players]
-
-    deck_sets = db.query(models.DeckSet).filter(
-        models.DeckSet.player_id.in_(player_ids)
-    ).all()
+    deck_sets = arena_phases.phase_deck_sets(db, player_ids, registration_phase)
     deck_set_ids = [ds.id for ds in deck_sets]
     ds_to_player = {ds.id: ds.player_id for ds in deck_sets}
 
-    deck_teams = db.query(models.DeckTeam).filter(
-        models.DeckTeam.deck_set_id.in_(deck_set_ids)
-    ).all()
+    deck_teams = [team for deck in deck_sets for team in deck.teams]
     deck_sets_by_player = {deck_set.player_id: deck_set for deck_set in deck_sets}
     teams_by_deck_set = {}
     for team in deck_teams:
@@ -5655,13 +5801,9 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                     team_usage[sorted_chars]["position_stats"][t_pos]["players"].add(pid)
 
     # 勝敗集計
-    all_matches = db.query(models.Match).filter(
-        models.Match.tournament_id.in_(tournament_ids)
-    ).all()
+    all_matches = arena_phases.effective_matches(db, tournament_ids)
     match_ids = [match.id for match in all_matches]
-    round_results = db.query(models.RoundResult).filter(
-        models.RoundResult.match_id.in_(match_ids)
-    ).all() if match_ids else []
+    round_results = [r for match in all_matches for r in match.round_results]
     rounds_by_match = {}
     for round_result in round_results:
         rounds_by_match.setdefault(round_result.match_id, []).append(round_result)
@@ -5671,14 +5813,16 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     char_position_match_stats = {}
 
     for match in all_matches:
-        attacker_ds = deck_sets_by_player.get(match.attacker_id)
-        defender_ds = deck_sets_by_player.get(match.defender_id)
+        if not arena_phases.matches_analysis_phase(db, match, registration_phase):
+            continue
+        attacker_ds = match.arena_decks.get(match.attacker_id) if hasattr(match, "arena_decks") else deck_sets_by_player.get(match.attacker_id)
+        defender_ds = match.arena_decks.get(match.defender_id) if hasattr(match, "arena_decks") else deck_sets_by_player.get(match.defender_id)
 
         if not attacker_ds or not defender_ds:
             continue
 
-        a_teams = {t.team_number: t for t in teams_by_deck_set.get(attacker_ds.id, [])}
-        d_teams = {t.team_number: t for t in teams_by_deck_set.get(defender_ds.id, [])}
+        a_teams = {t.team_number: t for t in attacker_ds.teams}
+        d_teams = {t.team_number: t for t in defender_ds.teams}
 
         for rr in rounds_by_match.get(match.id, []):
             rn = rr.round_number
@@ -5765,7 +5909,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
     for tournament_id in tournament_ids:
         codes = calculate_player_results(
             tournaments_by_id[tournament_id],
-            [player for player in all_players if player.tournament_id == tournament_id],
+            [player for player in scope_players if player.tournament_id == tournament_id],
             [match for match in all_matches if match.tournament_id == tournament_id],
         )
         per_tournament_results[tournament_id] = {
@@ -5780,6 +5924,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             if player_id and c_id is not None and c_id != EMPTY_SLOT_CHARACTER_ID:
                 char_to_players.setdefault(c_id, set()).add(player_id)
 
+    commander_result_by_player = {pid: result for results in per_tournament_results.values() for pid, result in results.items()}
     character_ids = set(char_usage)
     characters_by_id = {
         character.id: character
@@ -5812,7 +5957,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
         char = characters_by_id.get(c_id)
         if char:
             m_stats = char_match_stats.get(c_id, {"wins": 0, "total": 0})
-            win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else 0
+            win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else (0 if registration_phase == "initial" else None)
             pos_data = char_position.get(c_id, {1:0, 2:0, 3:0, 4:0, 5:0})
             pos_match = char_position_match_stats.get(c_id, {})
             position_stats = []
@@ -5853,7 +5998,8 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                     "wins": p_ms["wins"],
                     "total": p_ms["total"],
                     "win_rate": p_wr,
-                    "best_result": best_res_p
+                    "best_result": best_res_p,
+                    "commander_results": team_statistics_display.finish_counts(p_ms["players"], commander_result_by_player)
                 })
 
             user_ids = char_to_players.get(c_id, set())
@@ -5868,8 +6014,9 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
                 "adoption_rate": round(len(user_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
                 "win_count": m_stats["wins"],
                 "total_matches": m_stats["total"],
-                "win_rate": round(win_rate, 1),
+                "win_rate": round(win_rate, 1) if win_rate is not None else None,
                 "best_result": best_result,
+                "commander_results": team_statistics_display.finish_counts(user_ids, commander_result_by_player),
                 "position_stats": position_stats,
                 "team_position_stats": team_position_stats
             })
@@ -5888,7 +6035,7 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
 
         canon_id = ",".join(map(str, sorted_chars))
         m_stats = team_match_stats.get(canon_id, {"wins": 0, "total": 0})
-        win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else 0
+        win_rate = (m_stats["wins"] / m_stats["total"] * 100) if m_stats["total"] > 0 else (0 if registration_phase == "initial" else None)
 
         pos_stats_out = []
         for p in range(1, 6):
@@ -5942,26 +6089,43 @@ def _compute_cross_tournament_stats(tournament_ids_input: List[int], db: Session
             "adoption_rate": round(len(team_player_ids) / len(player_ids) * 100, 1) if player_ids else 0.0,
             "win_count": m_stats["wins"],
             "total_matches": m_stats["total"],
-            "win_rate": round(win_rate, 1),
+            "win_rate": round(win_rate, 1) if win_rate is not None else None,
             "best_result": best_team_result,
             "adopted_players": adopted_players,
             "position_stats": pos_stats_out
         })
+    team_statistics_display.annotate(team_list, team_statistics_display.metadata(
+        deck_sets, all_matches, {pid: result for results in per_tournament_results.values() for pid, result in results.items()}, display_phase, tournaments_by_id, scope_players), display_phase)
     team_list.sort(key=lambda x: x["count"], reverse=True)
 
     return {
+        "registration_phase": display_phase,
         "character_usage": char_list,
         "character_stats": char_list,
-        "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db),
+        "character_usage_by_result": _compute_character_usage_by_result(tournament_ids, db, registration_phase,
+            prepared_scope={"players": scope_players, "matches": all_matches, "decks": deck_sets,
+                "tournaments": tournaments_by_id, "characters": characters_by_id, "eligible_player_ids": qualified if registration_phase != "initial" else set(player_ids)}),
         "team_usage": team_list,
         "total_players": len(player_ids),
-        "total_matches": len(all_matches),
-        "registration_breakdown": cross_registration_breakdown(tournament_ids, db),
+        "total_matches": sum(arena_phases.matches_analysis_phase(db, m, registration_phase) for m in all_matches),
+        "registration_breakdown": cross_registration_breakdown(tournament_ids, db, registration_phase),
     }
 
 
 @app.post("/api/dashboard/cross-tournament/matchups")
 def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = Depends(get_db)):
+    ids = _cross_target_ids(body, db)
+    if body.registration_phase == "all":
+        return {"registration_phase": "all", "by_phase": {phase: get_cross_tournament_matchups(
+            body.model_copy(update={"registration_phase": phase}), db) for phase in ("legacy", *arena_phases.ANALYSIS_STAGES)}}
+    def compute():
+        with arena_phases.analysis_scope(db, ids):
+            return _cross_matchups(CrossTournamentRequest(tournament_ids=ids,
+                registration_phase=body.registration_phase), db)
+    return cross_analytics.cached(db, ids, body.registration_phase, "matchups-v1", compute)
+
+
+def _cross_matchups(body: CrossTournamentRequest, db: Session):
     """複数大会を横断した対戦データを集計する"""
     tournament_ids = filter_cross_tournament_ids(
         db, body.tournament_ids, body.registration_scope
@@ -5971,18 +6135,14 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
     if not tournament_ids:
         raise HTTPException(status_code=400, detail="tournament_ids が必要です")
 
-    matches = db.query(models.Match).filter(
-        models.Match.tournament_id.in_(tournament_ids)
-    ).all()
+    matches = arena_phases.effective_matches(db, tournament_ids)
 
     matchup_results = []
     for match in matches:
-        attacker_ds = db.query(models.DeckSet).filter(
-            models.DeckSet.player_id == match.attacker_id
-        ).first()
-        defender_ds = db.query(models.DeckSet).filter(
-            models.DeckSet.player_id == match.defender_id
-        ).first()
+        if not arena_phases.matches_analysis_phase(db, match, body.registration_phase):
+            continue
+        attacker_ds = arena_phases.deck_for_match(match, match.attacker_id, db)
+        defender_ds = arena_phases.deck_for_match(match, match.defender_id, db)
 
         if not attacker_ds or not defender_ds:
             continue
@@ -6052,7 +6212,7 @@ def get_cross_tournament_matchups(body: CrossTournamentRequest, db: Session = De
 
 
 
-class CrossTournamentTeamsRequest(PydanticBaseModel):
+class CrossTournamentTeamsRequest(CrossAnalysisPhaseRequest):
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
     championship_id: Optional[int] = None
@@ -6067,6 +6227,9 @@ class CrossTournamentTeamsRequest(PydanticBaseModel):
     min_usage: Optional[int] = None
     min_win_rate: Optional[float] = None
     best_result: Optional[str] = None
+    composition_best_result: Optional[str] = None
+    commander_best_result: Optional[str] = None
+    registration_phase: Literal["legacy", "initial", "best8", "league", "championship", "final", "all"] = "championship"
 
 
 def _filter_teams_by_character_conditions(
@@ -6092,6 +6255,14 @@ def _filter_teams_by_character_conditions(
     return filtered
 
 
+def _composition_stage_stats(tournament_id, db, current_user, seed, stage):
+    def compute():
+        with arena_phases.analysis_scope(db, [tournament_id]):
+            return _compute_dashboard_stats(tournament_id, db, current_user, seed, stage)
+    return cross_analytics.cached(db, [tournament_id], stage,
+        f"private-composition-stage-v1:{seed}", compute)
+
+
 @app.get("/api/tournaments/{tournament_id}/dashboard/teams")
 def get_dashboard_teams(
     tournament_id: int,
@@ -6105,11 +6276,21 @@ def get_dashboard_teams(
     min_usage: int = 0,
     min_win_rate: float = 0,
     best_result: Optional[str] = None,
+    composition_best_result: Optional[str] = None,
+    commander_best_result: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    if registration_phase in ("league", "championship") and not arena_phases.analysis_applicable(tournament, registration_phase):
+        return {"teams": [], "total": 0}
+    if registration_phase != "all":
+        arena_phases.validate_analysis_phase(tournament, registration_phase)
     params = {
+        "registration_phase": registration_phase,
         "seed": seed,
         "limit": limit,
         "offset": offset,
@@ -6120,6 +6301,8 @@ def get_dashboard_teams(
         "min_usage": min_usage,
         "min_win_rate": min_win_rate,
         "best_result": best_result,
+        "composition_best_result": composition_best_result,
+        "commander_best_result": commander_best_result,
     }
     cached = get_private_dashboard_cache(tournament, "teams", params)
     if cached is not None:
@@ -6128,10 +6311,16 @@ def get_dashboard_teams(
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
     ).first()
-    if snap is not None:
-        teams = snap.team_usage or []
+    if db.query(models.Tournament).filter_by(id=tournament_id).one().deck_registration_phases:
+        snap = None
+    if registration_phase == "all":
+        stages = [stage for stage in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, stage)] if tournament.deck_registration_phases else ["legacy"]
+        teams = [row for stage in stages for row in _composition_stage_stats(tournament_id, db, current_user, seed, stage).get("team_usage", [])]
+    elif snap is not None:
+        teams = team_statistics_display.annotate(deepcopy(snap.team_usage or []),
+            _team_display_metadata([tournament_id], db, registration_phase), registration_phase)
     else:
-        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        stats = _composition_stage_stats(tournament_id, db, current_user, seed, registration_phase)
         teams = stats.get("team_usage", [])
     
     included_ids = [int(value) for value in character_ids.split(",") if value.isdigit()] if character_ids else []
@@ -6143,13 +6332,13 @@ def get_dashboard_teams(
     if min_usage > 0:
         teams = [t for t in teams if t.get("count", 0) >= min_usage]
     if min_win_rate > 0:
-        teams = [t for t in teams if t.get("win_rate", 0) >= min_win_rate]
-    if best_result:
-        target_score = RESULT_SCORES.get(best_result, 999)
-        teams = [t for t in teams if RESULT_SCORES.get(t.get("best_result", "不明"), 999) <= target_score]
+        teams = [t for t in teams if (t.get("win_rate") or 0) >= min_win_rate]
+    teams = team_statistics_display.filter_highest(teams, composition_best_result, commander_best_result or best_result)
 
     if sort_by == "win_rate":
-        teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
+        teams.sort(key=lambda x: (x.get("win_rate") if x.get("win_rate") is not None else -1), reverse=True)
+    elif sort_by == "composition_best_result":
+        teams.sort(key=lambda row: team_statistics_display.RESULT_ORDER.get(team_statistics_display.result_code(row.get("composition_best_result")), 999))
     elif sort_by in ("usage", "count"):
         teams.sort(key=lambda x: x.get("count", 0), reverse=True)
         
@@ -6165,42 +6354,9 @@ def get_cross_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    if req.tournament_ids:
-        tournament_ids = req.tournament_ids
-    else:
-        tournament_ids = resolve_cross_tournament_ids(db, req.tournament_ids, req.play_server, req.championship_id)
-
-    tournament_ids = filter_cross_tournament_ids(
-        db, tournament_ids, req.registration_scope
-    )
-    print("[cross teams] req.tournament_ids:", req.tournament_ids)
-    print("[cross teams] target_ids:", tournament_ids)
-    # スナップショット合成：指定大会の snapshot を読み込んで team_usage を統合
-    snaps = db.query(models.TournamentSnapshot).filter(
-        models.TournamentSnapshot.tournament_id.in_(tournament_ids)
-    ).all() if tournament_ids else []
-
-    if tournament_ids and len(snaps) == len(tournament_ids):
-
-        merged: dict = {}
-        for snap in snaps:
-            for team in (snap.team_usage or []):
-                cid = team.get("canonical_id")
-                if not cid:
-                    continue
-                _merge_team_position_and_adopted(merged, team, cid)
-        teams = []
-        for team in merged.values():
-            t = team["total_matches"]
-            w = team["win_count"]
-            team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
-            _finalize_team_position_and_adopted(team)
-            teams.append(team)
-    else:
-        # スナップショットがない場合は既存集計にフォールバック
-        stats = _compute_cross_tournament_stats(tournament_ids, db)
-        teams = stats.get("team_usage", [])
-    
+    tournament_ids = _cross_target_ids(req, db)
+    stats = _cross_aggregate(tournament_ids, db, req.registration_phase)
+    teams = stats.get("team_usage", [])
     teams = _filter_teams_by_character_conditions(
         teams,
         req.character_ids,
@@ -6212,14 +6368,13 @@ def get_cross_dashboard_teams(
     if req.min_usage is not None:
         teams = [t for t in teams if t.get("count", 0) >= req.min_usage]
     if req.min_win_rate is not None:
-        teams = [t for t in teams if t.get("win_rate", 0) >= req.min_win_rate]
-    if req.best_result:
-
-        target_score = RESULT_SCORES.get(req.best_result, 999)
-        teams = [t for t in teams if RESULT_SCORES.get(t.get("best_result", "不明"), 999) <= target_score]
+        teams = [t for t in teams if (t.get("win_rate") or 0) >= req.min_win_rate]
+    teams = team_statistics_display.filter_highest(teams, req.composition_best_result, req.commander_best_result or req.best_result)
 
     if req.sort_by == "win_rate":
-        teams.sort(key=lambda x: x.get("win_rate", 0), reverse=True)
+        teams.sort(key=lambda x: x.get("win_rate") if x.get("win_rate") is not None else -1, reverse=True)
+    elif req.sort_by == "composition_best_result":
+        teams.sort(key=lambda row: team_statistics_display.RESULT_ORDER.get(team_statistics_display.result_code(row.get("composition_best_result")), 999))
     elif req.sort_by in ("usage", "count"):
         teams.sort(key=lambda x: x.get("count", 0), reverse=True)
         
@@ -6233,154 +6388,45 @@ def get_cross_dashboard_teams(
 
 @app.post("/api/dashboard/cross-tournament/character-detail")
 def get_cross_tournament_character_detail(req: CrossTournamentCharacterDetailRequest, db: Session = Depends(get_db)):
-    if req.tournament_ids:
-        target_ids = req.tournament_ids
-    else:
-        target_ids = resolve_cross_tournament_ids(
-            db,
-            req.tournament_ids,
-            req.play_server,
-            req.championship_id
-        )
-    target_ids = filter_cross_tournament_ids(
-        db, target_ids, req.registration_scope
-    )
+    target_ids = _cross_target_ids(req, db)
     if not target_ids:
         return {"character_usage": [], "team_usage": []}
-
-    snaps = db.query(models.TournamentSnapshot).filter(
-        models.TournamentSnapshot.tournament_id.in_(target_ids)
-    ).all() if target_ids else []
-
-    if target_ids and len(snaps) == len(target_ids):
-        print(f"[cross char detail] using snapshots: {len(snaps)} / {len(target_ids)}")
-        merged_chars = {}
-        merged_teams = {}
-        
-        for snap in snaps:
-            for char_stat in (snap.char_stats or []):
-                cid = char_stat.get("id") or char_stat.get("character_id")
-                try:
-                    cid_int = int(cid) if cid is not None else None
-                except (ValueError, TypeError):
-                    cid_int = None
-                try:
-                    req_cid_int = int(req.character_id) if req.character_id is not None else None
-                except (ValueError, TypeError):
-                    req_cid_int = None
-                if cid_int is None or cid_int != req_cid_int: continue
-                if cid_int not in merged_chars:
-                    merged_chars[cid_int] = {
-                        "id": cid_int,
-                        "character_id": cid_int,
-                        "name": char_stat.get("name"),
-                        "rarity": char_stat.get("rarity"),
-                        "count": 0,
-                        "win_count": 0,
-                        "total_matches": 0,
-                        "best_result": char_stat.get("best_result", "不明"),
-                        "position_stats": [],
-                        "team_position_stats": [],
-                        "_pos_map": {p: {"count": 0, "wins": 0, "total": 0} for p in range(1, 6)},
-                        "_team_pos_map": {p: {"count": 0, "wins": 0, "total": 0, "best_result": None} for p in range(1, 6)}
-                    }
-                merged_chars[cid_int]["count"] += char_stat.get("count", 0)
-                merged_chars[cid_int]["win_count"] += char_stat.get("win_count", 0)
-                merged_chars[cid_int]["total_matches"] += char_stat.get("total_matches", 0)
-                
-                cur_score = RESULT_SCORES.get(merged_chars[cid_int]["best_result"], 999)
-                new_score = RESULT_SCORES.get(char_stat.get("best_result", "不明"), 999)
-                if new_score < cur_score:
-                    merged_chars[cid_int]["best_result"] = char_stat.get("best_result")
-                _merge_char_position_stats(merged_chars, char_stat, cid_int)
-                    
-            for team in (snap.team_usage or []):
-                t_cids = team.get("character_ids") or [c["id"] for c in team.get("characters", []) if isinstance(c, dict) and "id" in c]
-                t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
-                if int(req.character_id) not in t_cids_int: continue
-                cid = team.get("canonical_id")
-                if not cid: continue
-                _merge_team_position_and_adopted(merged_teams, team, cid)
-
-        char_list = []
-        for char in merged_chars.values():
-            t = char["total_matches"]
-            w = char["win_count"]
-            char["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
-            char["id"] = int(char["id"])
-            char["character_id"] = int(char["id"])
-            _finalize_char_position_stats(char)
-            char_list.append(char)
-            
-        if not char_list:
-            char_model = db.query(models.Character).filter(models.Character.id == req.character_id).first()
-            char_name = char_model.name if char_model else "不明"
-            rarity = char_model.rarity if char_model else "SSR"
-            char_list = [{
-                "id": int(req.character_id),
-                "character_id": int(req.character_id),
-                "name": char_name,
-                "rarity": rarity,
-                "count": 0,
-                "win_count": 0,
-                "total_matches": 0,
-                "win_rate": 0.0,
-                "best_result": "不明",
-                "position_stats": [],
-                "team_position_stats": []
-            }]
-            
-        team_list = []
-        for team in merged_teams.values():
-            t = team["total_matches"]
-            w = team["win_count"]
-            team["win_rate"] = round(w / t * 100, 1) if t > 0 else 0.0
-            _finalize_team_position_and_adopted(team)
-            team_list.append(team)
-        team_list.sort(key=lambda x: x["count"], reverse=True)
-        
-        return {
-            "character_usage": char_list,
-            "team_usage": team_list
-        }
+    stats = _cross_aggregate(target_ids, db, req.registration_phase)
+    char_stats = stats.get("character_stats", [])
+    team_usage = stats.get("team_usage", [])
+    char_item = next((x for x in char_stats if (int(x.get("id") or 0) == int(req.character_id) or int(x.get("character_id") or 0) == int(req.character_id))), None)
+    if char_item:
+        char_item["id"] = int(char_item.get("id") or char_item.get("character_id") or req.character_id)
+        char_item["character_id"] = char_item["id"]
     else:
-        print("[cross char detail] fallback raw compute")
-        stats = _compute_cross_tournament_stats(target_ids, db)
-        char_stats = stats.get("character_stats", [])
-        team_usage = stats.get("team_usage", [])
-        
-        char_item = next((x for x in char_stats if (int(x.get("id") or 0) == int(req.character_id) or int(x.get("character_id") or 0) == int(req.character_id))), None)
-        if char_item:
-            char_item["id"] = int(char_item.get("id") or char_item.get("character_id") or req.character_id)
-            char_item["character_id"] = char_item["id"]
-        else:
-            char_model = db.query(models.Character).filter(models.Character.id == req.character_id).first()
-            char_name = char_model.name if char_model else "不明"
-            rarity = char_model.rarity if char_model else "SSR"
-            char_item = {
-                "id": int(req.character_id),
-                "character_id": int(req.character_id),
-                "name": char_name,
-                "rarity": rarity,
-                "count": 0,
-                "win_count": 0,
-                "total_matches": 0,
-                "win_rate": 0.0,
-                "best_result": "不明",
-                "position_stats": [],
-                "team_position_stats": []
-            }
-        related_teams = []
-        for t in team_usage:
-            t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
-            t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
-            if int(req.character_id) in t_cids_int:
-                related_teams.append(t)
-        
-        return {
-            "character_usage": [char_item] if char_item else [],
-            "team_usage": related_teams
+        char_model = db.query(models.Character).filter(models.Character.id == req.character_id).first()
+        char_name = char_model.name if char_model else "不明"
+        rarity = char_model.rarity if char_model else "SSR"
+        char_item = {
+            "id": int(req.character_id),
+            "character_id": int(req.character_id),
+            "name": char_name,
+            "rarity": rarity,
+            "count": 0,
+            "win_count": 0,
+            "total_matches": 0,
+            "win_rate": 0.0,
+            "best_result": "不明",
+            "position_stats": [],
+            "team_position_stats": []
         }
+    related_teams = []
+    for t in team_usage:
+        t_cids = t.get("character_ids") or [c["id"] for c in t.get("characters", []) if isinstance(c, dict) and "id" in c]
+        t_cids_int = [int(c) for c in t_cids if c is not None and str(c).isdigit()]
+        if int(req.character_id) in t_cids_int:
+            related_teams.append(t)
+
+    return {
+        "character_usage": [char_item] if char_item else [],
+        "team_usage": related_teams
+    }
+
 
 
 @app.get("/api/tournaments/{tournament_id}/dashboard/character-winrates")
@@ -6389,19 +6435,25 @@ def get_dashboard_character_winrates(
     seed: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    params = {"seed": seed}
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    params = {"seed": seed, "registration_phase": registration_phase}
     cached = get_private_dashboard_cache(tournament, "character-winrates", params)
     if cached is not None:
         return cached
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
     ).first()
+    if db.query(models.Tournament).filter_by(id=tournament_id).one().deck_registration_phases:
+        snap = None
     if snap is not None and snap.char_stats:
         char_stats = snap.char_stats
     else:
-        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed, registration_phase)
         char_stats = stats.get("character_stats", [])
     return set_private_dashboard_cache(
         tournament,
@@ -6418,16 +6470,23 @@ def get_dashboard_character_detail(
     seed: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
-    require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
     snap = db.query(models.TournamentSnapshot).filter(
         models.TournamentSnapshot.tournament_id == tournament_id
     ).first()
+    if db.query(models.Tournament).filter_by(id=tournament_id).one().deck_registration_phases:
+        snap = None
     if snap is not None and snap.char_stats is not None and snap.team_usage is not None:
         char_stats = snap.char_stats
-        team_usage = snap.team_usage
+        team_usage = team_statistics_display.annotate(deepcopy(snap.team_usage or []),
+            _team_display_metadata([tournament_id], db, registration_phase), registration_phase)
     else:
-        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+        stats = _compute_dashboard_stats(tournament_id, db, current_user, seed, registration_phase)
         char_stats = stats.get("character_usage", stats.get("character_stats", []))
         team_usage = stats.get("team_usage", [])
 
@@ -6436,7 +6495,7 @@ def get_dashboard_character_detail(
         char_item["id"] = int(char_item.get("id") or char_item.get("character_id") or character_id)
         char_item["character_id"] = char_item["id"]
         if char_item.get("count", 0) > 0 and (not char_item.get("position_stats") or not char_item.get("team_position_stats")):
-            comp_stats = _compute_dashboard_stats(tournament_id, db, current_user, seed)
+            comp_stats = _compute_dashboard_stats(tournament_id, db, current_user, seed, registration_phase)
             comp_chars = comp_stats.get("character_usage", comp_stats.get("character_stats", []))
             comp_item = next((x for x in comp_chars if (int(x.get("id") or 0) == int(character_id) or int(x.get("character_id") or 0) == int(character_id))), None)
             if comp_item:
@@ -6456,7 +6515,7 @@ def get_dashboard_character_detail(
             "count": 0,
             "win_count": 0,
             "total_matches": 0,
-            "win_rate": 0.0,
+            "win_rate": None,
             "best_result": "不明",
             "position_stats": [],
             "team_position_stats": []
@@ -6480,23 +6539,161 @@ def get_dashboard_player_stats(
     seed: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
+    registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    params = {"seed": seed}
+    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
+        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
+    arena_phases.validate_analysis_phase(tournament, registration_phase)
+    params = {"seed": seed, "registration_phase": registration_phase}
     cached = get_private_dashboard_cache(tournament, "player-stats", params)
     if cached is not None:
         return cached
     if seed is not None:
-        value = get_player_details(tournament_id, seed, db, current_user)
+        value = _get_player_details_data(tournament_id, seed, db, registration_phase)
         return set_private_dashboard_cache(tournament, "player-stats", value, params)
     players = db.query(models.Player).filter(models.Player.tournament_id == tournament_id).order_by(models.Player.seed_number).all()
     result_codes = calculate_player_results(
         tournament,
         players,
-        db.query(models.Match).filter(models.Match.tournament_id == tournament_id).all(),
+        arena_phases.effective_matches(db, [tournament_id]),
     )
     for player in players:
         player.result_code = result_codes[player.id]
         player.result = result_label(result_codes[player.id])
-    value = {"players": players}
+    value = {"players": [{"id": p.id, "tournament_id": p.tournament_id, "seed_number": p.seed_number, "champion_slot": p.champion_slot, "name": p.name, "icon_url": p.icon_url, "created_at": p.created_at, "result_code": p.result_code, "result": p.result} for p in players]}
     return set_private_dashboard_cache(tournament, "player-stats", value, params)
+
+
+# Official-arena phase APIs deliberately leave legacy result/deck rows untouched.
+
+
+def arena_access(tournament_id, db, current_user, write=False):
+    tournament = (require_tournament_manager if write else require_tournament_viewer)(tournament_id, db, current_user)
+    if not arena_phases.supported(tournament):
+        raise HTTPException(409, "Phase registrations require an official champion arena")
+    if write:
+        tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
+        # Recheck after acquiring the common tournament lock.
+        if current_user.role != "admin" and tournament.created_by != current_user.id:
+            raise HTTPException(403, "Tournament manager required")
+        if not arena_phases.supported(tournament):
+            raise HTTPException(409, "Tournament format changed")
+        require_unpublished_champion_edit(tournament)
+    return tournament
+
+
+@app.get("/api/tournaments/{tournament_id}/arena-phases")
+def get_arena_phases(tournament_id: int, db: Session = Depends(get_db), current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional)):
+    return arena_phases.state(arena_access(tournament_id, db, current_user), db)
+
+
+@app.put("/api/tournaments/{tournament_id}/arena-phases/players/{player_id}/{phase}")
+async def put_arena_registration(tournament_id: int, player_id: int, phase: str, request: Request, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+    tournament = arena_access(tournament_id, db, current_user, True)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object required")
+    player = db.query(models.Player).filter_by(id=player_id, tournament_id=tournament.id).first()
+    if player is None:
+        raise HTTPException(404, "Player not found")
+    response = save_phase_registration_with_assets(tournament, player, phase, payload, db, current_user)
+    invalidate_dashboard_cache_safely(tournament_id)
+    return response
+
+
+@app.put("/api/tournaments/{tournament_id}/arena-phases/matches/{match_key}")
+async def put_arena_result(tournament_id: int, match_key: str, request: Request, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+    tournament = arena_access(tournament_id, db, current_user, True)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON object required")
+    response = arena_phases.save_result(tournament, match_key, payload, db)
+    invalidate_dashboard_cache_safely(tournament_id)
+    return response
+
+
+@app.post("/api/tournaments/{tournament_id}/arena-phases/players")
+async def create_arena_player(tournament_id: int, request: Request, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+    tournament = arena_access(tournament_id, db, current_user, True)
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(422, "JSON object required")
+    position = data.get("position")
+    maximum = 8 if tournament.registration_scope == "champion_8" else 64
+    if type(position) is not int or position not in range(1, maximum + 1):
+        raise HTTPException(422, "Invalid position")
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 100:
+        raise HTTPException(422, "A player name of 1 to 100 characters is required")
+    column = models.Player.champion_slot if maximum == 8 else models.Player.seed_number
+    if db.query(models.Player).filter(models.Player.tournament_id == tournament_id, column == position).first():
+        raise HTTPException(409, "Position is already registered; existing player identities cannot be replaced")
+    db.add(models.Player(tournament_id=tournament_id, name=name.strip(), champion_slot=position if maximum == 8 else None, seed_number=position if maximum == 64 else None))
+    db.commit()
+    invalidate_dashboard_cache_safely(tournament_id)
+    return arena_phases.state(tournament, db)
+
+
+@app.get("/api/tournaments/{tournament_id}/arena-phases/history")
+def get_arena_history(tournament_id: int, db: Session = Depends(get_db), current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional)):
+    return arena_phases.history(arena_access(tournament_id, db, current_user), db)
+
+
+def require_legacy_registration_path(tournament_id, db, current_user):
+    require_tournament_manager(tournament_id, db, current_user)
+    tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
+    return tournament
+
+
+
+def save_initial_arena_registration(tournament, player, teams, db, actor):
+    _, _, _, registration = arena_phases.context(tournament, db)
+    _, revision_id = registration(player.id, "initial")
+    return save_phase_registration_with_assets(tournament, player, "initial", {"qualification": "initial", "revision_id": revision_id, "teams": teams}, db, actor)
+
+
+def result_revision_payload(node, rounds, expected):
+    if not isinstance(expected, dict):
+        raise HTTPException(409, "Reload the bracket before saving a phase-aware match")
+    return {"rounds": rounds, "upstream": expected.get("upstream"), "registration_ids": expected.get("registration_ids"), "revision_id": expected.get("revision_id")}
+
+
+@app.get("/api/tournaments/{tournament_id}/private-player-names")
+def get_private_player_names(tournament_id: int, response: Response, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+    require_tournament_manager(tournament_id, db, current_user)
+    response.headers["Cache-Control"] = "private, no-store"
+    players = db.query(models.Player).filter_by(tournament_id=tournament_id).all()
+    return {"players": [{"id": p.id, "seed_number": p.seed_number, "champion_slot": p.champion_slot, "private_name": p.private_name} for p in players]}
+
+
+@app.put("/api/tournaments/{tournament_id}/private-player-names")
+async def update_private_player_name(tournament_id: int, request: Request, response: Response, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    data = await request.json()
+    if not isinstance(data, dict) or set(data) - {"player_id", "seed_number", "private_name"}:
+        raise HTTPException(422, "Invalid private name request")
+    name = data.get("private_name")
+    if name is not None and not isinstance(name, str):
+        raise HTTPException(422, "Private name must be text or null")
+    name = name.strip() or None if isinstance(name, str) else None
+    if name and (len(name) > 50 or any(ord(ch) < 32 for ch in name)):
+        raise HTTPException(422, "Private name must be at most 50 characters without control characters")
+    query = db.query(models.Player).filter_by(tournament_id=tournament_id)
+    if "player_id" in data:
+        if type(data["player_id"]) is not int:
+            raise HTTPException(422, "Invalid Player")
+        player = query.filter_by(id=data["player_id"]).first()
+        if player is None:
+            raise HTTPException(404, "Player not found")
+    else:
+        seed = data.get("seed_number")
+        if tournament.registration_scope != "full_64" or type(seed) is not int or not 1 <= seed <= 64:
+            raise HTTPException(422, "Invalid seed")
+        player = query.filter_by(seed_number=seed).first()
+        if player is None:
+            raise HTTPException(404, "Player not found")
+    player.private_name = name
+    db.commit()
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"id": player.id, "seed_number": player.seed_number, "champion_slot": player.champion_slot, "private_name": player.private_name}

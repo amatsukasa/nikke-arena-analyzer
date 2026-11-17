@@ -6,7 +6,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   try {
     const { id } = await params;
     const token = request.cookies.get('auth_token')?.value;
-    const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/best8-decks`, {
+    const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/best8-decks?registration_phase=${encodeURIComponent(request.nextUrl.searchParams.get("registration_phase") || "initial")}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',

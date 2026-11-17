@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PlusCircle, ChevronRight, Trash2, X, ShieldAlert, Edit2, LogOut, UserRound, Globe2, LockKeyhole, RefreshCw } from "lucide-react";
+import { useI18n } from "@/i18n/I18nProvider";
 import { useAuth } from "../../../context/AuthContext";
 import RegistrationScopeBadge from "../../../components/RegistrationScopeBadge";
 import {
@@ -19,6 +20,7 @@ import {
 import { PublicationReadiness, publicationErrorLines, publicationSummary } from "../../../lib/publication";
 
 export default function Home() {
+  const { t } = useI18n();
   const { user, logout } = useAuth();
   const router = useRouter();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
@@ -33,6 +35,7 @@ export default function Home() {
   const [providerGameStartDate, setProviderGameStartDate] = useState("");
   const [arenaGameStartDate, setArenaGameStartDate] = useState("");
   const [displayOrder, setDisplayOrder] = useState("");
+  const [deckRegistrationPhases, setDeckRegistrationPhases] = useState(false);
   const [isChampionArena, setIsChampionArena] = useState(false);
   const [hasMatchData, setHasMatchData] = useState(true);
   const providerDateTouched = useRef(false);
@@ -106,6 +109,7 @@ export default function Home() {
     setProviderGameStartDate(scopeState.providerGameStartDate);
     setArenaGameStartDate("");
     setDisplayOrder("");
+    setDeckRegistrationPhases(false);
     setIsChampionArena(false);
     setHasMatchData(true);
     providerDateTouched.current = scopeState.providerDateTouched;
@@ -127,6 +131,7 @@ export default function Home() {
     setProviderGameStartDate(scopeState.providerGameStartDate);
     setArenaGameStartDate(t.game_start_date || "");
     setDisplayOrder(t.display_order == null ? "" : String(t.display_order));
+    setDeckRegistrationPhases(Boolean(t.deck_registration_phases));
     setIsChampionArena(Boolean(t.is_champion_arena));
     setHasMatchData(t.has_match_data !== false);
     providerDateTouched.current = scopeState.providerDateTouched;
@@ -164,6 +169,7 @@ export default function Home() {
             ...commonBody,
             game_start_date: arenaGameStartDate || null,
             display_order: displayOrder === "" ? null : Number(displayOrder),
+            deck_registration_phases: deckRegistrationPhases,
             is_champion_arena: isChampionArena,
             has_match_data: hasMatchData,
           }
@@ -487,6 +493,7 @@ export default function Home() {
                   <label className="block text-sm text-slate-300">大会の開始日（任意）
                     <input type="date" value={arenaGameStartDate} onChange={event => setArenaGameStartDate(event.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-slate-800/50 px-4 py-3" />
                   </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={deckRegistrationPhases} onChange={event => setDeckRegistrationPhases(event.target.checked)} /> {t("arenaPhases.enable")}</label>
                   <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={isChampionArena} onChange={event => setIsChampionArena(event.target.checked)} /> チャンアリ戦績の入力対象にする</label>
                   <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={hasMatchData} onChange={event => setHasMatchData(event.target.checked)} /> 対戦・統計データあり</label>
                   <p className="text-xs leading-5 text-amber-300">※OFFにすると通常大会一覧・統計の対象から除外されます。</p>
