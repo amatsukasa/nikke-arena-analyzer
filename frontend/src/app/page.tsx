@@ -133,6 +133,21 @@ function DashboardContent() {
   // For My Dashboard Tab Search
   const [seedSearchQuery, setSeedSearchQuery] = useState<string>("");
 
+  const writeTeamDetailsUrl = (canonicalId: string, phase: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "matchups");
+    params.set("detail_phase", phase);
+    params.set("team", canonicalId);
+    params.set("teamKey", canonicalId);
+    if (selectedTournamentIds.length) params.set("tournaments", selectedTournamentIds.join(","));
+    if (includedCharacterIds.length) {
+      params.set("synergy", includedCharacterIds.join(","));
+    } else {
+      params.delete("synergy");
+    }
+    router.push("/?" + params.toString(), { scroll: false });
+  };
+
   const handleTeamClick = (canonicalId: string, team?: any) => {
     if (!canonicalId) return;
     const phase = team?.registration_phase ?? "all";
@@ -140,13 +155,8 @@ function DashboardContent() {
     setDetailPhase(phase);
     setActiveTab("matchups");
     setSelectedCharId(null);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", "matchups");
-    params.set("detail_phase", phase);
-    params.set("team", canonicalId);
-    params.delete("teamKey");
-    if (selectedTournamentIds.length) params.set("tournaments", selectedTournamentIds.join(","));
-    router.push("/?" + params.toString(), { scroll: false });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    writeTeamDetailsUrl(canonicalId, phase);
   };
 
   // 分析対象のシード番号 (1-64)
@@ -248,7 +258,7 @@ function DashboardContent() {
   const selectedChampionshipId = seasonTournaments[0]?.championship_id;
   const hasSelectedFormal = allTournaments.some(item=>selectedTournamentIds.includes(item.id) && Boolean(item.deck_registration_phases));
   const analysisKey = allTournaments.length > 0 && selectedChampionshipId && selectedTournamentIds.length > 0
-    ? [filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
+    ? [registrationPhase, filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
     : null;
   useResetSynergyOnAnalysisChange(analysisKey, () => {
     setIncludedCharacterIds([]);
@@ -667,7 +677,10 @@ function DashboardContent() {
         {activeTab === "matchups" && <CompositionDetails
           tournamentIds={selectedTournamentIds} playServer={filterServer} championshipId={selectedChampionshipId}
           formal={hasSelectedFormal} phase={detailPhase} canonicalId={selectedTeam}
-          onPhaseChange={setDetailPhase} onTeamChange={setSelectedTeam}
+          onPhaseChange={setDetailPhase} onTeamChange={key => {
+            setSelectedTeam(key);
+            if (key) writeTeamDetailsUrl(key, detailPhase);
+          }}
           allCharacters={allCharacters} onSelectCharacter={setSelectedCharId}
           registrationScopeByTournamentId={registrationScopeByTournamentId}/>}
 
