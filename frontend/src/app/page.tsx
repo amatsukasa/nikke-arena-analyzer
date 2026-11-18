@@ -1,20 +1,19 @@
 "use client";
+import { TeamSearchPanel, TeamWinRatePanel, useTeamSearchFilters, useTeamWinRateFilters } from "@/components/TeamAnalysisPanels";
 import CompositionDetails from "@/components/CompositionDetails";
 import TrendsRankings from "@/components/TrendsRankings";
 import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
-import { TeamRegistrationUsage, RegistrationPhaseLabel, CompositionBestResult, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
+import { useTeamDetailsUrl } from "@/hooks/useTeamDetailsUrl";
+import { TeamRegistrationUsage, RegistrationPhaseLabel, CompositionBestResult, TeamBestResults } from "@/components/TeamStatisticsMeaning";
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { ChevronDown, ChevronLeft, SlidersHorizontal, TrendingUp, Users, Swords, Search, X, Trophy, Globe } from "lucide-react";
 import Link from "../components/LocalizedLink";
-import PaginatedTeamList from "../components/PaginatedTeamList";
 import SharedTeamDisplay from "../components/TeamDisplay";
 import CharacterUsageByResultRanking from "../components/CharacterUsageByResultRanking";
 import TeamAdoptionRanking from "../components/TeamAdoptionRanking";
-import SynergyCharacterPicker, { ArenaCharacterDisplaySelect, SynergyPickerInstructions, useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
-import { emptySynergySelection } from "../lib/synergyCharacters";
-import type { ArenaCharacterDisplayMode } from "../lib/synergyCharacters";
+import { useResetSynergyOnAnalysisChange } from "../components/SynergyCharacterPicker";
 import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -74,7 +73,7 @@ function DashboardContent() {
   const initialTab = requestedTab && PUBLIC_TABS.has(requestedTab)
     ? requestedTab
     : "team_winrate";
-  const initialTeam = searchParams.get("teamKey") || searchParams.get("team");
+  const { initialTeam, initialSynergy, writeTeamDetailsUrl } = useTeamDetailsUrl();
 
   const [tournament, setTournament] = useState<any>(null);
   const [allCharacters, setAllCharacters] = useState<any[]>([]);
@@ -96,17 +95,8 @@ function DashboardContent() {
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
   const [detailPhase, setDetailPhase] = useState(() => searchParams.get("detail_phase") ?? (requestedTab === "matchups" ? searchParams.get("registration_phase") : null) ?? "all");
   // For search
-  const initialSynergy = searchParams.get("synergy")
-    ? searchParams.get("synergy")!.split(",").map(x => parseInt(x.trim(), 10)).filter(x => !isNaN(x))
-    : [];
   const [includedCharacterIds, setIncludedCharacterIds] = useState<number[]>(initialSynergy);
   const [excludedCharacterIds, setExcludedCharacterIds] = useState<number[]>([]);
-  const [filterRarity, setFilterRarity] = useState<string>("");
-  const [filterManufacturer, setFilterManufacturer] = useState<string>("");
-  const [filterBurst, setFilterBurst] = useState<string>("");
-  const [filterElement, setFilterElement] = useState<string>("");
-  const [filterWeapon, setFilterWeapon] = useState<string>("");
-  const [arenaCharacterDisplay, setArenaCharacterDisplay] = useState<ArenaCharacterDisplayMode>("only");
 
   // For winrate filters
   const [winrateMinMatches, setWinrateMinMatches] = useState<number>(1);
@@ -116,14 +106,8 @@ function DashboardContent() {
   const [winrateManufacturer, setWinrateManufacturer] = useState<string>("");
 
   // For team filters
-  const [teamMinMatches, setTeamMinMatches] = useState<number>(10);
-  const [winRateStage, setWinRateStage] = useState("all");
-  const [searchStage,setSearchStage]=useState("all");
-  const [searchSort,setSearchSort]=useState<"count"|"win_rate"|"composition_best_result">("count");
-  const [searchComposition,setSearchComposition]=useState("");
-  const [searchWinRate,setSearchWinRate]=useState(0);
-  const [teamCompositionBestResult, setTeamCompositionBestResult] = useState<string>("");
-    const [teamMinWinRate, setTeamMinWinRate] = useState<number>(0);
+  const winRateFilters = useTeamWinRateFilters(10);
+  const searchFilters = useTeamSearchFilters();
   
   // For Character Modal
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
@@ -133,21 +117,6 @@ function DashboardContent() {
   // For My Dashboard Tab Search
   const [seedSearchQuery, setSeedSearchQuery] = useState<string>("");
 
-  const writeTeamDetailsUrl = (canonicalId: string, phase: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", "matchups");
-    params.set("detail_phase", phase);
-    params.set("team", canonicalId);
-    params.set("teamKey", canonicalId);
-    if (selectedTournamentIds.length) params.set("tournaments", selectedTournamentIds.join(","));
-    if (includedCharacterIds.length) {
-      params.set("synergy", includedCharacterIds.join(","));
-    } else {
-      params.delete("synergy");
-    }
-    router.push("/?" + params.toString(), { scroll: false });
-  };
-
   const handleTeamClick = (canonicalId: string, team?: any) => {
     if (!canonicalId) return;
     const phase = team?.registration_phase ?? "all";
@@ -156,7 +125,7 @@ function DashboardContent() {
     setActiveTab("matchups");
     setSelectedCharId(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
-    writeTeamDetailsUrl(canonicalId, phase);
+    writeTeamDetailsUrl(canonicalId, phase, includedCharacterIds, selectedTournamentIds);
   };
 
   // 分析対象のシード番号 (1-64)
@@ -622,183 +591,28 @@ function DashboardContent() {
         {activeTab === "overview" && <TrendsRankings formal={hasSelectedFormal} tournamentIds={selectedTournamentIds} allCharacters={allCharacters} onSelectCharacter={setSelectedCharId} onTeamClick={handleTeamClick}/>}
 
         {/* TEAM WINRATE TAB */}
-        {activeTab === "team_winrate" && (
-           <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
-            <section>
-              <div className="mb-6 flex flex-col gap-4">
-                <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-                  <Trophy className="text-emerald-400" />
-                  <span>{t('stats.teamWinRateRanking')}</span>
-                </h2>
-                
-                {/* 編成フィルタコントロール群 */}
-                <div className="flex flex-wrap gap-2 items-center">
-                  <select
-                    value={teamMinMatches}
-                    onChange={(e) => setTeamMinMatches(Number(e.target.value))}
-                    className={WIN_RATE_FILTER_CLASS}
-                  >
-                    {[0, 1, 10, 30, 50].map((count) => <option key={count} value={count}>{t('filter.matchesAtLeast', { count })}</option>)}
-                  </select>
-
-                  <select
-                    value={teamMinWinRate}
-                    onChange={(e) => setTeamMinWinRate(Number(e.target.value))}
-                    className={WIN_RATE_FILTER_CLASS}
-                  >
-                    <option value={0}>{t('filter.winRateAny')}</option>
-                    {[50, 60, 70, 80].map((rate) => <option key={rate} value={rate}>{t('filter.winRateAtLeast', { rate })}</option>)}
-                  </select>
-
-                  <TeamResultFilters composition={teamCompositionBestResult} onCompositionChange={setTeamCompositionBestResult} stage={winRateStage} onStageChange={setWinRateStage} formal={hasSelectedFormal}/>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <PaginatedTeamList registrationPhase={hasSelectedFormal ? winRateStage : "all"}
-                  mode="cross"
-                  tournamentIds={selectedTournamentIds} 
-                  playServer={filterServer}
-                  championshipId={selectedChampionshipId}
-                  allCharacters={allCharacters}
-                  onTeamClick={handleTeamClick} 
-                  selectedTeam={selectedTeam} 
-                  sortBy="win_rate"
-                  minMatches={teamMinMatches}
-                  
-                  minWinRate={teamMinWinRate}
-                  compositionBestResult={teamCompositionBestResult}
-                />
-              </div>
-            </section>
-          </div>
-        )}
+        {activeTab === "team_winrate" && <TeamWinRatePanel scope={{ tournamentIds: selectedTournamentIds, playServer: filterServer, championshipId: selectedChampionshipId }} formal={hasSelectedFormal}
+          allCharacters={allCharacters} selectedTeam={selectedTeam} onTeamClick={handleTeamClick} filters={winRateFilters}/>}
 
         {activeTab === "matchups" && <CompositionDetails
           tournamentIds={selectedTournamentIds} playServer={filterServer} championshipId={selectedChampionshipId}
           formal={hasSelectedFormal} phase={detailPhase} canonicalId={selectedTeam}
           onPhaseChange={setDetailPhase} onTeamChange={key => {
             setSelectedTeam(key);
-            if (key) writeTeamDetailsUrl(key, detailPhase);
+            if (key) writeTeamDetailsUrl(key, detailPhase, includedCharacterIds, selectedTournamentIds);
           }}
           allCharacters={allCharacters} onSelectCharacter={setSelectedCharId}
           registrationScopeByTournamentId={registrationScopeByTournamentId}/>}
 
         {/* SEARCH TAB */}
-        {activeTab === "search" && (() => {
-          const filteredCharacters = allCharacters.filter(c => {
-            if (c.id === 9999) return false;
-            if (filterRarity && c.rarity !== filterRarity) return false;
-            if (filterManufacturer && c.manufacturer !== filterManufacturer) return false;
-            if (filterElement && c.element !== filterElement) return false;
-            if (filterWeapon && c.weapon !== filterWeapon) return false;
-            if (filterBurst) {
-              if (filterBurst === "1" && c.burst_phase !== "1" && c.burst_phase !== "A") return false;
-              if (filterBurst === "2" && c.burst_phase !== "2" && c.burst_phase !== "A") return false;
-              if (filterBurst === "3" && c.burst_phase !== "3" && c.burst_phase !== "A") return false;
-            }
-            return true;
-          });
-
-          return (
-          <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
-            <div className="bg-emerald-500/10 p-6 rounded-2xl ring-1 ring-emerald-500/20">
-              <SynergyPickerInstructions />
-
-              <ArenaCharacterDisplaySelect
-                value={arenaCharacterDisplay}
-                onChange={setArenaCharacterDisplay}
-              />
-
-              {/* フィルターUI */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-                <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
-                  <option value="">{t('filter.rarity')} ({t('common.all')})</option>
-                  <option value="SSR">SSR</option>
-                  <option value="SR">SR</option>
-                  <option value="R">R</option>
-                </select>
-                <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterManufacturer} onChange={e => setFilterManufacturer(e.target.value)}>
-                  <option value="">{t('filter.manufacturer')} ({t('common.all')})</option>
-                  <option value="エリシオン">{t('manufacturer.elysion')}</option>
-                  <option value="ミシリス">{t('manufacturer.missilis')}</option>
-                  <option value="テトラ">{t('manufacturer.tetra')}</option>
-                  <option value="ピルグリム">{t('manufacturer.pilgrim')}</option>
-                  <option value="アブノーマル">{t('manufacturer.abnormal')}</option>
-                </select>
-                <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterBurst} onChange={e => setFilterBurst(e.target.value)}>
-                  <option value="">{t('filter.burst')} ({t('common.all')})</option>
-                  {[1, 2, 3].map((value) => <option key={value} value={value}>{t('filter.includesAlternate', { value })}</option>)}
-                </select>
-                <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterElement} onChange={e => setFilterElement(e.target.value)}>
-                  <option value="">{t('filter.element')} ({t('common.all')})</option>
-                  <option value="灼熱">{t('element.fire')}</option>
-                  <option value="水冷">{t('element.water')}</option>
-                  <option value="風圧">{t('element.wind')}</option>
-                  <option value="鉄甲">{t('element.iron')}</option>
-                  <option value="電撃">{t('element.electric')}</option>
-                </select>
-                <select className="bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" value={filterWeapon} onChange={e => setFilterWeapon(e.target.value)}>
-                  <option value="">{t('filter.weapon')} ({t('common.all')})</option>
-                  <option value="AR">{t('weapon.ar')}</option>
-                  <option value="SG">{t('weapon.sg')}</option>
-                  <option value="SMG">{t('weapon.smg')}</option>
-                  <option value="MG">{t('weapon.mg')}</option>
-                  <option value="SR">{t('weapon.sr')}</option>
-                  <option value="RL">{t('weapon.rl')}</option>
-                </select>
-              </div>
-
-              <SynergyCharacterPicker
-                key={`synergy-picker-cross-${analysisKey}`}
-                characters={filteredCharacters}
-                characterUsage={searchCandidates.usage}
-                usageState={searchCandidates.state}
-                includedIds={includedCharacterIds}
-                excludedIds={excludedCharacterIds}
-                displayMode={arenaCharacterDisplay}
-                onChange={({ includedIds, excludedIds }) => {
-                  setIncludedCharacterIds(includedIds);
-                  setExcludedCharacterIds(excludedIds);
-                }}
-              />
-              <div className="mt-4 flex items-center justify-between border-t border-emerald-500/20 pt-4">
-                <span className="text-sm text-slate-400">{t('search.target')}: {includedCharacterIds.length}/5　{t('search.exclude')}: {excludedCharacterIds.length}</span>
-                {(includedCharacterIds.length > 0 || excludedCharacterIds.length > 0) && (
-                  <button onClick={() => { const cleared = emptySynergySelection(); setIncludedCharacterIds(cleared.includedIds); setExcludedCharacterIds(cleared.excludedIds); }} className="text-sm text-emerald-400 hover:text-emerald-300 font-bold">
-                    {t('common.clear')}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="font-bold text-white mb-4">{t('search.results')}</h3>
-              <TeamSearchFilters sort={searchSort} onSortChange={setSearchSort} stage={searchStage} onStageChange={setSearchStage} composition={searchComposition} onCompositionChange={setSearchComposition} winRate={searchWinRate} onWinRateChange={setSearchWinRate} formal={hasSelectedFormal}/>
-              {includedCharacterIds.length === 0 ? (
-                <p className="text-slate-500 text-center py-12">{t('search.selectOne')}</p>
-              ) : (
-                <div className="space-y-3">
-                  <PaginatedTeamList registrationPhase={hasSelectedFormal ? searchStage : "all"}
-                    key={`synergy-cross-${analysisKey}-${includedCharacterIds.join(",")}-${excludedCharacterIds.join(",")}`}
-                    mode="cross"
-                    tournamentIds={selectedTournamentIds} 
-                    playServer={filterServer}
-                    championshipId={selectedChampionshipId}
-                    allCharacters={allCharacters}
-                    characterIds={includedCharacterIds}
-                    excludedCharacterIds={excludedCharacterIds}
-                    onTeamClick={canonicalId => handleTeamClick(canonicalId)}
-                    selectedTeam={selectedTeam} 
-                    sortBy={searchSort}
-                    compositionBestResult={searchComposition}
-                    minWinRate={searchWinRate}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        )})()}
+        {activeTab === "search" && <TeamSearchPanel scope={{ tournamentIds: selectedTournamentIds, playServer: filterServer, championshipId: selectedChampionshipId }} formal={hasSelectedFormal}
+          allCharacters={allCharacters} selectedTeam={selectedTeam} onTeamClick={handleTeamClick}
+          filters={searchFilters} analysisKey={analysisKey} searchCandidates={searchCandidates}
+          includedCharacterIds={includedCharacterIds} excludedCharacterIds={excludedCharacterIds}
+          onSelectionChange={(included, excluded) => {
+            setIncludedCharacterIds(included);
+            setExcludedCharacterIds(excluded);
+          }}/>}
       </div>
     </div>
   </div>
