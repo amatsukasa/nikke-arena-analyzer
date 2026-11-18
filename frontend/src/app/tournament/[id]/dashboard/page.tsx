@@ -1,11 +1,12 @@
 "use client";
+import TrendsRankings from "@/components/TrendsRankings";
 import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
-import { TeamRegistrationUsage, CompositionBestResult, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
+import { TeamRegistrationUsage, CommanderResultBadge, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
 export const dynamic = 'force-dynamic';
 import { usePrivatePlayerNames } from "@/hooks/usePrivatePlayerNames";
 import PrivatePlayerNameEditor from "@/components/PrivatePlayerNameEditor";
 
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { Layers3, ChevronDown, ChevronLeft, TrendingUp, Users, Swords, Search, X, Trophy, ShieldAlert, User as UserIcon, Globe } from "lucide-react";
 import Link from "../../../../components/LocalizedLink";
@@ -49,7 +50,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   const requestedRegistrationPhase = registrationMode === "all" ? "initial" : registrationMode === "best8" ? "championship" : registrationMode;
   const phaseFetch = (input: string, options?: RequestInit) => {
     const scoped = /\/api\/tournaments\/\d+\/dashboard\//.test(input);
-    return fetch(scoped ? `${input}${input.includes("?")?"&":"?"}registration_phase=${registrationPhase}` : input, options);
+    return fetch(scoped ? `${input}${input.includes("?")?"&":"?"}registration_phase=${registrationMode === "all" && ["overview","matchups","best8","my_dashboard"].includes(activeTab) && /\/dashboard\/(stats|matchups|best8-decks|player-stats)(?:\?|$)/.test(input) ? "all" : registrationPhase}` : input, options);
   };
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
@@ -86,7 +87,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   // For matchups
   const [selectedTeam, setSelectedTeam] = useState<string>(initialTeam || "");
   const [selectedTeamRow, setSelectedTeamRow] = useState<any>(null);
-  const selectedTeamData = stats?.team_usage?.find((team:any)=>team.canonical_id === selectedTeam) ?? (selectedTeamRow?.canonical_id === selectedTeam ? selectedTeamRow : null);
+  const selectedTeamData = stats?.team_usage?.find((team:any)=>team.canonical_id === selectedTeam && (!selectedTeamRow?.registration_phase || team.registration_phase === selectedTeamRow.registration_phase)) ?? (selectedTeamRow?.canonical_id === selectedTeam ? selectedTeamRow : null);
   const [isPositionStatsOpen, setIsPositionStatsOpen] = useState(true);
 
   // For search
@@ -125,7 +126,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [stats, teamMinMatches, teamCompositionBestResult, teamMinWinRate, includedCharacterIds, excludedCharacterIds]);
 
   const handleTeamClick = (canonicalId: string, team?:any) => {
-    if (team?.registration_phase && team.registration_phase !== registrationPhase) {
+    if (registrationMode !== "all" && team?.registration_phase && team.registration_phase !== registrationPhase) {
       const query = new URLSearchParams(searchParams.toString());
       query.set("registration_phase", team.registration_phase); query.set("tab", "matchups"); query.set("team", canonicalId);
       window.location.assign(`?${query}`); return;
@@ -245,7 +246,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
           `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`
         ];
-        const requestedUrls = !embedded && registrationMode === "all" && tournData.deck_registration_phases && !(["winrate","team_winrate","search"].includes(activeTab)) ? urls.slice(0,2) : urls;
+        const requestedUrls = activeTab === "overview" ? urls.slice(0,2) : !embedded && registrationMode === "all" && tournData.deck_registration_phases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? urls.slice(0,2) : urls;
         const responses = await Promise.all(requestedUrls.map(url => phaseFetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
 
         for (let i = 0; i < responses.length; i++) {
@@ -297,10 +298,10 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [id, isFirstLoad, tournamentId, requestedTab, registrationPhase, activeTab]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     const hasFullStats = Boolean(stats?.character_usage_by_result && stats?.team_usage);
     if (!isPrivateTournament || !tournamentId || hasFullStats) return;
-    if (activeTab !== "overview" && activeTab !== "matchups" && activeTab !== "search") return;
+    if (activeTab !== "matchups" && activeTab !== "search") return;
 
     const controller = new AbortController();
     const fetchStats = async () => {
@@ -333,9 +334,9 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [activeTab, isPrivateTournament, tournamentId, stats, selectedTeam]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     if (!isPrivateTournament || !tournamentId || stats) return;
-    if (!(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (!(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
 
     const fetchCharacterWinrates = async () => {
       setAnalysisLoading(true);
@@ -367,7 +368,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [activeTab, isPrivateTournament, tournamentId, stats]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     if (!tournamentId || activeTab !== "my_dashboard") return;
     if (bracketData && myPlayerDetails) return;
 
@@ -403,7 +404,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [activeTab, tournamentId, selectedSeed, bracketData, myPlayerDetails]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     if (activeTab !== "best8" || !tournamentId) return;
     if (best8Data && best8Data.length > 0) return;
 
@@ -432,7 +433,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [activeTab, tournamentId, best8Data]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     if (!selectedCharId) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -444,7 +445,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [selectedCharId]);
 
   useEffect(() => {
-    if (showAllPhases && !(["winrate","team_winrate","search"].includes(activeTab))) return;
+    if (showAllPhases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab))) return;
     if (activeTab !== "matchups") return;
     if (matchups.length > 0 || !tournamentId) return;
 
@@ -595,7 +596,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   const {
     details: matchupDetails, totalWins, totalLosses,
     attackWins, attackLosses, defenseWins, defenseLosses,
-  } = teamMatchupPerspective(matchups, selectedTeam, (value) => typeof value === "string" ? value : "");
+  } = teamMatchupPerspective(matchups.filter(row=>!row.registration_phase || row.registration_phase === selectedTeamData?.registration_phase), selectedTeam, (value) => typeof value === "string" ? value : "");
 
   // --- My Dashboard logic ---
   const mySeed = selectedSeed;
@@ -668,7 +669,14 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
      }
   }
 
+  if (myPlayerDetails?.player) myPlayer = myPlayerDetails.player;
+  if (myPlayerDetails?.result_code) myTournamentResult = localizedTournamentResult(myPlayerDetails.result_code,t) ?? "—";
   const myDecks = myPlayerDetails?.decks || [];
+  const myRegistrationSets = myPlayerDetails?.registration_sets ?? [{registration_phase:registrationPhase,decks:myDecks}];
+  const displayBest8Data = [...best8Data].filter(row=>!tournament?.deck_registration_phases || ["final","championship"].includes(row.registration_phase)).sort((a,b)=>{
+    const phaseOrder = tournament?.deck_registration_phases ? Number(a.registration_phase!=="final")-Number(b.registration_phase!=="final") : 0;
+    return phaseOrder || (a.sort_score ?? 999)-(b.sort_score ?? 999) || (a.player.original_seed ?? a.player.seed ?? 0)-(b.player.original_seed ?? b.player.seed ?? 0);
+  });
 
   // 横断モード非対応タブでは選択UIを表示しない
   const showTournamentSelector = activeTab !== "my_dashboard" && activeTab !== "best8";
@@ -770,7 +778,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "best8" ? "bg-indigo-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
           <Trophy size={18} />
-          <span>{t("arenaPhases.registeredTeams")}</span>
+          <span>{t("dashboard.best8Compositions")}</span>
         </button>
       </div>
 
@@ -888,14 +896,14 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
             )}
           </div>
         )}
-        {showAllPhases && activeTab !== "review" && !(["winrate","team_winrate","search"].includes(activeTab)) ? <div className="space-y-10">
+        {showAllPhases && activeTab !== "review" && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? <div className="space-y-10">
           <p className="text-sm text-slate-400">{t("arenaPhases.separateStatisticsNotice")}</p>
           {(tournament.registration_scope==="champion_8"?["championship","final"]:["league","championship","final"]).map(phase=><section key={phase} className="space-y-5 border-t border-white/10 pt-6">
             <h2 className="text-xl font-black text-blue-300">{t(`arenaPhases.${phase}`)}</h2>
             <DashboardView embedded phaseOverride={phase} activeTabOverride={activeTab} selectedSeedOverride={selectedSeed} onActiveTabChange={setActiveTab}/>
           </section>)}
         </div> : <>
-        {(((activeTab === "overview" || activeTab === "matchups") && !hasFullStats) || (activeTab === "winrate" && !tournament)) && (
+        {((activeTab === "matchups" && !hasFullStats) || (activeTab === "winrate" && !tournament)) && (
           <div className="flex h-64 items-center justify-center">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
           </div>
@@ -937,16 +945,16 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                    </div>
 
                    {/* Decks */}
-                   <div className="bg-slate-800/30 p-6 md:p-8 rounded-3xl ring-1 ring-white/5">
+                   {myRegistrationSets.map((set:any)=><section key={set.registration_phase} className="bg-slate-800/30 p-6 md:p-8 rounded-3xl ring-1 ring-white/5">
                       <h4 className="text-xl font-bold text-slate-200 mb-6 flex items-center space-x-2">
                          <ShieldAlert className="text-blue-400" />
-                         <span>登録編成と戦績</span>
+                         <span>{set.registration_phase === "legacy" ? t("teamMeaning.legacy") : t(`arenaPhases.${set.registration_phase}`)}</span>
                       </h4>
                       <div className="space-y-4">
-                         {myDecks.map((deck: any) => (
+                         {set.decks.map((deck: any) => (
                             <div 
                               key={deck.team_number} 
-                              onClick={() => handleTeamClick(deck.canonical_id)}
+                              onClick={() => handleTeamClick(deck.canonical_id, {...deck, registration_phase:set.registration_phase})}
                               className="flex flex-col md:flex-row items-center justify-between bg-slate-800/50 hover:bg-slate-700/60 transition-colors p-4 md:p-6 rounded-2xl ring-1 ring-white/5 cursor-pointer"
                             >
                                <div className="flex items-center space-x-6 mb-4 md:mb-0">
@@ -980,7 +988,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                             </div>
                          ))}
                       </div>
-                   </div>
+                   </section>)}
                 </div>
              ) : (
                 <div className="flex flex-col items-center justify-center h-64 bg-slate-800/30 rounded-3xl ring-1 ring-white/5 border border-dashed border-slate-600">
@@ -993,114 +1001,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
         )}
 
         {/* OVERVIEW TAB */}
-        {activeTab === "overview" && hasFullStats && (
-           <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
-            <CharacterUsageByResultRanking
-              stats={stats}
-              allCharacters={allCharacters}
-              onSelectCharacter={setSelectedCharId}
-            />
-            {false && (
-            <section>
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                <Users className="text-blue-400" />
-                <span>{t('stats.characterPickRanking')}</span>
-              </h2>
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-                {(() => {
-                  // 採用数でグループ化
-                  const grouped: { count: number; entries: any[] }[] = [];
-                  const sorted = [...stats.character_usage].sort((a: any, b: any) => b.count - a.count);
-                  sorted.forEach((entry: any) => {
-                    const last = grouped[grouped.length - 1];
-                    if (last && last.count === entry.count) {
-                      last.entries.push(entry);
-                    } else {
-                      grouped.push({ count: entry.count, entries: [entry] });
-                    }
-                  });
-
-                  return (
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                          <th className="p-4 font-medium text-center w-16">{t('stats.rank')}</th>
-                          <th className="p-4 font-medium text-center w-24">{t('stats.usageCount')}</th>
-                          <th className="p-4 font-medium">{t('stats.character')}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {grouped.map((group, gIdx) => {
-                          // 順位計算（同着を考慮）
-                          const rank = sorted.findIndex(e => e.count === group.count) + 1;
-                          return (
-                            <tr key={gIdx} className="hover:bg-white/5 transition-colors">
-                              <td className="p-4 text-center align-top">
-                                <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                                  rank === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                                  rank === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                                  rank === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                                  "text-slate-500"
-                                }`}>
-                                  {rank}
-                                </span>
-                              </td>
-                              <td className="p-4 text-center align-top">
-                                <span className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                                  {group.count}
-                                </span>
-                              </td>
-                              <td className="p-4">
-                                <div className="flex flex-wrap gap-2">
-                                  {group.entries.map((entry: any) => {
-                                    const c = allCharacters.find(char => char.id === entry.id) || entry;
-                                    return (
-                                      <button
-                                        key={c.id}
-                                        onClick={() => setSelectedCharId(c.id)}
-                                        title={c.name}
-                                        className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 px-2 py-1.5 rounded-lg ring-1 ring-white/10 hover:ring-blue-500/50 transition-all group/char"
-                                      >
-                                        <div className="w-8 h-8 rounded-md bg-slate-700 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0 group-hover/char:ring-blue-500 transition-all">
-                                          {getCharIconUrl(c) ? (
-                                            <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                                          ) : (
-                                            <span className="text-[8px] text-slate-500 font-bold">{c.name.slice(0,2)}</span>
-                                          )}
-                                        </div>
-                                        <span className="text-xs font-bold text-slate-300 group-hover/char:text-blue-400 transition-colors whitespace-nowrap">
-                                          {c.name}
-                                        </span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {stats.character_usage.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="p-8 text-center text-slate-500">{t('common.noData')}</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  );
-                })()}
-              </div>
-            </section>
-            )}
-            <TeamAdoptionRanking
-              teams={stats?.team_usage ?? []}
-              totalRegisteredPlayers={Number(stats?.total_players ?? stats?.registration_breakdown?.total_registered_players ?? 0)}
-              visibleCount={visibleTeamCount}
-              onShowMore={() => setVisibleTeamCount((previous) => previous + 15)}
-              allCharacters={allCharacters}
-              onTeamClick={handleTeamClick}
-            />
-          </div>
-        )}
+        {activeTab === "overview" && <TrendsRankings formal={Boolean(tournament?.deck_registration_phases)} tournamentIds={[Number(id)]} privateTournamentId={Number(id)} allCharacters={allCharacters} onSelectCharacter={setSelectedCharId} onTeamClick={handleTeamClick}/>}
 
         {/* WINRATE TAB */}
         {activeTab === "winrate" && stats && (
@@ -1178,7 +1079,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                       <th className="p-4 font-medium">{t('stats.character')}</th>
                       <th className="p-4 font-medium text-right w-32">{t('stats.winRate')}</th>
                       <th className="p-4 font-medium text-right w-32">{t('stats.recordWinsLosses')}</th>
-                      <th className="p-4 font-medium text-center w-32">{t('teamMeaning.compositionBest')}</th>
+                      <th className="p-4 font-medium text-center w-32">{t('teamMeaning.commanderResults')}</th>
                       <th className="p-4 font-medium text-right w-24">{t('stats.usageCount')}</th>
                     </tr>
                   </thead>
@@ -1244,7 +1145,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                                </div>
                             </td>
                             <td className="p-4 text-center">
-                              {<CompositionBestResult team={entry}/>}
+                              {<CommanderResultBadge team={entry}/>}
                             </td>
                             <td className="p-4 text-right text-slate-400 font-bold">
                               {entry.count}
@@ -1312,7 +1213,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                           <div className="min-w-0">
                             <div className="font-bold text-slate-100 truncate text-base">{c.name}</div>
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                              {<CompositionBestResult team={entry}/>}
+                              {<CommanderResultBadge team={entry}/>}
                               <span className="text-xs text-slate-400">{t('stats.pickShort', { count: entry.count })}</span>
                             </div>
                           </div>
@@ -1399,12 +1300,12 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
               <label className="block text-sm font-bold text-purple-400 mb-3">{t('stats.selectTeam')}</label>
               <select 
                 className="w-full bg-slate-900 border border-purple-500/30 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500 mb-4"
-                value={selectedTeam}
-                onChange={e => setSelectedTeam(e.target.value)}
+                value={selectedTeamData ? `${selectedTeamData.registration_phase}:${selectedTeam}` : ""}
+                onChange={e => {const row=stats.team_usage.find((team:any)=>`${team.registration_phase}:${team.canonical_id}`===e.target.value);setSelectedTeamRow(row);setSelectedTeam(row?.canonical_id ?? "");}}
               >
                 {stats.team_usage.map((team: any, idx: number) => (
-                  <option key={idx} value={team.canonical_id}>
-                    [{t('stats.teamPick', { count: team.count })}] {team.characters.map((c:any) => c.id === 9999 ? t('character.emptySlot') : c.name).join(" / ")}
+                  <option key={idx} value={`${team.registration_phase}:${team.canonical_id}`}>
+                    [{team.registration_phase === "legacy" ? t("teamMeaning.legacy") : t(`arenaPhases.${team.registration_phase}`)} / {t('stats.teamPick', { count: team.count })}] {team.characters.map((c:any) => c.id === 9999 ? t('character.emptySlot') : c.name).join(" / ")}
                   </option>
                 ))}
               </select>
@@ -1412,7 +1313,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
               {selectedTeam && (
                 <div className="pt-4 border-t border-purple-500/20 flex flex-col space-y-2">
                   <span className="text-xs font-bold text-purple-400">{t('stats.selectedTeam')}</span>
-                  <TeamDisplay charIds={stats.team_usage.find((t:any) => t.canonical_id === selectedTeam)?.character_ids || []} allCharacters={allCharacters} />
+                  <TeamDisplay charIds={selectedTeamData?.character_ids || []} allCharacters={allCharacters} />
                 </div>
               )}
             </div>
@@ -1538,15 +1439,17 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
             <div className="text-center mb-6">
                <h2 className="text-2xl font-black text-slate-100 flex items-center justify-center space-x-3">
                  <Trophy className="text-amber-400" size={28} />
-                 <span>{t("arenaPhases.registeredTeams")}</span>
+                 <span>{t("dashboard.best8Compositions")}</span>
                </h2>
                <p className="text-slate-500 mt-2 text-sm italic">{t('dashboard.tapTeamHint')}</p>
             </div>
 
               {/* 画面幅に合わせてPCは2列、スマホは1列で表示 */}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                {best8Data.map((data, idx) => (
-                  <section key={data.player.id || idx} className="rounded-2xl bg-slate-800/50 p-3 ring-1 ring-white/10 sm:p-4">
+                {displayBest8Data.map((data, idx) => (
+                  <Fragment key={`${data.registration_phase}:${data.player.id || idx}`}>
+                  {tournament?.deck_registration_phases && (idx===0 || displayBest8Data[idx-1].registration_phase!==data.registration_phase) && <h3 className="col-span-full mt-6 text-xl font-black text-blue-300">{t(`arenaPhases.${data.registration_phase}`)}</h3>}
+                  <section className="rounded-2xl bg-slate-800/50 p-3 ring-1 ring-white/10 sm:p-4">
                     <div className="mb-3 flex items-center justify-between gap-3 border-b border-white/5 pb-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <span className="shrink-0 text-xs font-bold text-slate-500">#{idx + 1}</span>
@@ -1557,7 +1460,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                             <UserIcon size={20} className="text-slate-600" />
                           )}
                         </div>
-                        <span className="truncate text-sm font-black text-white sm:text-base">{privateNames.name(data.player)}</span>
+                        <div className="min-w-0"><span className="block truncate text-sm font-black text-white sm:text-base">{privateNames.name(data.player)}</span><TeamRegistrationUsage team={data}/></div>
                       </div>
                       <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black ring-1 ${
                         data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
@@ -1575,7 +1478,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                         return (
                           <div
                             key={teamNum}
-                            onClick={deck ? () => handleTeamClick(deck.canonical_id) : undefined}
+                            onClick={deck ? () => handleTeamClick(deck.canonical_id, {...deck, registration_phase:data.registration_phase}) : undefined}
                             className={`flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 ring-1 ${
                               deck
                                 ? "cursor-pointer bg-slate-900/50 ring-white/5 transition-colors hover:bg-slate-800/80 hover:ring-indigo-500/30"
@@ -1612,7 +1515,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                         );
                       })}
                     </div>
-                  </section>
+                  </section></Fragment>
                 ))}
               </div>
 
@@ -1623,7 +1526,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                   <thead>
                     <tr className="bg-slate-800/80 text-slate-400 text-[10px] uppercase tracking-wider border-b border-white/10">
                       <th className="p-4 font-black text-center w-24">項目</th>
-                      {best8Data.map((data, idx) => (
+                      {displayBest8Data.map((data, idx) => (
                         <th key={idx} className="p-4 font-black text-center border-l border-white/5">
                           Player {idx + 1}
                         </th>
@@ -1634,7 +1537,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                     {/* Player Name Row */}
                     <tr className="bg-blue-500/5">
                       <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">名前</td>
-                      {best8Data.map((data, idx) => (
+                      {displayBest8Data.map((data, idx) => (
                         <td key={idx} className="p-4 text-center border-l border-white/5">
                           <div className="flex flex-col items-center space-y-2">
                             <div className="w-10 h-10 rounded-full bg-slate-900 ring-1 ring-white/20 overflow-hidden flex items-center justify-center">
@@ -1653,7 +1556,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                     {/* Result Row */}
                     <tr className="bg-slate-800/20">
                       <td className="p-4 font-bold text-slate-400 text-center bg-slate-800/30">成績</td>
-                      {best8Data.map((data, idx) => (
+                      {displayBest8Data.map((data, idx) => (
                         <td key={idx} className="p-4 text-center border-l border-white/5">
                           <div className={`px-3 py-1 rounded-full text-[10px] font-black inline-block ring-1 ${
                             data.result === "優勝" ? "bg-amber-500/20 text-amber-400 ring-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" :
@@ -1676,13 +1579,13 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                             <span className="text-lg font-black">{teamNum}</span>
                           </div>
                         </td>
-                        {best8Data.map((data, idx) => {
+                        {displayBest8Data.map((data, idx) => {
                           const deck = data.decks.find((d: any) => d.team_number === teamNum);
                           return (
                             <td key={idx} className="p-4 border-l border-white/5 align-middle">
                               {deck ? (
                                 <div 
-                                  onClick={() => handleTeamClick(deck.canonical_id)}
+                                  onClick={() => handleTeamClick(deck.canonical_id, {...deck, registration_phase:data.registration_phase})}
                                   className="hover:bg-slate-800/50 p-2 rounded-xl transition-all cursor-pointer ring-1 ring-transparent hover:ring-indigo-500/30 hover:shadow-lg group flex justify-center"
                                 >
                                   <SharedTeamDisplay
@@ -1708,7 +1611,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
 
               {/* スマホ表示: カード型 */}
               <div className="hidden space-y-4">
-                {best8Data.map((data, idx) => (
+                {displayBest8Data.map((data, idx) => (
                   <div key={idx} className="bg-slate-800/50 rounded-2xl ring-1 ring-white/10 p-4 space-y-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
                       <div className="flex items-center space-x-3">
@@ -1739,7 +1642,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                         return (
                           <div
                             key={teamNum}
-                            onClick={() => handleTeamClick(deck.canonical_id)}
+                            onClick={() => handleTeamClick(deck.canonical_id, {...deck, registration_phase:data.registration_phase})}
                             className="bg-slate-900/50 hover:bg-slate-800/80 p-3 rounded-xl transition-all cursor-pointer ring-1 ring-white/5 flex items-center justify-between gap-2"
                           >
                             <span className="text-xs font-black text-slate-400 shrink-0 w-16">Team {teamNum}</span>
@@ -2043,7 +1946,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('team.position')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.usageCount')}</th>
                               <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('stats.winRate')}</th>
-                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('teamMeaning.compositionBest')}</th>
+                              <th className="py-2 px-2 text-slate-400 font-bold text-xs">{t('teamMeaning.commanderResults')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2072,7 +1975,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
                                     )}
                                   </td>
                                   <td className="py-2 px-2">
-                                    {<CompositionBestResult team={ps}/>}
+                                    {<CommanderResultBadge team={ps}/>}
                                   </td>
                                 </tr>
                               );

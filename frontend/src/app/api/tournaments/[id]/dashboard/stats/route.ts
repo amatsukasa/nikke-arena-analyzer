@@ -6,7 +6,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   try {
     const { id } = await params;
     const token = request.cookies.get('auth_token')?.value;
-    const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/stats?registration_phase=${encodeURIComponent(request.nextUrl.searchParams.get("registration_phase") || "initial")}`, {
+    const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/stats?registration_phase=${encodeURIComponent(request.nextUrl.searchParams.get("registration_phase") || "initial")}${request.nextUrl.searchParams.has("trends_result") ? "&trends_result="+encodeURIComponent(request.nextUrl.searchParams.get("trends_result")!) : ""}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',

@@ -25,6 +25,7 @@ _VERSION_SQL = text("""
 WITH selected AS (SELECT id FROM tournaments WHERE id IN :ids),
 versions AS (
  SELECT 't' AS kind, t.id, t.xmin::text AS version FROM tournaments t JOIN selected s ON s.id=t.id
+ UNION ALL SELECT 'ch', c.id, c.xmin::text FROM championships c WHERE c.id IN (SELECT t.championship_id FROM tournaments t JOIN selected s ON s.id=t.id)
  UNION ALL SELECT 'p', p.id, p.xmin::text FROM players p JOIN selected s ON s.id=p.tournament_id
  UNION ALL SELECT 'd', d.id, d.xmin::text FROM deck_sets d JOIN players p ON p.id=d.player_id JOIN selected s ON s.id=p.tournament_id
  UNION ALL SELECT 'dt', dt.id, dt.xmin::text FROM deck_teams dt JOIN deck_sets d ON d.id=dt.deck_set_id JOIN players p ON p.id=d.player_id JOIN selected s ON s.id=p.tournament_id

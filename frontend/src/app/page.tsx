@@ -1,4 +1,5 @@
 "use client";
+import TrendsRankings from "@/components/TrendsRankings";
 import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
 import { TeamRegistrationUsage, RegistrationPhaseLabel, CompositionBestResult, TeamBestResults, TeamResultFilters, TeamSearchFilters, WIN_RATE_FILTER_CLASS } from "@/components/TeamStatisticsMeaning";
 export const dynamic = 'force-dynamic';
@@ -881,123 +882,7 @@ function DashboardContent() {
         
 
         {/* OVERVIEW TAB */}
-        {activeTab === "overview" && (
-           <div className="space-y-12 animate-in fade-in zoom-in-95 duration-300">
-            {stats?.registration_breakdown && (
-              <div className="rounded-xl bg-slate-800/50 p-4 text-sm text-slate-300 ring-1 ring-white/10">
-                {t('stats.analysisPopulation', { total: stats.registration_breakdown.total_registered_players, full64: stats.registration_breakdown.full_64_registered_players, champion8: stats.registration_breakdown.champion_8_registered_players })}
-              </div>
-            )}
-            <CharacterUsageByResultRanking
-              stats={stats}
-              allCharacters={allCharacters}
-              onSelectCharacter={setSelectedCharId}
-            />
-            {false && (
-            <section>
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-                <Users className="text-blue-400" />
-                <span>{t('stats.characterPickRanking')}</span>
-              </h2>
-              <div className="overflow-x-auto rounded-xl ring-1 ring-white/10 shadow-2xl bg-slate-900/50">
-                {(() => {
-                  // 採用数でグループ化
-                  const grouped: { count: number; entries: any[] }[] = [];
-                  if (!stats) return <div className="py-12 text-center text-slate-500">{t('common.loading')}</div>;
-                  const charList = stats?.character_usage ?? stats?.character_stats ?? [];
-                  const sorted = [...charList].sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
-                  sorted.forEach((entry: any) => {
-                    const last = grouped[grouped.length - 1];
-                    if (last && last.count === entry.count) {
-                      last.entries.push(entry);
-                    } else {
-                      grouped.push({ count: entry.count, entries: [entry] });
-                    }
-                  });
-
-                  return (
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-800/80 text-slate-400 text-sm border-b border-white/10">
-                          <th className="p-4 font-medium text-center w-16">{t('stats.rank')}</th>
-                          <th className="p-4 font-medium text-center w-24">{t('stats.usageCount')}</th>
-                          <th className="p-4 font-medium">{t('stats.character')}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {grouped.map((group, gIdx) => {
-                          // 順位計算（同着を考慮）
-                          const rank = sorted.findIndex(e => e.count === group.count) + 1;
-                          return (
-                            <tr key={gIdx} className="hover:bg-white/5 transition-colors">
-                              <td className="p-4 text-center align-top">
-                                <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-black ${
-                                  rank === 1 ? "bg-yellow-500/20 text-yellow-500 ring-1 ring-yellow-500/50" :
-                                  rank === 2 ? "bg-slate-300/20 text-slate-300 ring-1 ring-slate-300/50" :
-                                  rank === 3 ? "bg-amber-600/20 text-amber-500 ring-1 ring-amber-600/50" :
-                                  "text-slate-500"
-                                }`}>
-                                  {rank}
-                                </span>
-                              </td>
-                              <td className="p-4 text-center align-top">
-                                <span className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                                  {group.count}
-                                </span>
-                              </td>
-                              <td className="p-4">
-                                <div className="flex flex-wrap gap-2">
-                                  {group.entries.map((entry: any) => {
-                                    const c = allCharacters.find(char => char.id === entry.id) || entry;
-                                    return (
-                                      <button
-                                        key={c.id}
-                                        onClick={() => setSelectedCharId(c.id)}
-                                        title={c.name}
-                                        className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 px-2 py-1.5 rounded-lg ring-1 ring-white/10 hover:ring-blue-500/50 transition-all group/char"
-                                      >
-                                        <div className="w-8 h-8 rounded-md bg-slate-700 ring-1 ring-white/10 overflow-hidden flex items-center justify-center shrink-0 group-hover/char:ring-blue-500 transition-all">
-                                          {getCharIconUrl(c) ? (
-                                            <img src={getCharIconUrl(c)} loading="lazy" decoding="async" alt={c.name} className="w-full h-full object-cover" />
-                                          ) : (
-                                            <span className="text-[8px] text-slate-500 font-bold">{c.name.slice(0,2)}</span>
-                                          )}
-                                        </div>
-                                        <span className="text-xs font-bold text-slate-300 group-hover/char:text-blue-400 transition-colors whitespace-nowrap">
-                                          {c.name}
-                                        </span>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {charList.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="p-8 text-center text-slate-500">{t('common.noData')}</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  );
-                })()}
-              </div>
-            </section>
-            )}
-            <TeamAdoptionRanking
-              teams={stats?.team_usage ?? []}
-              totalRegisteredPlayers={Number(stats?.registration_breakdown?.total_registered_players ?? stats?.total_players ?? 0)}
-              visibleCount={visibleTeamCount}
-              onShowMore={() => setVisibleTeamCount((previous) => previous + 15)}
-              allCharacters={allCharacters}
-              onTeamClick={handleTeamClick}
-            />
-          </div>
-        )}
-
-
+        {activeTab === "overview" && <TrendsRankings formal={hasSelectedFormal} tournamentIds={selectedTournamentIds} allCharacters={allCharacters} onSelectCharacter={setSelectedCharId} onTeamClick={handleTeamClick}/>}
 
         {/* TEAM WINRATE TAB */}
         {activeTab === "team_winrate" && (

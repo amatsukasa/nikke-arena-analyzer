@@ -44,7 +44,7 @@ export default function ChampionArenaResultsPage() {
     {loading&&<p className="text-slate-400">{t("common.loading")}</p>}
     {!loading&&!error&&tournaments.length===0&&<p className="rounded-xl border border-slate-800 bg-slate-900 p-4 text-slate-400">{t("championArena.noTournaments")}</p>}
     <section className="space-y-3">{tournaments.map(tournament=><label key={tournament.id} className="block rounded-xl border border-slate-800 bg-slate-900 p-4">
-      <span className="mb-2 block font-bold">{tournament.title}</span><select aria-label={t("championArena.resultAria",{tournament:tournament.title})} value={data?.championArena.results[String(tournament.id)]?.result??"not_entered"} onChange={event=>update(tournament,event.target.value as ArenaResult)} className="w-full rounded border border-slate-700 bg-slate-950 p-3">{choices.map(value=><option key={value} value={value}>{t(resultKeys[value])}</option>)}</select>
+      <span className="mb-2 block font-bold">{tournament.title}</span>{tournament.source==="legacy_tournament"&&<span className="mb-2 block text-xs text-amber-300">{t("championArena.legacyMaster",{id:tournament.tournament_id ?? "—"})}</span>}<select aria-label={t("championArena.resultAria",{tournament:tournament.title})} value={data?.championArena.results[String(tournament.id)]?.result??"not_entered"} onChange={event=>update(tournament,event.target.value as ArenaResult)} className="w-full rounded border border-slate-700 bg-slate-950 p-3">{choices.map(value=><option key={value} value={value}>{t(resultKeys[value])}</option>)}</select>
     </label>)}</section>
   </div></main>;
 }

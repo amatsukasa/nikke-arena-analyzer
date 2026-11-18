@@ -42,6 +42,8 @@ class ChampionBracketApiTest(unittest.TestCase):
         self.other = self._user("bracket-other@example.invalid", "contributor")
         self.tournament = self._tournament("champion", "champion_8", self.owner)
         self.full = self._tournament("full", "full_64", self.owner)
+        self.db.add_all([models.Character(id=index, name=f"Character {index}") for index in range(1, 26)])
+        self.db.flush()
         self.players = [self._player(self.tournament, slot) for slot in range(1, 9)]
         for player in self.players:
             self._complete_deck(player)

@@ -153,6 +153,7 @@ class AdminApiAuthorizationTest(unittest.TestCase):
             self.db,
             self.admin,
         )
+        created = schemas.ChampionshipAdminResponse.model_validate(created)
         self.assertEqual(created.created_by, self.admin.id)
 
         updated = main.update_championship(
@@ -161,6 +162,7 @@ class AdminApiAuthorizationTest(unittest.TestCase):
             self.db,
             self.admin,
         )
+        updated = schemas.ChampionshipAdminResponse.model_validate(updated)
         self.assertEqual(updated.name, "Updated")
         self.assertEqual(updated.date, date(2026, 8, 5))
 

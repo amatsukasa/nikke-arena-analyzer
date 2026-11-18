@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
+from services import championship_settings
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime, timedelta, timezone
 import json
@@ -94,7 +95,7 @@ def get_private_dashboard_cache(
 ):
     if tournament.publication_status == "published":
         return None
-    key = _dashboard_cache_key(tournament.id, endpoint, params)
+    key = _dashboard_cache_key(tournament.id, endpoint, {**(params or {}), "title_settings": (tournament.deck_registration_phases, tournament.is_champion_arena, tournament.has_match_data)})
     cached = _dashboard_cache.get(key)
     now = time.monotonic()
     if cached and cached["expires_at"] > now:
@@ -113,7 +114,7 @@ def set_private_dashboard_cache(
     params: dict | None = None,
 ):
     if tournament.publication_status != "published" and DASHBOARD_CACHE_TTL_SECONDS > 0:
-        key = _dashboard_cache_key(tournament.id, endpoint, params)
+        key = _dashboard_cache_key(tournament.id, endpoint, {**(params or {}), "title_settings": (tournament.deck_registration_phases, tournament.is_champion_arena, tournament.has_match_data)})
         _dashboard_cache[key] = {
             "value": value,
             "expires_at": time.monotonic() + DASHBOARD_CACHE_TTL_SECONDS,
@@ -1527,11 +1528,9 @@ TOURNAMENT_ADMIN_FIELDS = frozenset({
 
 
 def apply_tournament_admin_settings(tournament, changes, db):
-    if changes.get("deck_registration_phases") is False and tournament.deck_registration_phases:
-        has_history = db.query(models.ArenaDeckRegistration.id).filter_by(tournament_id=tournament.id).first() or db.query(models.ArenaMatchRevision.id).filter_by(tournament_id=tournament.id).first()
-        if has_history:
-            raise HTTPException(409, "Phase history exists; disabling phases would hide active registrations and results")
-    for field in TOURNAMENT_ADMIN_FIELDS & changes.keys():
+    if {"deck_registration_phases", "is_champion_arena", "has_match_data"} & changes.keys():
+        raise HTTPException(403, "Manage arena settings on the championship title")
+    for field in {"game_start_date", "display_order"} & changes.keys():
         setattr(tournament, field, changes[field])
 
 
@@ -1543,8 +1542,11 @@ def create_tournament(
 ):
     if current_user.role != "admin" and TOURNAMENT_ADMIN_FIELDS & tournament.model_fields_set:
         raise HTTPException(403, "Tournament settings are administrator-only")
-    # 登録データのベースを作成
-    data = tournament.model_dump()
+    title_fields = {"deck_registration_phases", "is_champion_arena", "has_match_data"}
+    if title_fields & tournament.model_fields_set:
+        raise HTTPException(403, "Manage arena settings on the championship title")
+    # Only the Championship is editable; legacy compatibility columns use old defaults.
+    data = tournament.model_dump(exclude=title_fields)
 
     # 省略時だけプロフィール値を初期値にする。明示的な null は維持する。
     if "provider_game_start_date" not in tournament.model_fields_set:
@@ -1561,10 +1563,13 @@ def create_tournament(
     
     # championship_id から名前などの情報を引き継ぐ
     if tournament.championship_id:
-        championship = db.query(models.Championship).filter(models.Championship.id == tournament.championship_id).first()
-        if championship:
-            data["name"] = championship.name
-            data["date"] = championship.date or tournament.date
+        championship = db.query(models.Championship).filter_by(id=tournament.championship_id).populate_existing().with_for_update().first()
+        if championship is None:
+            raise HTTPException(404, "Championship not found")
+        championship_settings.require_resolved(championship, championship_settings.children(db, championship.id))
+        data["name"] = championship.name
+        data["date"] = championship.date or tournament.date
+    # Legacy callers without a title retain the old defaults; the UI requires a title.
 
     db_tournament = models.Tournament(**data)
     try:
@@ -1634,6 +1639,7 @@ def get_published_tournament_ids(
         for (tournament_id,) in db.query(models.Tournament.id).filter(
             models.Tournament.id.in_(set(tournament_ids)),
             models.Tournament.publication_status == "published",
+            models.Tournament.has_match_data.is_(True),
         ).all()
     }
     return [
@@ -1820,16 +1826,28 @@ def _champion_arena_master_payload(tournament: models.Tournament) -> dict:
     }
 
 
-@app.get("/api/champion-arena/tournaments", response_model=List[schemas.ChampionArenaTournament])
+@app.get("/api/champion-arena/tournaments", response_model=List[schemas.ArenaResultEvent])
 def get_champion_arena_tournaments(db: Session = Depends(get_db)):
-    tournaments = db.query(models.Tournament).filter(
-        models.Tournament.is_champion_arena.is_(True)
-    ).order_by(
-        models.Tournament.display_order.desc().nullslast(),
-        models.Tournament.game_start_date.desc().nullslast(),
-        models.Tournament.id.desc(),
-    ).all()
-    return [_champion_arena_master_payload(tournament) for tournament in tournaments]
+    # One title per event; preserve unresolved legacy visibility using only the FK.
+    legacy_visible = db.query(models.Tournament.id).filter(
+        models.Tournament.championship_id == models.Championship.id,
+        models.Tournament.legacy_is_champion_arena.is_(True),
+    ).exists()
+    titles = db.query(models.Championship).filter(or_(
+        models.Championship.is_champion_arena.is_(True),
+        models.Championship.is_champion_arena.is_(None) & legacy_visible,
+    )).order_by(models.Championship.date.desc().nullslast(), models.Championship.id.desc()).all()
+    events = [{"id": f"championship:{title.id}", "championship_id": title.id,
+               "source": "championship", "title": title.name, "event_date": title.date,
+               "display_order": title.display_order} for title in titles]
+    # Retain unlinked legacy targets without guessing associations from names/IDs.
+    linked_title = db.query(models.Championship.id).filter(models.Championship.id == models.Tournament.championship_id).exists()
+    legacy = db.query(models.Tournament.id, models.Tournament.name, models.Tournament.game_start_date, models.Tournament.display_order).filter(~linked_title, models.Tournament.legacy_is_champion_arena.is_(True)).all()
+    events.extend({"id": f"legacy-tournament:{row.id}", "tournament_id": row.id,
+                   "championship_id": None, "source": "legacy_tournament", "title": row.name,
+                   "event_date": row.game_start_date, "display_order": row.display_order} for row in legacy)
+    events.sort(key=lambda row: (row["display_order"] if row["display_order"] is not None else float("-inf"), row["event_date"] or date_type.min, row.get("tournament_id") or row.get("championship_id") or 0, row["id"]), reverse=True)
+    return events
 
 
 @app.get("/api/admin/champion-arena-tournaments", response_model=List[schemas.ChampionArenaTournament])
@@ -1848,21 +1866,7 @@ def create_champion_arena_tournament(
     admin: models.AppUser = Depends(auth_module.require_admin),
     db: Session = Depends(get_db),
 ):
-    tournament = models.Tournament(
-        name=body.title.strip(),
-        date=body.game_start_date or date_type(1970, 1, 1),
-        game_start_date=body.game_start_date,
-        display_order=body.display_order,
-        is_champion_arena=body.is_champion_arena,
-        has_match_data=body.has_match_data,
-        deck_registration_phases=body.deck_registration_phases,
-        created_by=admin.id,
-        publication_status="draft",
-    )
-    db.add(tournament)
-    db.commit()
-    db.refresh(tournament)
-    return _champion_arena_master_payload(tournament)
+    raise HTTPException(409, "Create a championship title, then register tournament data under that title")
 
 
 @app.put("/api/admin/champion-arena-tournaments/{tournament_id}", response_model=schemas.ChampionArenaTournament)
@@ -1879,6 +1883,7 @@ def update_champion_arena_tournament(
     apply_tournament_admin_settings(tournament, changes, db)
     tournament.name = body.title.strip()
     if "game_start_date" in changes:
+        tournament.game_start_date = body.game_start_date
         tournament.date = body.game_start_date or tournament.date
     db.commit()
     db.refresh(tournament)
@@ -1954,7 +1959,22 @@ def update_tournament(
     restricted = TOURNAMENT_ADMIN_FIELDS | {"date", "season", "owner_name"}
     if current_user.role != "admin" and restricted & changes.keys():
         raise HTTPException(403, "Tournament settings are administrator-only")
-    db_tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
+    observed_title_id = db_tournament.championship_id
+    target_title_id = changes.get("championship_id", observed_title_id)
+    titles = {}
+    title_ids = {value for value in (db_tournament.championship_id, target_title_id) if value is not None}
+    if title_ids:
+        titles = {row.id: row for row in db.query(models.Championship).filter(models.Championship.id.in_(title_ids)).order_by(models.Championship.id).populate_existing().with_for_update().all()}
+    db_tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update(of=models.Tournament).first()
+    if db_tournament is None:
+        db.rollback()
+        raise HTTPException(404, "Tournament not found")
+    if db_tournament.championship_id != observed_title_id:
+        db.rollback()
+        raise HTTPException(409, "Tournament title changed while acquiring locks; reload before saving")
+    if current_user.role != "admin" and db_tournament.created_by != current_user.id:
+        db.rollback()
+        raise HTTPException(403, "Tournament manager required")
 
     # registration_scope は作成時に固定する。Pydantic の既定値を
     # 「クライアントが明示した値」と誤認しないよう fields_set を使う。
@@ -1973,12 +1993,18 @@ def update_tournament(
         if "name" in changes:
             db_tournament.name = tournament.name
         if "championship_id" in changes:
-            if tournament.championship_id is not None:
-                championship = db.get(models.Championship, tournament.championship_id)
-                if championship is None:
-                    raise HTTPException(404, "Championship not found")
-                db_tournament.name = championship.name
+            title = titles.get(tournament.championship_id)
+            if title is None:
+                raise HTTPException(409, "Choose an existing championship title")
+            if tournament.championship_id != db_tournament.championship_id:
+                linked_tournaments = championship_settings.children(db, title.id)
+                championship_settings.require_resolved(title, linked_tournaments)
+                # Reassignment must not bypass title history protection.
+                target = championship_settings.describe(title, linked_tournaments)
+                championship_settings.ensure_history_visible(db, [db_tournament], {key: target[key] for key in championship_settings.FIELDS})
+            db_tournament.name = title.name
             db_tournament.championship_id = tournament.championship_id
+            db_tournament.championship = title
         if "provider_game_start_date" in changes:
             db_tournament.provider_game_start_date = tournament.provider_game_start_date
         if current_user.role == "admin":
@@ -2124,45 +2150,65 @@ def get_championship(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Championship not found")
     return db_championship
 
-@app.post("/api/championships", response_model=schemas.ChampionshipResponse)
+def championship_admin_payload(title, tournaments):
+    return {**schemas.ChampionshipResponse.model_validate(title).model_dump(), **championship_settings.describe(title, tournaments)}
+
+
+@app.get("/api/admin/championships", response_model=List[schemas.ChampionshipAdminResponse])
+def get_admin_championships(db: Session = Depends(get_db), admin: models.AppUser = Depends(auth_module.require_admin)):
+    titles = db.query(models.Championship).order_by(models.Championship.date.desc(), models.Championship.id.desc()).all()
+    grouped = {}
+    for row in db.query(models.Tournament).order_by(models.Tournament.id).all():
+        grouped.setdefault(row.championship_id, []).append(row)
+    return [championship_admin_payload(title, grouped.get(title.id, [])) for title in titles]
+
+
+@app.post("/api/championships", response_model=schemas.ChampionshipAdminResponse)
 def create_championship(
     championship: schemas.ChampionshipCreate,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
-    data = championship.model_dump()
+    data = championship.model_dump(exclude=championship_settings.FIELDS | {"settings_revision", "apply_to_existing"})
+    data.update({key: getattr(championship, key) if key in championship.model_fields_set else value for key, value in championship_settings.DEFAULTS.items()})
     data["created_by"] = current_user.id
     db_championship = models.Championship(**data)
     db.add(db_championship)
     db.commit()
     db.refresh(db_championship)
-    return db_championship
+    return championship_admin_payload(db_championship, [])
 
-@app.put("/api/championships/{id}", response_model=schemas.ChampionshipResponse)
+@app.put("/api/championships/{id}", response_model=schemas.ChampionshipAdminResponse)
 def update_championship(
     id: int,
     championship: schemas.ChampionshipCreate,
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
-    """大会シリーズ情報更新（管理者限定）"""
-    db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
-    if not db_championship:
-        raise HTTPException(status_code=404, detail="Championship not found")
-    db_championship.name = championship.name
-    db_championship.date = championship.date
-    db_championship.start_date = championship.start_date
-    db_championship.owner_name = championship.owner_name
-    if championship.date is not None:
-        db.query(models.Tournament).filter(
-            models.Tournament.championship_id == id
-        ).update(
-            {models.Tournament.date: championship.date},
-            synchronize_session=False,
-        )
-    db.commit()
-    db.refresh(db_championship)
-    return db_championship
+    title = db.query(models.Championship).filter_by(id=id).populate_existing().with_for_update().first()
+    if title is None:
+        raise HTTPException(404, "Championship not found")
+    tournaments = championship_settings.children(db, id, lock=True)
+    try:
+        affected = championship_settings.save(db, title, championship, tournaments)
+        previous_date = title.date
+        changes = championship.model_dump(exclude_unset=True)
+        for field in ("name", "date", "start_date", "owner_name", "display_order"):
+            if field in changes:
+                setattr(title, field, changes[field])
+        if "date" in changes and championship.date is not None and championship.date != previous_date:
+            for row in tournaments:
+                if row.date != championship.date:
+                    row.date = championship.date
+                    affected.append(row.id)
+        db.commit()
+        db.refresh(title)
+    except Exception:
+        db.rollback()
+        raise
+    for tournament_id in set(affected):
+        invalidate_dashboard_cache(tournament_id)
+    return championship_admin_payload(title, tournaments)
 
 @app.delete("/api/championships/{id}")
 def delete_championship(
@@ -2174,6 +2220,8 @@ def delete_championship(
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
+    if db.query(models.Tournament.id).filter_by(championship_id=id).first():
+        raise HTTPException(409, "This title has linked tournaments; deleting it would lose settings and result identity")
     db.delete(db_championship)
     db.commit()
     return {"ok": True}
@@ -2254,7 +2302,7 @@ def require_locked_champion_tournament_manager(
         db.query(models.Tournament)
         .filter(models.Tournament.id == tournament_id)
         .populate_existing()
-        .with_for_update()
+        .with_for_update(of=models.Tournament)
         .first()
     )
     if tournament is None:
@@ -4455,8 +4503,23 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
     registration_phase: str = "initial",
+    trends_result: Optional[str] = None,
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if trends_result is not None:
+        return _trends_stats([tournament_id], db, registration_phase, trends_result)
+    if registration_phase == "all" and tournament.deck_registration_phases:
+        all_params = {"registration_phase": "all", "seed": seed}
+        cached = get_private_dashboard_cache(tournament, "stats", all_params)
+        if cached is not None:
+            return cached
+        stages = [phase for phase in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, phase)]
+        with arena_phases.analysis_scope(db, [tournament_id]):
+            by_phase = {phase: _composition_stage_stats(tournament_id, db, current_user, seed, phase) for phase in stages}
+        teams = [row for values in by_phase.values() for row in values.get("team_usage", [])]
+        teams.sort(key=lambda row: row.get("count", 0), reverse=True)
+        return set_private_dashboard_cache(tournament, "stats", {"registration_phase": "all", "by_phase": by_phase, "team_usage": teams,
+                "character_usage_by_result": {}, "character_usage": [], "character_stats": []}, all_params)
     registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
         if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
     arena_phases.validate_analysis_phase(tournament, registration_phase)
@@ -4931,6 +4994,16 @@ def get_dashboard_matchups(
     registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if registration_phase == "all" and tournament.deck_registration_phases:
+        all_params = {"registration_phase": "all", "seed": seed}
+        cached = get_private_dashboard_cache(tournament, "matchups", all_params)
+        if cached is not None:
+            return cached
+        stages = [phase for phase in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, phase)]
+        with arena_phases.analysis_scope(db, [tournament_id]):
+            rows = [{**row, "registration_phase": phase} for phase in stages
+                    for row in get_dashboard_matchups(tournament_id, seed, db, current_user, phase)["matchups"]]
+        return set_private_dashboard_cache(tournament, "matchups", {"registration_phase": "all", "matchups": rows}, all_params)
     registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
         if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
     arena_phases.validate_analysis_phase(tournament, registration_phase)
@@ -5035,6 +5108,15 @@ def get_best8_decks(
 ):
     """ベスト8進出者のプレイヤー名、成績、登録編成をまとめて取得する"""
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if registration_phase == "all" and tournament.deck_registration_phases:
+        all_params = {"registration_phase": "all"}
+        cached = get_private_dashboard_cache(tournament, "best8-decks", all_params)
+        if cached is not None:
+            return cached
+        stages = [phase for phase in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, phase)]
+        with arena_phases.analysis_scope(db, [tournament_id]):
+            rows = [row for phase in stages for row in get_best8_decks(tournament_id, db, current_user, phase)]
+        return set_private_dashboard_cache(tournament, "best8-decks", rows, all_params)
     registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
         if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
     arena_phases.validate_analysis_phase(tournament, registration_phase)
@@ -5050,6 +5132,8 @@ def get_best8_decks(
         results = []
         for player in all_players:
             if (player.id, stored_phase) not in qualifications:
+                continue
+            if registration_phase == "league" and (player.id, "best8") not in qualifications:
                 continue
             teams, _ = registration(player.id, stored_phase)
             if not teams:
@@ -5383,6 +5467,7 @@ class CrossAnalysisPhaseRequest(PydanticBaseModel):
 
 
 class CrossTournamentRequest(CrossAnalysisPhaseRequest):
+    trends_result: Optional[str] = None
     """大会横断検索リクエスト"""
     tournament_ids: List[int] = []
     play_server: Optional[str] = None
@@ -5402,7 +5487,8 @@ class CrossTournamentCharacterDetailRequest(CrossAnalysisPhaseRequest):
 
 def filter_cross_tournament_ids(db: Session, tournament_ids, registration_scope="all", registration_phase=None):
     query = db.query(models.Tournament).filter(
-        models.Tournament.publication_status == "published"
+        models.Tournament.publication_status == "published",
+        models.Tournament.has_match_data.is_(True),
     )
     if tournament_ids:
         query = query.filter(models.Tournament.id.in_(tournament_ids))
@@ -5492,6 +5578,8 @@ def cross_snapshot_has_distinct_counts(snapshot, db: Session, registered_players
 @app.post("/api/dashboard/cross-tournament/stats")
 def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depends(get_db)):
     ids = _cross_target_ids(body, db)
+    if body.trends_result is not None:
+        return _trends_stats(ids, db, body.registration_phase, body.trends_result)
     if body.registration_phase == "all":
         with contextlib.ExitStack() as shared_scope:
             return {"registration_phase": "all", "by_phase": {
@@ -5501,6 +5589,62 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     # Preserve the response limit, but keep the full list in the shared cache.
     stats["team_usage"] = stats.get("team_usage", [])[:50]
     return stats
+
+
+def _trends_stats(ids, db, phase, finish):
+    """One population for both adoption rankings; no per-composition queries."""
+    thresholds = {"all": None, "best16": 16, "best8": 8, "best4": 4, "runner_up": 2, "champion": 1}
+    if finish not in thresholds or phase not in ("legacy", "league", "championship", "final"):
+        raise HTTPException(422, "Invalid Trends filter")
+    def compute():
+        with arena_phases.analysis_scope(db, ids) as scope:
+            tournaments = {tid:t for tid,t in scope["tournaments"].items() if arena_phases.analysis_applicable(t, phase)}
+            players = [p for p in scope["players"] if p.tournament_id in tournaments]
+            matches = arena_phases.effective_matches(db, list(tournaments))
+            results = {}
+            for tid,tournament in tournaments.items():
+                codes = calculate_player_results(tournament, [p for p in players if p.tournament_id==tid], [m for m in matches if m.tournament_id==tid])
+                results.update({pid:result_label(code) for pid,code in codes.items()})
+            decks = arena_phases.phase_deck_sets(db, [p.id for p in players], phase)
+            maximum = thresholds[finish] if phase=="legacy" else None
+            decks = [d for d in decks if len(d.teams)==5 and (maximum is None or RESULT_SCORES.get(results.get(d.player_id),999)<=maximum)]
+            eligible = {d.player_id for d in decks}
+            denominator = len(eligible)
+            characters = {c.id:c for c in db.query(models.Character).all()}
+            character_users, team_users, occurrences, rows = {}, {}, {}, {}
+            for deck in decks:
+                for team in deck.teams:
+                    key = team_statistics_display.canonical(team)
+                    if not key: continue
+                    ids_in_team = [getattr(team,f"char{i}_id") for i in range(1,6)]
+                    for cid in set(ids_in_team)-{EMPTY_SLOT_CHARACTER_ID}:
+                        if cid in characters: character_users.setdefault(cid,set()).add(deck.player_id)
+                    team_users.setdefault(key,set()).add(deck.player_id)
+                    occurrences[key] = occurrences.get(key,0)+1
+                    rows.setdefault(key,{"canonical_id":key,"character_ids":ids_in_team,"characters":[{"id":cid,"name":characters[cid].name} for cid in ids_in_team if cid in characters],"win_count":0,"total_matches":0})
+            for match in matches:
+                if not arena_phases.matches_analysis_phase(db,match,phase): continue
+                for pid in (match.attacker_id,match.defender_id):
+                    if pid not in eligible: continue
+                    used = arena_phases.deck_for_match(match,pid,db)
+                    teams = {team.team_number:team for team in used.teams} if used else {}
+                    for result in match.round_results:
+                        if result.winner_id not in (match.attacker_id,match.defender_id): continue
+                        team = teams.get(result.round_number)
+                        key = team_statistics_display.canonical(team) if team else None
+                        if key not in rows or pid not in team_users[key]: continue
+                        rows[key]["total_matches"] += 1
+                        rows[key]["win_count"] += int(result.winner_id==pid)
+            teams = list(rows.values())
+            for row in teams:
+                key=row["canonical_id"];count=len(team_users[key]);total=row["total_matches"]
+                row.update(count=occurrences[key],player_count=count,adoption_rate=round(count/denominator*100,1) if denominator else 0,win_rate=round(row["win_count"]/total*100,1) if total else None)
+            team_statistics_display.annotate(teams,team_statistics_display.metadata(decks,matches,results,phase,tournaments,players),phase)
+            teams.sort(key=lambda row:(-row["player_count"],-row["count"],row["canonical_id"]))
+            chars=[{"id":cid,"name":characters[cid].name,"count":len(users),"usage_rate":round(len(users)/denominator*100,1) if denominator else 0} for cid,users in character_users.items()]
+            chars.sort(key=lambda row:(-row["count"],row["id"]))
+            return {"registration_phase":phase,"total_players":denominator,"team_usage":teams,"character_usage_by_result":{"all":{"denominator":denominator,"characters":chars}}}
+    return cross_analytics.cached(db,ids,phase,"trends-population-v1:"+finish,compute)
 
 
 def _cross_target_ids(body, db):
@@ -6548,6 +6692,27 @@ def get_dashboard_player_stats(
     registration_phase: str = "initial",
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if registration_phase == "all" and seed is not None:
+        params = {"seed": seed, "registration_phase": "all"}
+        cached = get_private_dashboard_cache(tournament, "player-stats", params)
+        if cached is not None:
+            return cached
+        stages = [phase for phase in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, phase)] if tournament.deck_registration_phases else ["legacy"]
+        with arena_phases.analysis_scope(db, [tournament_id]) as scope:
+            players = [player for player in scope["players"] if player.tournament_id == tournament_id]
+            player = next((player for player in players if player.seed_number == seed), None)
+            matches = arena_phases.effective_matches(db, [tournament_id])
+            result_code = calculate_player_results(tournament, players, matches).get(player.id) if player else None
+            sets = []
+            details = {"player": None, "decks": []}
+            for phase in stages:
+                details = _get_player_details_by_player(tournament_id, player, db, phase, resolved_matches=matches)
+                if details["decks"]:
+                    sets.append({"registration_phase": phase, "decks": details["decks"]})
+        value = {"player": details["player"], "result_code": result_code,
+                 "result": result_label(result_code), "registration_sets": sets,
+                 "decks": [deck for item in sets for deck in item["decks"]]}
+        return set_private_dashboard_cache(tournament, "player-stats", value, params)
     registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
         if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
     arena_phases.validate_analysis_phase(tournament, registration_phase)
@@ -6579,7 +6744,7 @@ def arena_access(tournament_id, db, current_user, write=False):
     if not arena_phases.supported(tournament):
         raise HTTPException(409, "Phase registrations require an official champion arena")
     if write:
-        tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
+        tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update(of=models.Tournament).one()
         # Recheck after acquiring the common tournament lock.
         if current_user.role != "admin" and tournament.created_by != current_user.id:
             raise HTTPException(403, "Tournament manager required")
@@ -6648,7 +6813,7 @@ def get_arena_history(tournament_id: int, db: Session = Depends(get_db), current
 
 def require_legacy_registration_path(tournament_id, db, current_user):
     require_tournament_manager(tournament_id, db, current_user)
-    tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update().one()
+    tournament = db.query(models.Tournament).filter_by(id=tournament_id).populate_existing().with_for_update(of=models.Tournament).one()
     return tournament
 
 

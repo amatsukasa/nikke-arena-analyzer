@@ -1,3 +1,5 @@
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy import select, func
 from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, Float, UniqueConstraint, CheckConstraint, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -109,6 +111,11 @@ class Championship(Base):
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    deck_registration_phases = Column(Boolean, nullable=True)
+    is_champion_arena = Column(Boolean, nullable=True)
+    include_in_statistics = Column(Boolean, nullable=True)
+    display_order = Column(Integer, nullable=True)
+
     creator = relationship("AppUser", back_populates="championships")
     tournaments = relationship("Tournament", back_populates="championship")
 
@@ -139,9 +146,9 @@ class Tournament(Base):
     provider_game_start_date = Column(Date, nullable=True)
     game_start_date = Column(Date, nullable=True)
     display_order = Column(Integer, nullable=True)
-    is_champion_arena = Column(Boolean, nullable=False, default=False, server_default="false")
-    has_match_data = Column(Boolean, nullable=False, default=True, server_default="true")
-    deck_registration_phases = Column(Boolean, nullable=False, default=False, server_default="false")
+    legacy_is_champion_arena = Column("is_champion_arena", Boolean, nullable=False, default=False, server_default="false")
+    legacy_has_match_data = Column("has_match_data", Boolean, nullable=False, default=True, server_default="true")
+    legacy_deck_registration_phases = Column("deck_registration_phases", Boolean, nullable=False, default=False, server_default="false")
     
     # 追加: 登録ユーザーの関連付け
     created_by = Column(Integer, ForeignKey("app_users.id"), nullable=True)
@@ -151,13 +158,52 @@ class Tournament(Base):
         back_populates="tournaments",
         foreign_keys=[created_by],
     )
-    championship = relationship("Championship", back_populates="tournaments")
+    championship = relationship("Championship", back_populates="tournaments", lazy="joined")
     players = relationship("Player", back_populates="tournament")
     matches = relationship("Match", back_populates="tournament")
 
     @property
     def play_server(self):
         return self.creator.play_server if self.creator else None
+
+
+    @hybrid_property
+    def deck_registration_phases(self):
+        # Legacy values are read only for unlinked/unresolved titles; never editable.
+        title = self.championship
+        value = getattr(title, "deck_registration_phases", None) if title is not None else None
+        return value if value is not None else self.legacy_deck_registration_phases
+
+    @deck_registration_phases.expression
+    def deck_registration_phases(cls):
+        title_value = select(Championship.deck_registration_phases).where(Championship.id == cls.championship_id).correlate_except(Championship).scalar_subquery()
+        return func.coalesce(title_value, cls.legacy_deck_registration_phases)
+
+
+    @hybrid_property
+    def is_champion_arena(self):
+        # Legacy values are read only for unlinked/unresolved titles; never editable.
+        title = self.championship
+        value = getattr(title, "is_champion_arena", None) if title is not None else None
+        return value if value is not None else self.legacy_is_champion_arena
+
+    @is_champion_arena.expression
+    def is_champion_arena(cls):
+        title_value = select(Championship.is_champion_arena).where(Championship.id == cls.championship_id).correlate_except(Championship).scalar_subquery()
+        return func.coalesce(title_value, cls.legacy_is_champion_arena)
+
+
+    @hybrid_property
+    def has_match_data(self):
+        # Legacy values are read only for unlinked/unresolved titles; never editable.
+        title = self.championship
+        value = getattr(title, "include_in_statistics", None) if title is not None else None
+        return value if value is not None else self.legacy_has_match_data
+
+    @has_match_data.expression
+    def has_match_data(cls):
+        title_value = select(Championship.include_in_statistics).where(Championship.id == cls.championship_id).correlate_except(Championship).scalar_subquery()
+        return func.coalesce(title_value, cls.legacy_has_match_data)
 
 class Player(Base):
     __tablename__ = "players"
