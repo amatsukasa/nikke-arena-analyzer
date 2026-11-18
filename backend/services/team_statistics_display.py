@@ -1,7 +1,6 @@
 """Phase-local composition-set achievement, separate from commander finish.
 
-Pure calculations only. A formal set must be identified by the registration ID
-stored in an effective result revision. Missing links never borrow final ranks.
+Identify a formal set by its registration ID or a verified legacy league snapshot.
 """
 from collections import Counter, defaultdict
 import re
@@ -51,6 +50,21 @@ def achievement(match, player_id, phase, tournament):
     return f'best{remaining // 2}'
 
 
+def matches_registration(current, match, player_id, tournament, stored_phase):
+    registration_ids = getattr(match, 'arena_registration_ids', {})
+    if current is None or player_id not in registration_ids:
+        return False
+    stored_id = registration_ids[player_id]
+    current_id = getattr(current, 'registration_id', None)
+    if current_id is not None or stored_id is not None:
+        return current_id is not None and current_id == stored_id
+    if arena_phases.normalized_stage(tournament, stored_phase) != 'league':
+        return False
+    signature = getattr(current, 'legacy_initial_signature', None)
+    saved_teams = getattr(match, 'arena_saved_teams', {}).get(player_id)
+    return signature is not None and saved_teams is not None and signature == arena_phases.exact_set_signature(saved_teams)
+
+
 def metadata(decks, matches, result_by_player, phase, tournaments, players):
     users, positions = defaultdict(set), defaultdict(set)
     keys_by_player = defaultdict(set)
@@ -68,16 +82,17 @@ def metadata(decks, matches, result_by_player, phase, tournaments, players):
     for match in matches:
         tournament = tournaments.get(match.tournament_id)
         formal = bool(tournament and tournament.deck_registration_phases)
-        if formal and getattr(match, 'arena_phase', 'initial') != arena_phases.stored_analysis_phase(tournament, phase):
+        stored_phase = arena_phases.stored_analysis_phase(tournament, phase) if formal else None
+        if formal and getattr(match, 'arena_phase', 'initial') != stored_phase:
             continue
         snapshots = getattr(match, 'arena_decks', None)
         verified = snapshots is not None and getattr(match, 'arena_deck_history_verified', False)
         for player_id in (match.attacker_id, match.defender_id):
             current = decks_by_player.get(player_id)
-            registration_id = getattr(current, 'registration_id', None)
-            stored_id = getattr(match, 'arena_registration_ids', {}).get(player_id)
-            if formal and verified and registration_id is not None and stored_id == registration_id:
-                value = achievement(match, player_id, arena_phases.stored_analysis_phase(tournament, phase), tournament)
+            player = players_by_id.get(player_id)
+            if (formal and verified and player is not None and player.tournament_id == match.tournament_id
+                    and matches_registration(current, match, player_id, tournament, stored_phase)):
+                value = achievement(match, player_id, stored_phase, tournament)
                 if value:
                     set_results[player_id].append(value)
         if not verified:
