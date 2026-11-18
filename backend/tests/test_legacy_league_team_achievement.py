@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import unittest
 from uuid import uuid4
@@ -13,6 +14,7 @@ import auth
 from database import Base, SessionLocal, engine
 import main
 import models
+from scripts import link_legacy_league
 from services import arena_phases, cross_analytics
 
 
@@ -75,9 +77,10 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         login = self.client.post("/api/auth/login", json={"email": owner.email, "password": password})
         self.assertEqual(login.status_code, 200, login.text)
 
-    def assert_achievement(self, expected):
-        main._dashboard_cache.clear()
-        cross_analytics.clear_cache()
+    def assert_achievement(self, expected, *, clear_cache=True):
+        if clear_cache:
+            main._dashboard_cache.clear()
+            cross_analytics.clear_cache()
         path = f"/api/tournaments/{self.tournament.id}/dashboard/teams"
         payload = {"tournament_ids": [self.tournament.id], "registration_phase": "league", "limit": 20}
         self.assertEqual(self.anonymous.get(path).status_code, 404)
@@ -144,8 +147,7 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         self.db.commit()
         self.assert_achievement(None)
 
-    def test_unversioned_match_does_not_prove_deck_identity(self):
-        defender_id = self.revision.defender_id
+    def convert_to_legacy_match(self):
         match = models.Match(tournament_id=self.tournament.id, stage="Best 64",
                              attacker_id=self.revision.attacker_id, defender_id=self.revision.defender_id,
                              winner_id=self.revision.winner_id)
@@ -155,7 +157,41 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
             self.db.add(models.RoundResult(match_id=match.id, round_number=number, winner_id=winner_id))
         self.db.delete(self.revision)
         self.db.commit()
+        return match
+
+    def test_unversioned_match_does_not_prove_deck_identity(self):
+        defender_id = self.revision.defender_id
+        self.convert_to_legacy_match()
         self.assert_achievement(None)
         self.correct_legacy_registration(defender_id)
         self.assertEqual(self.db.query(models.ArenaMatchRevision).count(), 0)
         self.assert_achievement(None)
+
+    def test_legacy_link_preview_apply_rollback_and_cache(self):
+        match = self.convert_to_legacy_match()
+        tournament_id = self.tournament.id
+        before = arena_phases.state(self.tournament, self.db)
+
+        def invoke(action, digest=None):
+            args = SimpleNamespace(action=action, digest=digest, operator="test-admin",
+                                   tournament_id=tournament_id, expect_database=engine.url.database)
+            with SessionLocal.begin() as db:
+                return link_legacy_league.run(db, args)
+
+        self.assert_achievement(None)
+        plan = invoke("preview")
+        self.assertEqual((plan["matches"], plan["player_links"], plan["skipped"]), (1, 2, []))
+        self.assertIsNone(plan["active_digest"])
+        self.assertEqual(plan["links"][0]["match_id"], match.id)
+        self.assertEqual(plan["links"][0]["achievements"][match.defender_id], "best64")
+        with self.assertRaisesRegex(ValueError, "preview changed"):
+            invoke("apply", "wrong digest")
+        self.assert_achievement(None, clear_cache=False)
+        self.assertEqual(invoke("apply", plan["digest"])["action"], "applied")
+        self.assertEqual(invoke("apply", plan["digest"])["action"], "already_applied")
+        self.assert_achievement("best64", clear_cache=False)
+        self.assertEqual(arena_phases.state(self.tournament, self.db), before)
+        self.assertEqual(self.db.query(models.ArenaMatchRevision).count(), 0)
+        self.assertEqual(invoke("rollback", plan["digest"])["action"], "rolled_back")
+        self.assert_achievement(None, clear_cache=False)
+        self.assertEqual(arena_phases.state(self.tournament, self.db), before)

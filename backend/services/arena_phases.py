@@ -455,11 +455,36 @@ def initial_deck_sets(db, player_ids):
     return result
 
 
+def legacy_league_link_input(node):
+    """Return the current evidence for one active old league match."""
+    if (node["remaining"] not in (64, 32, 16) or node["result_phase"] != "initial"
+            or node["revision_id"] is not None or node["legacy_match_id"] is None
+            or node["registration_ids"] != [None, None]):
+        return None
+    participants = node["result_participants"]
+    rounds = node["rounds"]
+    if (len(participants) != 2 or len(set(participants)) != 2 or len(rounds) != 5
+            or any(winner not in participants for winner in rounds)
+            or rounds.count(node["winner_id"]) < 3):
+        return None
+    current = dict(zip(node["participants"], node["teams"]))
+    signatures = [exact_set_signature(teams) for teams in node["result_teams"]]
+    if len(signatures) != 2 or not all(signatures) or signatures != [
+            exact_set_signature(current.get(pid, [])) for pid in participants]:
+        return None
+    return {"match_key": node["key"], "match_id": node["legacy_match_id"],
+            "participants": participants, "winner": node["winner_id"], "rounds": rounds,
+            "teams": node["result_teams"]}
+
+
 def effective_matches(db, tournament_ids):
     from types import SimpleNamespace
     scope = db.info.get("arena_analysis_scope")
     tournaments = ([t for t in scope["tournaments"].values() if t.id in tournament_ids] if scope is not None else
         db.query(models.Tournament).filter(models.Tournament.id.in_(tournament_ids)).all())
+    full64_ids = [t.id for t in tournaments if supported(t) and t.registration_scope == "full_64"]
+    approved = {batch.id: batch.links for batch in db.query(models.ArenaLegacyLeagueLinkBatch)
+                .filter(models.ArenaLegacyLeagueLinkBatch.id.in_(full64_ids)).all()} if full64_ids else {}
     result = []
     for tournament in tournaments:
         if not supported(tournament):
@@ -473,6 +498,12 @@ def effective_matches(db, tournament_ids):
                 continue
             pid1, pid2 = node["result_participants"]
             identity = -node["revision_id"] if node["revision_id"] else node["legacy_match_id"]
+            saved_teams = node["result_teams"] if node["revision_id"] else None
+            link = approved.get(tournament.id, {}).get(node["key"])
+            if link is not None:
+                live = legacy_league_link_input(node)
+                if live is not None and fingerprint(live) == fingerprint(link):
+                    saved_teams = link["teams"]
             result.append(SimpleNamespace(id=identity, tournament_id=tournament.id, tournament=tournament,
                 attacker=by_id.get(pid1), defender=by_id.get(pid2), winner=by_id.get(node["winner_id"]), created_at=None,
                 stage="Final" if node["remaining"] == 2 else f"Best {node['remaining']}",
@@ -480,10 +511,10 @@ def effective_matches(db, tournament_ids):
                 bracket_slot=node["slot"] if tournament.registration_scope == "champion_8" else None,
                 attacker_id=pid1, defender_id=pid2, winner_id=node["winner_id"],
                 round_results=[SimpleNamespace(match_id=identity, round_number=i+1, winner_id=pid) for i, pid in enumerate(node["rounds"])],
-                arena_phase=node["result_phase"], arena_deck_history_verified=bool(node["revision_id"]),
+                arena_phase=node["result_phase"], arena_deck_history_verified=saved_teams is not None,
                 arena_remaining=node["remaining"],
                 arena_registration_ids=dict(zip(node["result_participants"], node["result_registration_ids"])),
-                arena_saved_teams=dict(zip(node["result_participants"], node["result_teams"])) if node["revision_id"] else {},
+                arena_saved_teams=dict(zip(node["result_participants"], saved_teams)) if saved_teams is not None else {},
                 arena_decks={pid: projected_deck(pid, teams, -pid) for pid, teams in zip(node["result_participants"], node["result_teams"])}))
     return result
 

@@ -341,3 +341,13 @@ class ArenaMatchRevision(Base):
     rounds = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     __table_args__ = (CheckConstraint("phase IN ('initial', 'best8', 'final')", name="ck_arena_match_phase"),)
+
+
+class ArenaLegacyLeagueLinkBatch(Base):
+    """One approved set of legacy result-to-deck links per tournament."""
+    __tablename__ = "arena_legacy_league_link_batches"
+    id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), primary_key=True)
+    digest = Column(String(64), nullable=False)
+    operator = Column(String(120), nullable=False)
+    links = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
