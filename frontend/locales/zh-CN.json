@@ -1,4 +1,6 @@
 {
+  "teamMeaning.adopters": "采用 {count} 人",
+  "teamMeaning.registrations": "登记 {count} 次",
   "site.title": "NIKKE竞技场分析器",
   "site.description": "用于查看冠军竞技场统计数据的粉丝网站",
   "nav.aria": "网站导航",

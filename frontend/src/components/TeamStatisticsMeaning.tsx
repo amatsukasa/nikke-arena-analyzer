@@ -6,6 +6,7 @@ import { localizedTournamentResult, tournamentResultClass } from "@/lib/tourname
 export type CommanderFinishCount = { result: string; count: number };
 export type TeamMeaning = {
   registration_phase?: string;
+  registration_phases?: string[];
   composition_best_result?: string | null;
   commander_best_result?: string | null;
   usage_history?: { stage: string; round_count: number }[];
@@ -44,7 +45,18 @@ export function CommanderResultBadge({team}: {team:TeamMeaning}) {
 }
 
 export function TeamRegistrationUsage({ team }: { team: TeamMeaning }) {
-  return <div className="mt-2 text-xs font-semibold text-blue-300"><RegistrationPhaseLabel phase={team.registration_phase}/></div>;
+  const { t } = useI18n();
+  const phases = team.registration_phases;
+  return <div className="mt-2 text-xs font-semibold text-blue-300">
+    {phases?.length ? <span>{t("teamMeaning.registrationPhase")}: {phases.map(phase =>
+      phase === "legacy" ? t("teamMeaning.legacy") : t(`arenaPhases.${phase}`)).join(" / ")}</span>
+      : <RegistrationPhaseLabel phase={team.registration_phase}/>}
+  </div>;
+}
+
+export function TeamUsageCounts({ team }: { team: { count: number; registration_count: number } }) {
+  const { t } = useI18n();
+  return <span>{t("teamMeaning.adopters", { count: team.count })} · {t("teamMeaning.registrations", { count: team.registration_count })}</span>;
 }
 
 export function TeamBestResults({ team }: { team: TeamMeaning }) {
@@ -55,6 +67,19 @@ export function TeamBestResults({ team }: { team: TeamMeaning }) {
 
 export const WIN_RATE_FILTER_CLASS = "h-10 rounded-lg border border-slate-600 bg-slate-800 px-3 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60";
 
+export function TeamStageFilter({ stage, onStageChange, formal, stages = ["league", "championship", "final"] }: {
+  stage: string; onStageChange: (value: string) => void; formal: boolean; stages?: string[];
+}) {
+  const { t } = useI18n();
+  return <select aria-label={t("teamMeaning.registrationPhase")} className={WIN_RATE_FILTER_CLASS}
+    value={formal ? stage : "all"} disabled={!formal} onChange={event => onStageChange(event.target.value)}>
+    <option value="all">{t("teamMeaning.filterValue", { label: t("teamMeaning.registrationPhase"), value: t("teamMeaning.allStages") })}</option>
+    {formal && stages.map(value => <option key={value} value={value}>{t("teamMeaning.filterValue", {
+      label: t("teamMeaning.registrationPhase"), value: t(`arenaPhases.${value}`),
+    })}</option>)}
+  </select>;
+}
+
 export function TeamResultFilters({ composition, onCompositionChange, stage, onStageChange, formal }: {
   composition: string; onCompositionChange: (value:string)=>void;
   stage: string; onStageChange: (value:string)=>void; formal: boolean;
@@ -62,10 +87,7 @@ export function TeamResultFilters({ composition, onCompositionChange, stage, onS
   const { t } = useI18n();
   const optionLabel = (key:string, value:string) => t("teamMeaning.filterValue", {label:t(key), value});
   return <>
-    <select aria-label={t("teamMeaning.registrationPhase")} className={WIN_RATE_FILTER_CLASS} value={formal ? stage : "all"} disabled={!formal} onChange={e=>onStageChange(e.target.value)}>
-      <option value="all">{optionLabel("teamMeaning.registrationPhase",t("teamMeaning.allStages"))}</option>
-      {formal && ["league","championship","final"].map(value=><option key={value} value={value}>{optionLabel("teamMeaning.registrationPhase",t(`arenaPhases.${value}`))}</option>)}
-    </select>
+    <TeamStageFilter stage={stage} onStageChange={onStageChange} formal={formal}/>
     <select aria-label={t("teamMeaning.compositionBest")} className={WIN_RATE_FILTER_CLASS} value={composition} onChange={e=>onCompositionChange(e.target.value)}>
       <option value="">{optionLabel("teamMeaning.compositionBest",t("teamMeaning.anyResult"))}</option>
       {["champion","runner_up","finalist","best4","best8","best16","best32","best64"].map(value=>{

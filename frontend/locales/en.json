@@ -1,4 +1,6 @@
 {
+  "teamMeaning.adopters": "Players: {count}",
+  "teamMeaning.registrations": "Registrations: {count}",
   "site.title": "NIKKE Arena Analyzer",
   "site.description": "A fan site for exploring Champion Arena statistics",
   "nav.aria": "Site navigation",

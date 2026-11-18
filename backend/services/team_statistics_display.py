@@ -122,6 +122,7 @@ def metadata(decks, matches, result_by_player, phase, tournaments, players):
         # If any set cannot be identified, its achievement is not replaced by
         # its commander's finish. Aggregate uncertainty remains explicit.
         composition = highest(values) if values and all(v is not None for v in values) and len(format_flags) == 1 else None
+        ceiling_rank = RESULT_ORDER['champion']
         # A known stage ceiling proves the aggregate maximum even if another
         # set is unknown; this does not invent a result for that unknown set.
         if composition is None and len(format_flags) == 1:
@@ -136,12 +137,14 @@ def metadata(decks, matches, result_by_player, phase, tournaments, players):
                 ceilings.append(RESULT_ORDER[ceiling])
             if known is not None and all(RESULT_ORDER[known] <= ceiling for ceiling in ceilings):
                 composition = known
+            ceiling_rank = min(ceilings, default=ceiling_rank)
         stages = {arena_phases.normalized_stage(tournaments[players_by_id[pid].tournament_id],
             arena_phases.stored_analysis_phase(tournaments[players_by_id[pid].tournament_id], phase)) for pid in pids}
         display_stage = next(iter(stages)) if len(stages) == 1 else None
         data[key] = {
             'registration_phase': display_stage,
             'composition_best_result': composition,
+            'composition_result_ceiling': RESULT_ORDER[composition] if composition else ceiling_rank,
             'commander_best_result': highest(result_by_player.get(pid) for pid in pids),
             'composition_result_status': 'known' if composition else 'undetermined',
             'usage_history': [{'stage': stage, 'round_count': count} for stage, count in sorted(history[key].items())],
@@ -156,7 +159,8 @@ def metadata(decks, matches, result_by_player, phase, tournaments, players):
 def annotate(teams, by_canonical, phase):
     for team in teams:
         data = by_canonical.get(team.get('canonical_id'), {})
-        team.update({k: v for k, v in data.items() if k not in ('position_commander_results', 'position_composition_results')})
+        team.update({k: v for k, v in data.items() if k not in (
+            'position_commander_results', 'position_composition_results', 'composition_result_ceiling')})
         team.setdefault('registration_phase', phase)
         team.setdefault('composition_best_result', None)
         team.setdefault('commander_best_result', result_code(team.get('best_result')))

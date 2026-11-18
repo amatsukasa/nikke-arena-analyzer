@@ -247,7 +247,7 @@ from services.champion_result import normalize_champion_result
 from services import arena_phases
 from services.champion_publication import validate_champion_publication
 from copy import deepcopy
-from services import cross_analytics, team_statistics_display
+from services import composition_analytics, cross_analytics, team_statistics_display
 from services.champion_snapshot import enrich_champion_snapshot_stats
 from services.tournament_results import (
     RESULT_SCORES as TOURNAMENT_RESULT_SCORES,
@@ -6373,6 +6373,10 @@ class CrossTournamentTeamsRequest(CrossAnalysisPhaseRequest):
     limit: Optional[int] = 10
     offset: Optional[int] = 0
     sort_by: Optional[str] = None
+    sort_order: Literal["asc", "desc"] = "desc"
+    provider_game_start_date: Optional[date_type] = None
+    detail_team: Optional[str] = None
+    character_usage: bool = False
     min_matches: Optional[int] = None
     min_usage: Optional[int] = None
     min_win_rate: Optional[float] = None
@@ -6413,6 +6417,43 @@ def _composition_stage_stats(tournament_id, db, current_user, seed, stage):
         f"private-composition-stage-v1:{seed}", compute)
 
 
+def _composition_tournament_ids(db, request):
+    query = db.query(models.Tournament.id).filter(
+        models.Tournament.publication_status == "published", models.Tournament.has_match_data.is_(True))
+    if request.tournament_ids:
+        query = query.filter(models.Tournament.id.in_(request.tournament_ids))
+    elif not (request.play_server and request.championship_id):
+        return []
+    if request.play_server:
+        query = query.filter(models.Tournament.creator.has(models.AppUser.play_server == request.play_server))
+    if request.championship_id:
+        query = query.filter(models.Tournament.championship_id == request.championship_id)
+    if request.provider_game_start_date:
+        query = query.filter(models.Tournament.provider_game_start_date == request.provider_game_start_date)
+    if request.registration_scope != "all":
+        query = query.filter(models.Tournament.registration_scope == request.registration_scope)
+    return [tid for (tid,) in query.order_by(models.Tournament.id)]
+
+
+def _select_composition_cards(teams, included, excluded, min_matches, min_usage, min_win_rate,
+                              best_result, commander_result, sort_by, sort_order, offset, limit):
+    matches = _filter_teams_by_character_conditions(teams, included, excluded)
+    matches = [team for team in matches if team["total_matches"] >= (min_matches or 0)
+               and team["count"] >= (min_usage or 0)
+               and (team["win_rate"] or 0) >= (min_win_rate or 0)]
+    matches = team_statistics_display.filter_highest(matches, best_result, commander_result)
+    matches.sort(key=lambda team: (-team["count"], team["canonical_id"]))
+    reverse = sort_order == "desc"
+    if sort_by == "win_rate":
+        matches.sort(key=lambda team: team["win_rate"] if team["win_rate"] is not None else -1, reverse=reverse)
+    elif sort_by == "composition_best_result":
+        matches.sort(key=lambda team: team_statistics_display.RESULT_ORDER.get(team["composition_best_result"], 999),
+                     reverse=not reverse)
+    elif sort_by in ("usage", "count") and not reverse:
+        matches.sort(key=lambda team: team["count"])
+    return {"teams": matches[offset:offset + limit], "total": len(matches)}
+
+
 @app.get("/api/tournaments/{tournament_id}/dashboard/teams")
 def get_dashboard_teams(
     tournament_id: int,
@@ -6431,71 +6472,26 @@ def get_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
     registration_phase: str = "initial",
+    sort_order: Literal["asc", "desc"] = "desc",
+    detail_team: Optional[str] = None,
+    character_usage: bool = False,
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
-    registration_phase = (arena_phases.canonical_analysis_stage(registration_phase)
-        if tournament.deck_registration_phases else "legacy" if registration_phase in ("initial", "all") else registration_phase)
-    if registration_phase in ("league", "championship") and not arena_phases.analysis_applicable(tournament, registration_phase):
-        return {"teams": [], "total": 0}
-    if registration_phase != "all":
-        arena_phases.validate_analysis_phase(tournament, registration_phase)
-    params = {
-        "registration_phase": registration_phase,
-        "seed": seed,
-        "limit": limit,
-        "offset": offset,
-        "character_ids": character_ids,
-        "excluded_character_ids": excluded_character_ids,
-        "sort_by": sort_by,
-        "min_matches": min_matches,
-        "min_usage": min_usage,
-        "min_win_rate": min_win_rate,
-        "best_result": best_result,
-        "composition_best_result": composition_best_result,
-        "commander_best_result": commander_best_result,
-    }
-    cached = get_private_dashboard_cache(tournament, "teams", params)
-    if cached is not None:
-        return cached
-    # スナップショット優先（なければ既存集計にフォールバック）
-    snap = db.query(models.TournamentSnapshot).filter(
-        models.TournamentSnapshot.tournament_id == tournament_id
-    ).first()
-    if db.query(models.Tournament).filter_by(id=tournament_id).one().deck_registration_phases:
-        snap = None
-    if registration_phase == "all":
-        stages = [stage for stage in arena_phases.ANALYSIS_STAGES if arena_phases.analysis_applicable(tournament, stage)] if tournament.deck_registration_phases else ["legacy"]
-        teams = [row for stage in stages for row in _composition_stage_stats(tournament_id, db, current_user, seed, stage).get("team_usage", [])]
-    elif snap is not None:
-        teams = team_statistics_display.annotate(deepcopy(snap.team_usage or []),
-            _team_display_metadata([tournament_id], db, registration_phase), registration_phase)
-    else:
-        stats = _composition_stage_stats(tournament_id, db, current_user, seed, registration_phase)
-        teams = stats.get("team_usage", [])
-    
+    phase = (arena_phases.normalized_stage(tournament, "initial") if registration_phase == "initial"
+             else arena_phases.canonical_analysis_stage(registration_phase))
+    if phase not in ("all", *composition_analytics.STAGES):
+        arena_phases.validate_analysis_phase(tournament, phase)
+    data = composition_analytics.load(db, [tournament_id], seed)
+    if character_usage:
+        return {"character_usage": data["character_usage"]}
+    teams = data["teams"].get(phase, [])
+    if detail_team is not None:
+        return composition_analytics.details(data, teams, phase, detail_team)
     included_ids = [int(value) for value in character_ids.split(",") if value.isdigit()] if character_ids else []
     excluded_ids = [int(value) for value in excluded_character_ids.split(",") if value.isdigit()] if excluded_character_ids else []
-    teams = _filter_teams_by_character_conditions(teams, included_ids, excluded_ids)
-
-    if min_matches > 0:
-        teams = [t for t in teams if t.get("total_matches", 0) >= min_matches]
-    if min_usage > 0:
-        teams = [t for t in teams if t.get("count", 0) >= min_usage]
-    if min_win_rate > 0:
-        teams = [t for t in teams if (t.get("win_rate") or 0) >= min_win_rate]
-    teams = team_statistics_display.filter_highest(teams, composition_best_result, commander_best_result or best_result)
-
-    if sort_by == "win_rate":
-        teams.sort(key=lambda x: (x.get("win_rate") if x.get("win_rate") is not None else -1), reverse=True)
-    elif sort_by == "composition_best_result":
-        teams.sort(key=lambda row: team_statistics_display.RESULT_ORDER.get(team_statistics_display.result_code(row.get("composition_best_result")), 999))
-    elif sort_by in ("usage", "count"):
-        teams.sort(key=lambda x: x.get("count", 0), reverse=True)
-        
-    return set_private_dashboard_cache(tournament, "teams", {
-        "teams": teams[offset: offset + limit],
-        "total": len(teams)
-    }, params)
+    return _select_composition_cards(teams, included_ids, excluded_ids, min_matches, min_usage,
+        min_win_rate, composition_best_result, commander_best_result or best_result,
+        sort_by, sort_order, offset, limit)
 
 
 @app.post("/api/dashboard/cross-tournament/teams")
@@ -6504,36 +6500,18 @@ def get_cross_dashboard_teams(
     db: Session = Depends(get_db),
     current_user: Optional[models.AppUser] = Depends(auth_module.get_current_user_optional),
 ):
-    tournament_ids = _cross_target_ids(req, db)
-    stats = _cross_aggregate(tournament_ids, db, req.registration_phase)
-    teams = stats.get("team_usage", [])
-    teams = _filter_teams_by_character_conditions(
-        teams,
-        req.character_ids,
-        req.excluded_character_ids,
-    )
-
-    if req.min_matches is not None and req.min_matches > 0:
-        teams = [t for t in teams if t.get("total_matches", 0) >= req.min_matches]
-    if req.min_usage is not None:
-        teams = [t for t in teams if t.get("count", 0) >= req.min_usage]
-    if req.min_win_rate is not None:
-        teams = [t for t in teams if (t.get("win_rate") or 0) >= req.min_win_rate]
-    teams = team_statistics_display.filter_highest(teams, req.composition_best_result, req.commander_best_result or req.best_result)
-
-    if req.sort_by == "win_rate":
-        teams.sort(key=lambda x: x.get("win_rate") if x.get("win_rate") is not None else -1, reverse=True)
-    elif req.sort_by == "composition_best_result":
-        teams.sort(key=lambda row: team_statistics_display.RESULT_ORDER.get(team_statistics_display.result_code(row.get("composition_best_result")), 999))
-    elif req.sort_by in ("usage", "count"):
-        teams.sort(key=lambda x: x.get("count", 0), reverse=True)
-        
-    limit = req.limit or 10
-    offset = req.offset or 0
-    return {
-        "teams": teams[offset: offset + limit],
-        "total": len(teams)
-    }
+    ids = _composition_tournament_ids(db, req)
+    data = composition_analytics.load(db, ids, req.seed)
+    if req.character_usage:
+        return {"character_usage": data["character_usage"]}
+    phase = req.registration_phase
+    teams = data["teams"].get(phase, [])
+    if req.detail_team is not None:
+        return composition_analytics.details(data, teams, phase, req.detail_team)
+    return _select_composition_cards(teams, req.character_ids, req.excluded_character_ids,
+        req.min_matches, req.min_usage, req.min_win_rate, req.composition_best_result,
+        req.commander_best_result or req.best_result, req.sort_by, req.sort_order,
+        req.offset or 0, req.limit or 10)
 
 
 @app.post("/api/dashboard/cross-tournament/character-detail")

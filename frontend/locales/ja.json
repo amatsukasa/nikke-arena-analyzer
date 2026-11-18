@@ -1,4 +1,6 @@
 {
+  "teamMeaning.adopters": "採用{count}人",
+  "teamMeaning.registrations": "登録{count}回",
   "site.title": "にけあり！ | NIKKE Arena Analyzer",
   "site.description": "チャンピオンアリーナがもっと楽しくなるファンサイト",
   "nav.aria": "サイト共通ナビゲーション",

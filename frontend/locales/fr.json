@@ -1,4 +1,6 @@
 {
+  "teamMeaning.adopters": "Joueurs : {count}",
+  "teamMeaning.registrations": "Inscriptions : {count}",
   "site.title": "Analyseur d’arène NIKKE",
   "site.description": "Un site communautaire pour explorer les statistiques de l’Arène des champions",
   "nav.aria": "Navigation du site",
