@@ -94,6 +94,24 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         self.assertIsNone(self.revision.defender_registration_id)
         self.assert_achievement("best64")
 
+    def correct_legacy_registration(self, player_id):
+        teams = arena_phases.legacy_teams(self.db.get(models.Player, player_id), self.db)
+        teams[1]["characters"].reverse()
+        self.tournament.publication_status = "draft"
+        self.db.commit()
+        response = self.client.post(f"/api/tournaments/{self.tournament.id}/teams",
+                                    json={"seed_number": 2, "teams": teams})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.tournament.publication_status = "published"
+        self.db.commit()
+
+    def test_correction_links_a_saved_snapshot_of_a_legacy_registration(self):
+        self.assertIsNone(self.revision.defender_registration_id)
+        self.correct_legacy_registration(self.revision.defender_id)
+        self.db.refresh(self.revision)
+        self.assertIsNotNone(self.revision.defender_registration_id)
+        self.assert_achievement("best64")
+
     def test_slot_order_collection_and_missing_collection_do_not_match(self):
         original = deepcopy(self.revision.defender_teams)
         for change in ("slot_order", "collection", "missing_collection", "character", "team_number", "missing_team"):
@@ -127,6 +145,7 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         self.assert_achievement(None)
 
     def test_unversioned_match_does_not_prove_deck_identity(self):
+        defender_id = self.revision.defender_id
         match = models.Match(tournament_id=self.tournament.id, stage="Best 64",
                              attacker_id=self.revision.attacker_id, defender_id=self.revision.defender_id,
                              winner_id=self.revision.winner_id)
@@ -136,4 +155,7 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
             self.db.add(models.RoundResult(match_id=match.id, round_number=number, winner_id=winner_id))
         self.db.delete(self.revision)
         self.db.commit()
+        self.assert_achievement(None)
+        self.correct_legacy_registration(defender_id)
+        self.assertEqual(self.db.query(models.ArenaMatchRevision).count(), 0)
         self.assert_achievement(None)

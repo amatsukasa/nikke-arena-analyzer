@@ -1,4 +1,5 @@
 """Composition API parity, exact adoption counts, and weighted round history."""
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 import sys
@@ -31,7 +32,7 @@ def seed_compositions(db, password):
     db.flush()
 
     def teams(groups, reverse=False):
-        return [{"team_number": i, "characters": [{"id": cid, "collection_level": "SR 10" if reverse else None}
+        return [{"team_number": i, "characters": [{"id": cid, "collection_level": "sr_0_14" if reverse else None}
                 for cid in (reversed(group) if reverse else group)]} for i, group in enumerate(groups, 1)]
 
     groups = [list(range(n, n + 5)) for n in range(1, 81, 5)]
@@ -235,3 +236,73 @@ class CompositionAnalyticsTest(unittest.TestCase):
             "tournament_ids": [self.full], "registration_phase": "all"})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(set(response.json()["by_phase"]), {"legacy", "league", "championship", "final"})
+
+
+class Full64RegistrationCorrectionTest(unittest.TestCase):
+    def setUp(self):
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        self.db = SessionLocal()
+        self.addCleanup(self.db.close)
+        self.client = TestClient(main.app)
+        self.addCleanup(self.client.close)
+        password = uuid4().hex
+        owner, self.full, self.eight, _, _ = seed_compositions(self.db, password)
+        self.full.publication_status = self.eight.publication_status = "draft"
+        self.db.commit()
+        login = self.client.post("/api/auth/login", json={"email": owner.email, "password": password})
+        self.assertEqual(login.status_code, 200, login.text)
+
+    def arena_state(self, tournament):
+        response = self.client.get(f"/api/tournaments/{tournament.id}/arena-phases")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def correct(self, tournament, seed, phase, expected_matches):
+        before = self.arena_state(tournament)
+        player_id = next(p["id"] for p in before["players"] if p["seed_number"] == seed)
+        current = next(row for row in before["registrations"] if row["phase"] == phase and row["player_id"] == player_id)
+        corrected = deepcopy(current["teams"])
+        corrected[0]["characters"].reverse()
+        corrected[0]["characters"][0]["collection_level"] = "sr_15"
+        if phase == "initial" and tournament.registration_scope == "full_64":
+            result = self.client.post(f"/api/tournaments/{tournament.id}/teams",
+                                      json={"seed_number": seed, "teams": corrected})
+        else:
+            result = self.client.put(f"/api/tournaments/{tournament.id}/arena-phases/players/{player_id}/{phase}",
+                json={"revision_id": current["revision_id"], "qualification": current["qualification"], "teams": corrected})
+        self.assertEqual(result.status_code, 200, result.text)
+        after = self.arena_state(tournament)
+        updated = next(row for row in after["registrations"] if row["phase"] == phase and row["player_id"] == player_id)
+        self.assertNotEqual(current["revision_id"], updated["revision_id"])
+        self.assertEqual(updated["teams"], corrected)
+        self.assertEqual(len(before["matches"]), len(after["matches"]))
+        changed = 0
+        for old, new in zip(before["matches"], after["matches"]):
+            expected = deepcopy(old)
+            if (expected_matches and old["result_phase"] == phase and old["revision_id"] is not None
+                    and player_id in old["result_participants"]):
+                side = old["result_participants"].index(player_id)
+                expected["result_registration_ids"][side] = updated["revision_id"]
+                expected["result_teams"][side] = corrected
+                changed += 1
+            for field in ("key", "revision_id", "legacy_match_id", "upstream", "advancement", "rounds",
+                          "winner_id", "status", "result_participants", "result_registration_ids", "result_teams"):
+                self.assertEqual(expected[field], new[field], (phase, old["key"], field))
+        self.assertEqual(changed, expected_matches)
+        return player_id
+
+    def test_full64_corrections_keep_other_results_and_bracket_valid(self):
+        for phase, stage, count, expected in (("initial", "league", 3, "qualified_best8"),
+                ("best8", "championship", 2, "finalist"), ("final", "final", 1, "runner_up")):
+            with self.subTest(phase=phase):
+                self.correct(self.full, 33, phase, count)
+                response = self.client.get(f"/api/tournaments/{self.full.id}/dashboard/teams",
+                                           params={"seed": 33, "registration_phase": stage, "limit": 20})
+                self.assertEqual(response.status_code, 200, response.text)
+                target = "11,12,13,14,15" if phase == "best8" else TARGET
+                card = next(row for row in response.json()["teams"] if row["canonical_id"] == target)
+                self.assertEqual(card["composition_best_result"], expected)
+
+    def test_champion8_registrations_keep_original_result_links(self):
+        self.correct(self.eight, 5, "initial", 0)

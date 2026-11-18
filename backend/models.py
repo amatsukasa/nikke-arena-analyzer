@@ -324,7 +324,7 @@ class ArenaDeckRegistration(Base):
 
 
 class ArenaMatchRevision(Base):
-    """Immutable result and exact deck snapshots, including original legacy results."""
+    """Versioned results and deck snapshots, with same-phase full64 deck corrections."""
     __tablename__ = "arena_match_revisions"
     id = Column(Integer, primary_key=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False, index=True)

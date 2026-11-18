@@ -1,4 +1,4 @@
-"""Append-only official-arena registration, progression and phase-separated statistics.
+"""Versioned official-arena registration, progression and phase-separated statistics.
 
 Legacy tables are read only here. No migration/backfill of season-one data is required.
 Every write is serialized on the tournament row, including eligibility rechecks.
@@ -314,7 +314,7 @@ def validate_teams(teams, db):
 
 
 def save_registration(tournament, player_id, phase, payload, db, *, commit=True):
-    _, _, qualifications, _ = context(tournament, db)
+    _, nodes, qualifications, current_registration = context(tournament, db)
     qualification = qualifications.get((player_id, phase))
     if qualification is None:
         raise HTTPException(409, "Player is not qualified for this registration phase")
@@ -324,8 +324,29 @@ def save_registration(tournament, player_id, phase, payload, db, *, commit=True)
     if payload.get("revision_id") != (latest.id if latest and latest.qualification == qualification else None):
         raise HTTPException(409, "Registration changed; reload before saving")
     teams = validate_teams(payload.get("teams"), db)
-    db.add(models.ArenaDeckRegistration(tournament_id=tournament.id, player_id=player_id, phase=phase, qualification=qualification, teams=teams))
+    previous_teams, _ = current_registration(player_id, phase)
+    registration = models.ArenaDeckRegistration(tournament_id=tournament.id, player_id=player_id,
+        phase=phase, qualification=qualification, teams=teams)
+    db.add(registration)
     db.flush()
+    if supported(tournament) and tournament.registration_scope == "full_64" and previous_teams:
+        # Use only active results with independently stored snapshots. Keep their
+        # IDs so the bracket and later registration qualifications stay valid.
+        revision_ids = {node["revision_id"] for node in nodes.values()
+            if node["revision_id"] is not None and node["result_phase"] == phase
+            and player_id in node["result_participants"]}
+        if revision_ids:
+            results = db.query(models.ArenaMatchRevision).filter(
+                models.ArenaMatchRevision.tournament_id == tournament.id,
+                models.ArenaMatchRevision.id.in_(revision_ids)).all()
+            for result in results:
+                if result.attacker_id == player_id:
+                    result.attacker_registration_id = registration.id
+                    result.attacker_teams = teams
+                else:
+                    result.defender_registration_id = registration.id
+                    result.defender_teams = teams
+            db.flush()
     if commit:
         db.commit()
     return state(tournament, db)
