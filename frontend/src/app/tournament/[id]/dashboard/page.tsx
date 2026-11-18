@@ -157,7 +157,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   }, [selectedSeed, activeTab]);
 
   const [tournamentId, setTournamentId] = useState<number | null>(null);
-  const analysisKey = tournamentId ? `tournament|${tournamentId}|${registrationPhase}` : null;
+  const analysisKey = tournamentId ? `tournament|${tournamentId}` : null;
   useResetSynergyOnAnalysisChange(analysisKey, () => {
     setIncludedCharacterIds([]);
     setExcludedCharacterIds([]);

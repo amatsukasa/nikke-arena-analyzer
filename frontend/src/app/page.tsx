@@ -248,7 +248,7 @@ function DashboardContent() {
   const selectedChampionshipId = seasonTournaments[0]?.championship_id;
   const hasSelectedFormal = allTournaments.some(item=>selectedTournamentIds.includes(item.id) && Boolean(item.deck_registration_phases));
   const analysisKey = allTournaments.length > 0 && selectedChampionshipId && selectedTournamentIds.length > 0
-    ? [registrationPhase, filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
+    ? [filterServer, filterSeason, selectedChampionshipId, [...selectedTournamentIds].sort((a, b) => a - b).join(",")].join("|")
     : null;
   useResetSynergyOnAnalysisChange(analysisKey, () => {
     setIncludedCharacterIds([]);
