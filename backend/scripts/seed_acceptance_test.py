@@ -96,6 +96,7 @@ def seed() -> None:
         db.flush()
 
         championship = models.Championship(
+            deck_registration_phases=False, is_champion_arena=True, include_in_statistics=True,
             name="2026 Acceptance Championship",
             date=date(2026, 9, 17),
             start_date=date(2026, 9, 17),
@@ -116,8 +117,6 @@ def seed() -> None:
             provider_game_start_date=date(2022, 11, 4),
             game_start_date=date(2022, 11, 4),
             display_order=1,
-            is_champion_arena=True,
-            has_match_data=True,
             created_by=admin.id,
         )
         db.add(tournament)

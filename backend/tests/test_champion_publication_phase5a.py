@@ -252,7 +252,9 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
         self.assertEqual(result["counts"]["players"], 9)
         self.assertIn("unexpected_unslotted_players", self._codes(result))
         self.db.delete(ninth); self.db.commit()
-        self.db.delete(self.players[-1]); self.db.commit()
+        # Simulate a missing participant without orphaning existing match FKs.
+        self.players[-1].tournament_id = None
+        self.db.commit()
         result = self._validate()
         self.assertEqual(result["counts"]["players"], 7)
         self.assertFalse(result["can_publish"])
@@ -267,11 +269,20 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
     def test_team_unknown_character_and_player_character_duplicate_are_rejected(self):
         deck_set = self.players[0].deck_sets[0]
         team = deck_set.teams[0]
+        # Keep persisted FKs valid, then simulate a missing catalog entry at read time.
+        self.db.add(models.Character(id=9998, name="Legacy catalog entry"))
         team.char1_id = 9998
         team.char2_id = team.char3_id
         team.char4_id = None
         self.db.commit()
-        result = self._validate()
+        original_query = self.db.query
+        def without_legacy_catalog_entry(*entities):
+            query = original_query(*entities)
+            if len(entities) == 1 and entities[0] is models.Character.id:
+                query = query.filter(models.Character.id != 9998)
+            return query
+        with patch.object(self.db, "query", side_effect=without_legacy_catalog_entry):
+            result = self._validate()
         self.assertIn("unknown_characters", self._codes(result))
         self.assertIn("duplicate_player_characters", self._codes(result))
         self.assertIn("unresolved_team_characters", self._codes(result))
@@ -426,7 +437,7 @@ class ChampionPublicationPhase5ATest(unittest.TestCase):
             self.tournament.id, fake_db, self.owner
         )
         query.populate_existing.assert_called_once_with()
-        query.with_for_update.assert_called_once_with()
+        query.with_for_update.assert_called_once_with(of=models.Tournament)
         self.assertIs(locked, latest)
         with self.assertRaises(HTTPException) as raised:
             main.require_unpublished_champion_edit(locked)

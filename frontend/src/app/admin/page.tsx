@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useI18n } from "@/i18n/I18nProvider";
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
-import ChampionArenaMastersAdmin from '../../components/admin/ChampionArenaMastersAdmin';
+
 
 interface User {
   id: number;
@@ -31,6 +32,9 @@ interface AdminCharacter {
   is_arena_relevant: boolean;
 }
 
+const TITLE_SETTINGS = ["deck_registration_phases", "is_champion_arena", "include_in_statistics"] as const;
+type TitleSetting = typeof TITLE_SETTINGS[number];
+const titleSettingLabels: Record<TitleSetting,string> = {deck_registration_phases:"arenaPhases.enable", is_champion_arena:"titleSettings.arenaTarget", include_in_statistics:"titleSettings.hasMatchData"};
 const CHARACTER_PAGE_SIZE = 30;
 
 function AdminCharacterIcon({ character }: { character: AdminCharacter }) {
@@ -51,6 +55,7 @@ function AdminCharacterIcon({ character }: { character: AdminCharacter }) {
 }
 
 export default function AdminPage() {
+  const {t}=useI18n();
   const { user: currentUser, token, isLoading, apiFetch } = useAuth();
   const router = useRouter();
 
@@ -85,6 +90,9 @@ export default function AdminPage() {
   const [editingChampId, setEditingChampId] = useState<number | null>(null);
   const [formChampName, setFormChampName] = useState('');
   const [formChampDate, setFormChampDate] = useState('');
+  const [formChampOrder, setFormChampOrder] = useState('');
+  const [formTitleSettings,setFormTitleSettings]=useState<Record<TitleSetting,boolean|null>>({deck_registration_phases:false,is_champion_arena:false,include_in_statistics:true});
+  const [editingTitleSettings,setEditingTitleSettings]=useState<any>(null);
 
   // 共通エラー・メッセージ
   const [error, setError] = useState('');
@@ -149,7 +157,8 @@ export default function AdminPage() {
   const fetchChampionships = async () => {
     setChampsLoading(true);
     try {
-      const response = await fetch('/api/championships');
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await apiFetch(`${apiUrl}/api/admin/championships`,{cache:"no-store"});
       if (!response.ok) {
         throw new Error('大会タイトル一覧の取得に失敗しました。');
       }
@@ -169,11 +178,19 @@ export default function AdminPage() {
     setModalError('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+    if (TITLE_SETTINGS.some(key=>formTitleSettings[key]===null)) {
+      setModalError(t("titleSettings.resolveConflict"));
+      return;
+    }
+    const requiresApply = (editingTitleSettings?.linked_tournaments??[]).some((row:any)=>TITLE_SETTINGS.some(key=>row[key]!==formTitleSettings[key]));
+    if (requiresApply && !window.confirm(t("titleSettings.confirmApply",{count:editingTitleSettings.linked_tournaments.length}))) return;
     const payload = {
       name: formChampName.trim(),
       date: formChampDate ? formChampDate : null,
-      start_date: null,
-      owner_name: null
+      display_order: formChampOrder === "" ? null : Number(formChampOrder),
+      ...formTitleSettings,
+      apply_to_existing: requiresApply,
+      ...(editingTitleSettings?{settings_revision:editingTitleSettings.settings_revision}:{})
     };
 
     try {
@@ -241,12 +258,18 @@ export default function AdminPage() {
     setModalError('');
     if (mode === 'edit' && champ) {
       setEditingChampId(champ.id);
+      setEditingTitleSettings(champ);
+      setFormTitleSettings({deck_registration_phases:champ.deck_registration_phases, is_champion_arena:champ.is_champion_arena, include_in_statistics:champ.include_in_statistics});
       setFormChampName(champ.name);
       setFormChampDate(champ.date ? champ.date.split('T')[0] : '');
+      setFormChampOrder(champ.display_order == null ? '' : String(champ.display_order));
     } else {
       setEditingChampId(null);
+      setEditingTitleSettings(null);
+      setFormTitleSettings({deck_registration_phases:false,is_champion_arena:false,include_in_statistics:true});
       setFormChampName('');
       setFormChampDate(new Date().toISOString().split('T')[0]);
+      setFormChampOrder('');
     }
     setIsChampModalOpen(true);
   };
@@ -928,7 +951,7 @@ export default function AdminPage() {
               </table>
             </div>
           )}
-          <ChampionArenaMastersAdmin />
+
         </div>
       )}
 
@@ -986,6 +1009,25 @@ export default function AdminPage() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
                 />
               </div>
+
+              <label className="block text-sm font-semibold text-slate-300">
+                {t("titleSettings.order")}
+                <input type="number" step="1" value={formChampOrder} onChange={event=>setFormChampOrder(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-2 text-sm" />
+                <span className="mt-1 block text-xs text-slate-400">{t("titleSettings.orderHint")}</span>
+              </label>
+              <fieldset className="space-y-3 rounded-lg border border-slate-700 p-4">
+                <legend className="px-1 text-sm font-semibold">{t("titleSettings.heading")}</legend>
+                {TITLE_SETTINGS.map(key=><label key={key} className="flex items-start gap-2 text-sm text-slate-300">
+                  <input type="checkbox" className="mt-1" checked={formTitleSettings[key]===true} ref={element=>{if(element)element.indeterminate=formTitleSettings[key]===null;}} onChange={event=>setFormTitleSettings(previous=>({...previous,[key]:event.target.checked}))}/>
+                  <span>{t(titleSettingLabels[key])}{formTitleSettings[key]===null&&<span className="block text-amber-300">{t("titleSettings.resolveConflict")}</span>}</span>
+                </label>)}
+                <p className="text-xs text-slate-400">{t("titleSettings.scope")}</p>
+                {Boolean(editingTitleSettings?.configuration_conflicts?.length)&&<div className="space-y-2 text-xs text-amber-300">
+                  <p>{t("titleSettings.conflictNotice")}</p>
+                  {editingTitleSettings.linked_tournaments.map((row:any)=><div key={row.id} className="rounded bg-slate-800 p-2">#{row.id} {row.title}<ul>{TITLE_SETTINGS.map(key=><li key={key}>{t(titleSettingLabels[key])}: {row[key]===null?"—":row[key]?"ON":"OFF"}</li>)}</ul></div>)}
+                </div>}
+                {!editingTitleSettings?.configuration_conflicts?.length&&Boolean(editingTitleSettings?.inherited_settings?.length)&&<p className="text-xs text-amber-300">{t("titleSettings.legacyNotice")}</p>}
+              </fieldset>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
                 <button

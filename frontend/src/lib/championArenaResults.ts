@@ -1,4 +1,4 @@
-export const CHAMPION_ARENA_STORAGE_KEY = "nikkeari_user_data_v1";
+export const CHAMPION_ARENA_STORAGE_KEY = "nikkeari_championship_results_v1";
 
 export const arenaResultLabels = {
   not_entered: "未入力", not_participated: "未出場", unknown: "不明",
@@ -8,7 +8,7 @@ export const arenaResultLabels = {
 } as const;
 
 export type ArenaResult = keyof typeof arenaResultLabels;
-export type ArenaTournament = { id:number; title:string; display_order:number|null; game_start_date:string|null };
+export type ArenaTournament = { id:number|string; title:string; display_order:number|null; event_date?:string|null; source?:"championship"|"legacy_tournament"; tournament_id?:number|null };
 export type StoredArenaResult = { result:ArenaResult; titleSnapshot:string };
 export type UserDataV1 = { version:1; championArena:{ results:Record<string, StoredArenaResult> } };
 
@@ -26,8 +26,8 @@ export function loadUserData(storage: Pick<Storage,"getItem">): UserDataV1 {
 export function compareArenaResults(left:ArenaResult, right:ArenaResult) { return ranked.indexOf(left) - ranked.indexOf(right); }
 export function calculateChampionArenaStats(tournaments:ArenaTournament[], results:Record<string,StoredArenaResult>) {
   const ordered = [...tournaments].sort((a,b)=>(b.display_order ?? -Infinity)-(a.display_order ?? -Infinity)
-    || (b.game_start_date ? Date.parse(b.game_start_date) : -Infinity) - (a.game_start_date ? Date.parse(a.game_start_date) : -Infinity)
-    || b.id-a.id);
+    || (b.event_date ? Date.parse(b.event_date) : -Infinity) - (a.event_date ? Date.parse(a.event_date) : -Infinity)
+    || String(b.id).localeCompare(String(a.id), undefined, {numeric:true}));
   const entries = ordered.map(tournament=>({ tournament, result:results[String(tournament.id)]?.result ?? "not_entered" as ArenaResult }));
   const appearances = entries.filter(entry=>participated.has(entry.result));
   const known = appearances.filter(entry=>ranked.includes(entry.result));

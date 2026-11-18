@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 // @ts-expect-error Node test runtime requires the explicit extension.
-import { calculateChampionArenaStats, loadUserData, type StoredArenaResult } from "../src/lib/championArenaResults.ts";
+import { calculateChampionArenaStats, loadUserData, CHAMPION_ARENA_STORAGE_KEY, type StoredArenaResult } from "../src/lib/championArenaResults.ts";
 
 const tournaments=[
   {id:3,title:"Season 1",display_order:3,game_start_date:null},
@@ -38,4 +38,19 @@ test("orders explicit display order before null and uses date fallback",()=>{
   results["37"].result="not_participated";
   results["36"].result="not_participated";
   assert.equal(calculateChampionArenaStats(ordered,results).latest?.tournament.id,2);
+});
+
+
+test("title result keys cannot collide with numeric legacy tournament IDs",()=>{
+  const event={id:"championship:1",title:"Title",display_order:null,game_start_date:"2026-11-17"};
+  assert.equal(calculateChampionArenaStats([event],{"1":{result:"champion",titleSnapshot:"Legacy"}}).appearanceCount,0);
+  assert.equal(calculateChampionArenaStats([event],{"championship:1":{result:"best8",titleSnapshot:"Title"}}).appearanceCount,1);
+});
+
+test("new title storage does not read legacy result storage",()=>{
+  const requested:string[]=[];
+  const data=loadUserData({getItem:(key)=>{requested.push(key);return key==="nikkeari_user_data_v1"?JSON.stringify({version:1,championArena:{results:{"1":{result:"champion",titleSnapshot:"Legacy"}}}}):null;}});
+  assert.deepEqual(requested,[CHAMPION_ARENA_STORAGE_KEY]);
+  assert.equal(CHAMPION_ARENA_STORAGE_KEY,"nikkeari_championship_results_v1");
+  assert.deepEqual(data.championArena.results,{});
 });

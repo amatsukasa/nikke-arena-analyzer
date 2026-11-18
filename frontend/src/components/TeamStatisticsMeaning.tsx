@@ -37,6 +37,12 @@ export function CompositionResultBadge({team}: {team:TeamMeaning}) {
   );
 }
 
+export function CommanderResultBadge({team}: {team:TeamMeaning}) {
+  const {t}=useI18n();
+  const result=team.commander_best_result ?? team.best_result;
+  return <span className={`inline-block rounded-full px-3 py-1 text-sm font-extrabold ring-1 ${tournamentResultClass(result)}`}>{result ? localizedTournamentResult(result,t) : "—"}</span>;
+}
+
 export function TeamRegistrationUsage({ team }: { team: TeamMeaning }) {
   return <div className="mt-2 text-xs font-semibold text-blue-300"><RegistrationPhaseLabel phase={team.registration_phase}/></div>;
 }

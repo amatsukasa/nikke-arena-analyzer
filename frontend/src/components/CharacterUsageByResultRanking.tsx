@@ -1,20 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { Users } from "lucide-react";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { useI18n } from "@/i18n/I18nProvider";
-
-const RESULT_FILTERS = [
-  { key: "all", label: "common.all" },
-  { key: "best16", label: "result.best16" },
-  { key: "best8", label: "result.best8" },
-  { key: "best4", label: "result.semifinal" },
-  { key: "runner_up", label: "result.runnerUp" },
-  { key: "champion", label: "result.champion" },
-] as const;
-
-type ResultFilterKey = (typeof RESULT_FILTERS)[number]["key"];
 
 type Props = {
   stats: any;
@@ -28,11 +16,9 @@ export default function CharacterUsageByResultRanking({
   onSelectCharacter,
 }: Props) {
   const { t } = useI18n();
-  const [resultFilter, setResultFilter] = useState<ResultFilterKey>("best8");
-  const selected = stats?.character_usage_by_result?.[resultFilter];
+  const selected = stats?.character_usage_by_result?.all;
   const denominator = selected?.denominator ?? 0;
   const characters = selected?.characters ?? [];
-  const label = t(RESULT_FILTERS.find((filter) => filter.key === resultFilter)?.label ?? "common.all");
   const groups: Array<{
     count: number;
     usageRate: number;
@@ -62,24 +48,10 @@ export default function CharacterUsageByResultRanking({
         <div>
           <h2 className="flex items-center space-x-2 text-xl font-bold text-white">
             <Users className="text-blue-400" />
-            <span>{t('stats.characterPickRanking')}</span>
+            <span>{t('trends.characters')}</span>
           </h2>
-          <p className="mt-2 text-sm font-medium text-slate-300">
-            {t('stats.targetByResult', { result: label, count: denominator })}
-          </p>
+          <p className="mt-2 text-sm text-slate-300">{t('trends.population',{count:denominator})}</p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <span className="whitespace-nowrap">{t('stats.finalResult')}</span>
-          <select
-            value={resultFilter}
-            onChange={(event) => setResultFilter(event.target.value as ResultFilterKey)}
-            className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-white outline-none focus:border-blue-500"
-          >
-            {RESULT_FILTERS.map((filter) => (
-              <option key={filter.key} value={filter.key}>{t(filter.label)}</option>
-            ))}
-          </select>
-        </label>
       </div>
 
       <div className="overflow-hidden rounded-xl bg-slate-900/50 shadow-2xl ring-1 ring-white/10">

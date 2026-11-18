@@ -1,5 +1,5 @@
 "use client";
-import { CompositionBestResult, TeamBestResults, TeamRegistrationUsage } from "@/components/TeamStatisticsMeaning";
+import { CommanderResultBadge, TeamBestResults, TeamRegistrationUsage } from "@/components/TeamStatisticsMeaning";
 
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Users } from "lucide-react";
@@ -423,7 +423,7 @@ export default function CharacterDetailView({
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('team.position')}</th>
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.usageCount')}</th>
                   <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('stats.winRate')}</th>
-                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('teamMeaning.compositionBest')}</th>
+                  <th className="py-3 sm:py-4 px-2 sm:px-4 text-slate-400 font-bold text-xs sm:text-sm">{t('teamMeaning.commanderResults')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -452,7 +452,7 @@ export default function CharacterDetailView({
                         )}
                       </td>
                       <td className="py-3 sm:py-4 px-2 sm:px-4">
-                        {<CompositionBestResult team={ps}/>}
+                        {<CommanderResultBadge team={ps}/>}
                       </td>
                     </tr>
                   );

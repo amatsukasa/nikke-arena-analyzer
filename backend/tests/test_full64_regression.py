@@ -174,6 +174,17 @@ class Full64RegressionTest(unittest.TestCase):
         team = next(item for item in stats["team_usage"] if item["canonical_id"] == "1,2,3,4,5")
         return Counter(player["result"] for player in team["adopted_players"])
 
+    def test_trends_beta_rankings_share_the_result_population(self):
+        for finish in ("all", "best8", "champion"):
+            trends = main._trends_stats([self.tournament.id], self.db, "legacy", finish)
+            old = main._compute_character_usage_by_result([self.tournament.id], self.db, "initial")[finish]
+            self.assertEqual(trends["total_players"], old["denominator"])
+            self.assertEqual({r["id"]:r["count"] for r in trends["character_usage_by_result"]["all"]["characters"]}, {r["id"]:r["count"] for r in old["characters"]})
+            for team in trends["team_usage"]:
+                self.assertLessEqual(team["player_count"], trends["total_players"])
+                self.assertEqual(team["adoption_rate"], round(team["player_count"]/trends["total_players"]*100,1))
+        self.assertEqual(main._trends_stats([self.tournament.id], self.db, "championship", "all")["total_players"], 0)
+
     def test_fixture_matches_current_save_path_structural_contract(self):
         """Guard against a direct-to-DB fixture that current registration cannot represent."""
         players = self.db.query(models.Player).filter_by(tournament_id=self.tournament.id).all()
@@ -299,7 +310,7 @@ class Full64RegressionTest(unittest.TestCase):
         self.assertEqual((team_one["count"], team_one["win_count"], team_one["total_matches"], team_one["win_rate"]), (64, 63, 126, 50.0))
 
         player_stats = main.get_dashboard_player_stats(self.tournament.id, None, self.db, self.user)
-        self.assertEqual([player.seed_number for player in player_stats["players"]], list(range(1, 65)))
+        self.assertEqual([player["seed_number"] for player in player_stats["players"]], list(range(1, 65)))
 
     def test_current_publication_readiness_does_not_require_64_players_or_matches(self):
         full_readiness = main.get_publication_readiness(self.tournament, self.db)
@@ -347,7 +358,7 @@ class Full64RegressionTest(unittest.TestCase):
             self.assertEqual(direct[key], second[key])
 
         main.save_snapshot(self.tournament.id, direct, self.db)
-        snapshot_cross = main.get_cross_tournament_stats(main.CrossTournamentRequest(tournament_ids=[self.tournament.id]), self.db)
+        snapshot_cross = main.get_cross_tournament_stats(main.CrossTournamentRequest(tournament_ids=[self.tournament.id], registration_phase="legacy"), self.db)
         self.assertEqual((snapshot_cross["total_players"], snapshot_cross["total_matches"]), (64, 63))
         self.assertEqual(direct["character_usage_by_result"], snapshot_cross["character_usage_by_result"])
         self.assertEqual(
@@ -358,7 +369,7 @@ class Full64RegressionTest(unittest.TestCase):
         self.tournament.publication_status = "draft"
         self.db.commit()
         first_cached = main.get_dashboard_stats(self.tournament.id, None, self.db, self.user)
-        cache_key = main._dashboard_cache_key(self.tournament.id, "stats", {"seed": None})
+        cache_key = main._dashboard_cache_key(self.tournament.id, "stats", {"seed": None, "registration_phase": "legacy", "title_settings": (self.tournament.deck_registration_phases, self.tournament.is_champion_arena, self.tournament.has_match_data)})
         self.assertIn(cache_key, main._dashboard_cache)
         self.assertIs(main.get_dashboard_stats(self.tournament.id, None, self.db, self.user), first_cached)
         main.invalidate_dashboard_cache(self.tournament.id)
@@ -369,7 +380,7 @@ class Full64RegressionTest(unittest.TestCase):
     def test_raw_cross_tournament_stats_succeeds_without_snapshot(self):
         """Raw cross-tournament aggregation remains available without Snapshot."""
         result = main.get_cross_tournament_stats(
-            main.CrossTournamentRequest(tournament_ids=[self.tournament.id]),
+            main.CrossTournamentRequest(tournament_ids=[self.tournament.id], registration_phase="legacy"),
             self.db,
         )
         self.assertEqual((result["total_players"], result["total_matches"]), (64, 63))

@@ -220,8 +220,8 @@ class ChampionTeamsApiTest(unittest.TestCase):
         self.assertTrue(main.champion_player_has_complete_deck(self.player.id, self.db))
 
     def test_empty_slot_is_reserved_and_not_subject_to_normal_character_lookup(self):
-        self.db.query(models.Character).filter(models.Character.id == 9999).delete()
-        self.db.commit()
+        # The reserved sentinel must remain as the PostgreSQL foreign-key target.
+        self.assertIsNotNone(self.db.get(models.Character, 9999))
         data = self._payload().model_dump()
         data["teams"][0]["characters"][0]["id"] = 9999
         response = schemas.ChampionTeamsResponse.model_validate(

@@ -28,13 +28,45 @@ class ChampionshipBase(BaseModel):
     owner_name: Optional[str] = None
 
 class ChampionshipCreate(ChampionshipBase):
-    pass
+    display_order: Optional[int] = None
+    deck_registration_phases: Optional[bool] = None
+    is_champion_arena: Optional[bool] = None
+    include_in_statistics: Optional[bool] = None
+    settings_revision: Optional[str] = None
+    apply_to_existing: bool = False
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("deck_registration_phases", "is_champion_arena", "include_in_statistics")
+    @classmethod
+    def explicit_settings(cls, value):
+        if value is None:
+            raise ValueError("Select an explicit setting")
+        return value
 
 class ChampionshipResponse(ChampionshipBase):
     id: int
     created_at: datetime
     created_by: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
+
+class ChampionshipAdminResponse(ChampionshipResponse):
+    display_order: Optional[int] = None
+    deck_registration_phases: Optional[bool] = None
+    is_champion_arena: Optional[bool] = None
+    include_in_statistics: Optional[bool] = None
+    configuration_conflicts: List[str] = Field(default_factory=list)
+    inherited_settings: List[str] = Field(default_factory=list)
+    linked_tournaments: List[dict] = Field(default_factory=list)
+    settings_revision: str
+
+class ArenaResultEvent(BaseModel):
+    id: str
+    championship_id: Optional[int] = None
+    tournament_id: Optional[int] = None
+    source: Literal["championship", "legacy_tournament"] = "championship"
+    title: str
+    display_order: Optional[int] = None
+    event_date: Optional[date_type] = None  # Event date, never provider's game start date.
 
 class TournamentBase(BaseModel):
     name: str
