@@ -1,5 +1,5 @@
 "use client";
-import { CompositionBestResult, RegistrationPhaseLabel } from "@/components/TeamStatisticsMeaning";
+import { CompositionBestResult, TeamRegistrationUsage, TeamUsageCounts } from "@/components/TeamStatisticsMeaning";
 import { useState, useEffect, useRef } from "react";
 import TeamDisplay from "./TeamDisplay";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -185,24 +185,29 @@ export default function PaginatedTeamList({
   return (
     <div className="space-y-4">
       <div className="space-y-3">
-        {teams.map((team: any, idx: number) => {
+        {teams.map((team: any) => {
           const ids = team.character_ids || team.characters?.map((c:any)=>c.id) || [];
           const normalized = [...ids].map(Number).sort((a,b)=>a-b);
           const selected = selectedTeam && [team.canonical_id, normalized.join("-"), normalized.join(",")].includes(selectedTeam);
-          return <button type="button" key={`${team.registration_phase}-${team.canonical_id}-${idx}`} onClick={()=>onTeamClick(team.canonical_id,team)} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-4 rounded-xl p-4 text-left transition-colors ${selected ? "bg-slate-700/80 ring-1 ring-emerald-500" : "bg-slate-800/50 ring-1 ring-white/5 hover:bg-slate-700/60"}`}>
+          return <button type="button" key={team.canonical_id} onClick={()=>onTeamClick(team.canonical_id,team)} className={`flex w-full flex-wrap items-center gap-x-4 gap-y-4 rounded-xl p-4 text-left transition-colors ${selected ? "bg-slate-700/80 ring-1 ring-emerald-500" : "bg-slate-800/50 ring-1 ring-white/5 hover:bg-slate-700/60"}`}>
             <div className="min-w-0 max-w-full flex-1 basis-60 space-y-2">
               <TeamDisplay charIds={ids} allCharacters={allCharacters}/>
-              <div className="text-xs font-semibold text-blue-300"><RegistrationPhaseLabel phase={team.registration_phase}/></div>
+              <TeamRegistrationUsage team={team}/>
             </div>
-            <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_8rem] items-center gap-x-1 sm:w-auto sm:grid-cols-[8rem_10rem]">
-            <div className="min-w-0 space-y-2 text-center">
-              <CompositionBestResult team={team}/>
-              <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-slate-400"><span>{t("stats.usageCount")}: <strong className="text-slate-200">{team.count}</strong></span><span>{t("stats.matches")}: <strong className="text-slate-200">{team.total_matches ?? 0}</strong></span></div>
-
-            </div>
+            <div className="grid w-full min-w-0 grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-2 sm:w-auto sm:grid-cols-[10rem_8rem]">
             <div className={`rounded-xl px-4 py-3 text-center ${team.win_rate >= 50 ? "bg-emerald-400/10 text-emerald-300" : "bg-amber-400/10 text-amber-300"}`}>
               <div className="mb-1 text-xs font-semibold text-slate-400">{t("stats.winRate")}</div>
               <div className={team.total_matches > 0 ? "text-3xl font-black md:tabular-nums" : "text-sm font-bold"}>{team.total_matches > 0 && team.win_rate != null ? `${team.win_rate}%` : t("stats.noMatchRecords")}</div>
+            </div>
+            <div className="min-w-0 space-y-2 text-center">
+              <CompositionBestResult team={team}/>
+              <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-slate-300">
+                <TeamUsageCounts team={team}/>
+                <span>{t("stats.matches")}: {team.total_matches} · {t("stats.winsLosses", {
+                  wins: team.win_count, losses: team.total_matches - team.win_count,
+                })}</span>
+              </div>
+
             </div>
             </div>
           </button>;

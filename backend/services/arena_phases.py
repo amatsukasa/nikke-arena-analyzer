@@ -141,6 +141,19 @@ def complete(teams):
     return len(ids) == len(set(ids))
 
 
+def exact_set_signature(teams):
+    """Compare numbered teams with their original slot order and collection values."""
+    if not complete(teams):
+        return None
+    if any(slot["id"] == 9999 or "collection_level" not in slot
+           for team in teams for slot in team["characters"]):
+        return None
+    return tuple(
+        tuple((slot["id"], slot["collection_level"]) for slot in team["characters"])
+        for team in sorted(teams, key=lambda team: team["team_number"])
+    )
+
+
 def definitions(tournament):
     size = 8 if tournament.registration_scope == "champion_8" else 64
     rounds = [8, 4, 2] if size == 8 else [64, 32, 16, 8, 4, 2]
@@ -414,7 +427,10 @@ def initial_deck_sets(db, player_ids):
             revision = latest.get(player.id)
             teams = revision.teams if revision else fallback[player.id]
             if teams:
-                result.append(projected_deck(player.id, teams, -player.id, registration_id=revision.id if revision else None))
+                deck = projected_deck(player.id, teams, -player.id, registration_id=revision.id if revision else None)
+                if revision is None and normalized_stage(tournament, "initial") == "league":
+                    deck.legacy_initial_signature = exact_set_signature(teams)
+                result.append(deck)
     return result
 
 
@@ -446,6 +462,7 @@ def effective_matches(db, tournament_ids):
                 arena_phase=node["result_phase"], arena_deck_history_verified=bool(node["revision_id"]),
                 arena_remaining=node["remaining"],
                 arena_registration_ids=dict(zip(node["result_participants"], node["result_registration_ids"])),
+                arena_saved_teams=dict(zip(node["result_participants"], node["result_teams"])) if node["revision_id"] else {},
                 arena_decks={pid: projected_deck(pid, teams, -pid) for pid, teams in zip(node["result_participants"], node["result_teams"])}))
     return result
 

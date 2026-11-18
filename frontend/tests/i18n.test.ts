@@ -18,17 +18,20 @@ test('all locale dictionaries expose the same keys', () => {
 });
 
 test('both Team Search pages use the shared arena display selector', async () => {
-  const [topPage, tournamentPage, picker] = await Promise.all([
+  const [topPage, tournamentPage, panels, picker] = await Promise.all([
     readFile(new URL('../src/app/page.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/app/tournament/[id]/dashboard/page.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/TeamAnalysisPanels.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/SynergyCharacterPicker.tsx', import.meta.url), 'utf8'),
   ]);
   for (const page of [topPage, tournamentPage]) {
-    assert.match(page, /<ArenaCharacterDisplaySelect/);
-    assert.match(page, /displayMode=\{arenaCharacterDisplay\}/);
-    assert.match(page, /useState<ArenaCharacterDisplayMode>\("only"\)/);
-    assert.doesNotMatch(page, /<option value="priority">/);
+    assert.match(page, /<TeamSearchPanel/);
+    assert.match(page, /<TeamWinRatePanel/);
   }
+  assert.match(panels, /<ArenaCharacterDisplaySelect/);
+  assert.match(panels, /displayMode=\{arenaCharacterDisplay\}/);
+  assert.match(panels, /useState<ArenaCharacterDisplayMode>\("only"\)/);
+  assert.doesNotMatch(panels, /<option value="priority">/);
   assert.match(picker, /export function ArenaCharacterDisplaySelect/);
   assert.equal((picker.match(/<option value=/g) ?? []).length, 2);
   assert.match(picker, /<option value="only">/);

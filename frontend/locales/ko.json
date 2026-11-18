@@ -1,4 +1,6 @@
 {
+  "teamMeaning.adopters": "채택 {count}명",
+  "teamMeaning.registrations": "등록 {count}회",
   "site.title": "NIKKE 아레나 분석기",
   "site.description": "챔피언 아레나 통계를 살펴보는 팬 사이트",
   "nav.aria": "사이트 탐색",

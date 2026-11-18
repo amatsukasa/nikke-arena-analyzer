@@ -7,6 +7,7 @@ import { matchupSideResults, type MatchupResult } from "@/lib/teamMatchupPerspec
 import type { RegistrationScope } from "@/lib/tournaments";
 import { tournamentResultClass } from "@/lib/tournamentResult";
 import { useI18n } from "@/i18n/I18nProvider";
+import { RegistrationPhaseLabel } from "./TeamStatisticsMeaning";
 
 type MatchupFilterResult = "ALL" | "WIN" | "LOSE";
 type MatchupFilterSide = "ALL" | "ATTACK" | "DEFENSE";
@@ -18,6 +19,7 @@ type Props = {
   onSelectOpponent: (canonicalId: string, team?: any) => void;
   registrationScope?: RegistrationScope | null;
   registrationScopeByTournamentId?: Record<number, RegistrationScope | undefined>;
+  groupByOpponent?: boolean;
 };
 
 export function MatchStageBadge({ stage }: { stage?: string | null }) {
@@ -40,6 +42,7 @@ export default function TeamMatchupHistory({
   onSelectOpponent,
   registrationScope,
   registrationScopeByTournamentId,
+  groupByOpponent = false,
 }: Props) {
   const { t } = useI18n();
   const [resultFilter, setResultFilter] = useState<MatchupFilterResult>("ALL");
@@ -73,6 +76,14 @@ export default function TeamMatchupHistory({
     if (stageFilter !== "ALL" && (match.displayStage || "不明") !== stageFilter) return false;
     return true;
   });
+  const opponentGroups = new Map<string, typeof filteredMatchups>();
+  if (groupByOpponent) {
+    for (const match of filteredMatchups) {
+      const rows = opponentGroups.get(match.opponentCanonical) ?? [];
+      rows.push(match);
+      opponentGroups.set(match.opponentCanonical, rows);
+    }
+  }
 
   const resultBadge = (result: MatchupResult, emphasized: boolean, sideLabel: string) => (
     <span
@@ -88,6 +99,72 @@ export default function TeamMatchupHistory({
       }`}>
       {result}
     </span>
+  );
+
+  const renderRounds = (rounds: typeof filteredMatchups) => (
+        <div className="space-y-2">
+          {rounds.map((match, index) => {
+            const sideResults = matchupSideResults(match);
+            return (
+              <div
+                key={match.participationKey || `${match.tournamentName ?? ""}-${match.stage ?? ""}-${index}`}
+                onClick={() => onSelectOpponent(match.opponentCanonical, {
+                  character_ids: match.opponent,
+                  canonical_id: match.opponentCanonical,
+                })}
+                className="cursor-pointer space-y-2 rounded-xl bg-slate-800/30 p-1 ring-1 ring-white/5 transition-colors hover:bg-slate-700/50 sm:p-4"
+              >
+                <div className="flex min-w-0 items-center space-x-2 text-xs">
+                  <span className="shrink-0 whitespace-nowrap rounded bg-indigo-500/10 px-2 py-0.5 font-bold text-indigo-400 ring-1 ring-indigo-500/20">
+                    {match.tournamentName || t('common.unknown')}
+                  </span>
+                  <span className="min-w-0 truncate text-slate-400">
+                    {match.attackerName} <span className="text-slate-600">vs</span> {match.defenderName}
+                  </span>
+                </div>
+                {match.registration_phase && <div className="text-xs text-blue-300"><RegistrationPhaseLabel phase={match.registration_phase}/></div>}
+
+              <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-center">
+                <MatchStageBadge stage={match.displayStage} />
+
+                <div className="grid min-w-0 flex-1 grid-cols-[2.5rem_auto] items-center justify-center gap-x-1 gap-y-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:justify-stretch xl:gap-3">
+                  <div className="contents xl:col-start-1 xl:row-start-1 xl:flex xl:min-w-0 xl:items-center xl:justify-center xl:gap-2">
+                    <div className="col-start-1 row-start-1 justify-self-center xl:block">
+                      {resultBadge(sideResults.attacker, match.isAttacker, t('match.attack'))}
+                    </div>
+                    <div data-matchup-side="attacker" className={`col-start-2 row-start-1 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}>
+                      <div className="mb-2 flex items-center justify-center gap-2">
+                        <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">{t('match.attack')}</span>
+                        {match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
+                      </div>
+                      <div data-matchup-characters="attacker" className="flex min-w-0 justify-center [&>div]:justify-center">
+                        <TeamDisplay charIds={match.attackerTeam} allCharacters={allCharacters}
+                          collectionLevels={match.attackerCollections} onCharacterClick={onSelectCharacter}/>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="col-start-2 row-start-2 shrink-0 text-center text-sm font-black text-slate-500 xl:col-start-2 xl:row-start-1">VS</div>
+                  <div className="contents xl:col-start-3 xl:row-start-1 xl:flex xl:min-w-0 xl:items-center xl:justify-center xl:gap-2">
+                    <div data-matchup-side="defender" className={`col-start-2 row-start-3 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${!match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}>
+                      <div className="mb-2 flex items-center justify-center gap-2">
+                        <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">{t('match.defense')}</span>
+                        {!match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
+                      </div>
+                      <div data-matchup-characters="defender" className="flex min-w-0 justify-center [&>div]:justify-center">
+                        <TeamDisplay charIds={match.defenderTeam} allCharacters={allCharacters}
+                          collectionLevels={match.defenderCollections} onCharacterClick={onSelectCharacter}/>
+                      </div>
+                    </div>
+                    <div className="col-start-1 row-start-3 shrink-0 justify-self-center xl:block">
+                      {resultBadge(sideResults.defender, !match.isAttacker, t('match.defense'))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              </div>
+            );
+          })}
+        </div>
   );
 
   return (
@@ -127,85 +204,19 @@ export default function TeamMatchupHistory({
       </div>
 
       {filteredMatchups.length > 0 ? (
-        <div className="space-y-2">
-          {filteredMatchups.map((match, index) => {
-            const sideResults = matchupSideResults(match);
-            return (
-              <div
-                key={match.participationKey || `${match.tournamentName ?? ""}-${match.stage ?? ""}-${index}`}
-                onClick={() => onSelectOpponent(match.opponentCanonical, {
-                  character_ids: match.opponent,
-                  canonical_id: match.opponentCanonical,
-                })}
-                className="cursor-pointer space-y-2 rounded-xl bg-slate-800/30 p-1 ring-1 ring-white/5 transition-colors hover:bg-slate-700/50 sm:p-4"
-              >
-                <div className="flex min-w-0 items-center space-x-2 text-xs">
-                  <span className="shrink-0 whitespace-nowrap rounded bg-indigo-500/10 px-2 py-0.5 font-bold text-indigo-400 ring-1 ring-indigo-500/20">
-                    {match.tournamentName || t('common.unknown')}
-                  </span>
-                  <span className="min-w-0 truncate text-slate-400">
-                    {match.attackerName} <span className="text-slate-600">vs</span> {match.defenderName}
-                  </span>
-                </div>
-
-              <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-center">
-                <MatchStageBadge stage={match.displayStage} />
-
-                <div className="grid min-w-0 flex-1 grid-cols-[2.5rem_auto] items-center justify-center gap-x-1 gap-y-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:justify-stretch xl:gap-3">
-                  <div className="contents xl:col-start-1 xl:row-start-1 xl:flex xl:min-w-0 xl:items-center xl:justify-center xl:gap-2">
-                    <div className="col-start-1 row-start-1 justify-self-center xl:block">
-                      {resultBadge(sideResults.attacker, match.isAttacker, t('match.attack'))}
-                    </div>
-                    <div
-                      data-matchup-side="attacker"
-                      className={`col-start-2 row-start-1 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}
-                    >
-                      <div className="mb-2 flex items-center justify-center gap-2">
-                        <span className="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400">{t('match.attack')}</span>
-                        {match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
-                      </div>
-                      <div data-matchup-characters="attacker" className="flex min-w-0 justify-center [&>div]:justify-center">
-                        <TeamDisplay
-                          charIds={match.attackerTeam}
-                          allCharacters={allCharacters}
-                          collectionLevels={match.attackerCollections}
-                          onCharacterClick={onSelectCharacter}
-                        />
-                      </div>
-                    </div>
-
-                  </div>
-
-                  <div className="col-start-2 row-start-2 shrink-0 text-center text-sm font-black text-slate-500 xl:col-start-2 xl:row-start-1">VS</div>
-
-                  <div className="contents xl:col-start-3 xl:row-start-1 xl:flex xl:min-w-0 xl:items-center xl:justify-center xl:gap-2">
-                    <div
-                      data-matchup-side="defender"
-                      className={`col-start-2 row-start-3 w-fit max-w-full min-w-0 justify-self-center rounded-xl p-1 sm:p-2 xl:col-start-auto xl:row-start-auto xl:justify-self-auto ${!match.isAttacker ? "bg-purple-500/10 ring-2 ring-purple-400/60" : "ring-1 ring-white/5"}`}
-                    >
-                      <div className="mb-2 flex items-center justify-center gap-2">
-                        <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-400">{t('match.defense')}</span>
-                        {!match.isAttacker && <span className="rounded bg-purple-500/20 px-2 py-0.5 text-[10px] font-black text-purple-200 ring-1 ring-purple-400/40">{t('match.target')}</span>}
-                      </div>
-                      <div data-matchup-characters="defender" className="flex min-w-0 justify-center [&>div]:justify-center">
-                        <TeamDisplay
-                          charIds={match.defenderTeam}
-                          allCharacters={allCharacters}
-                          collectionLevels={match.defenderCollections}
-                          onCharacterClick={onSelectCharacter}
-                        />
-                      </div>
-                    </div>
-                    <div className="col-start-1 row-start-3 justify-self-center xl:block">
-                      {resultBadge(sideResults.defender, !match.isAttacker, t('match.defense'))}
-                    </div>
-                  </div>
-                </div>
+        groupByOpponent ? <div className="space-y-2">
+          {Array.from(opponentGroups, ([key, rows]) => {
+            const wins = rows.filter(match => match.isWin).length;
+            const rate = Math.round(wins / rows.length * 1000) / 10;
+            return <section key={key} className="space-y-3 rounded-xl bg-slate-800/50 p-2 ring-1 ring-white/10 sm:p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
+                <span className="font-semibold">{t("stats.winsLosses", { wins, losses: rows.length - wins })} · {rate}%</span>
               </div>
-              </div>
-            );
+              {renderRounds(rows)}
+            </section>;
           })}
-        </div>
+        </div> : renderRounds(filteredMatchups)
       ) : (
         <div className="rounded-xl bg-slate-800/30 p-8 text-center text-slate-400 ring-1 ring-white/5">
           {t('common.noData')}
