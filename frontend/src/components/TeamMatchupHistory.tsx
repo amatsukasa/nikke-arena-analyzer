@@ -208,15 +208,13 @@ export default function TeamMatchupHistory({
           {Array.from(opponentGroups, ([key, rows]) => {
             const wins = rows.filter(match => match.isWin).length;
             const rate = Math.round(wins / rows.length * 1000) / 10;
-            return <details key={key} className="rounded-xl bg-slate-800/50 p-2 ring-1 ring-white/10 sm:p-4">
-              <summary className="cursor-pointer">
-                <span className="inline-flex flex-wrap items-center gap-3 align-middle">
-                  <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
-                  <span className="font-semibold">{t("stats.winsLosses", { wins, losses: rows.length - wins })} · {rate}%</span>
-                </span>
-              </summary>
-              <div className="mt-3">{renderRounds(rows)}</div>
-            </details>;
+            return <section key={key} className="space-y-3 rounded-xl bg-slate-800/50 p-2 ring-1 ring-white/10 sm:p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
+                <span className="font-semibold">{t("stats.winsLosses", { wins, losses: rows.length - wins })} · {rate}%</span>
+              </div>
+              {renderRounds(rows)}
+            </section>;
           })}
         </div> : renderRounds(filteredMatchups)
       ) : (
