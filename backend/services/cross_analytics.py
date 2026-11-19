@@ -33,6 +33,7 @@ versions AS (
  UNION ALL SELECT 'r', r.id, r.xmin::text FROM round_results r JOIN matches m ON m.id=r.match_id JOIN selected s ON s.id=m.tournament_id
  UNION ALL SELECT 'ar', r.id, r.xmin::text FROM arena_deck_registrations r JOIN selected s ON s.id=r.tournament_id
  UNION ALL SELECT 'am', r.id, r.xmin::text FROM arena_match_revisions r JOIN selected s ON s.id=r.tournament_id
+ UNION ALL SELECT 'al', r.id, r.xmin::text FROM arena_legacy_league_link_batches r JOIN selected s ON s.id=r.id
  UNION ALL SELECT 's', t.id, t.xmin::text FROM tournament_snapshots t JOIN selected s ON s.id=t.tournament_id
  UNION ALL SELECT 'c', c.id, c.xmin::text FROM characters c
 )
