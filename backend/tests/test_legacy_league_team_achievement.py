@@ -77,7 +77,7 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         login = self.client.post("/api/auth/login", json={"email": owner.email, "password": password})
         self.assertEqual(login.status_code, 200, login.text)
 
-    def assert_achievement(self, expected, *, clear_cache=True):
+    def assert_achievement(self, expected, *, clear_cache=True, target=TARGET, removed=None):
         if clear_cache:
             main._dashboard_cache.clear()
             cross_analytics.clear_cache()
@@ -89,7 +89,10 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
             self.client.post("/api/dashboard/cross-tournament/teams", json=payload),
         ):
             self.assertEqual(result.status_code, 200, result.text)
-            card = next(team for team in result.json()["teams"] if team["canonical_id"] == TARGET)
+            cards = {team["canonical_id"]: team for team in result.json()["teams"]}
+            if removed is not None:
+                self.assertNotIn(removed, cards)
+            card = cards[target]
             self.assertEqual((card["count"], card["total_matches"], card["win_rate"]), (1, 1, 100.0))
             self.assertEqual(card["composition_best_result"], expected)
 
@@ -97,9 +100,13 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         self.assertIsNone(self.revision.defender_registration_id)
         self.assert_achievement("best64")
 
-    def correct_legacy_registration(self, player_id):
+    def correct_legacy_registration(self, player_id, replacement=None):
         teams = arena_phases.legacy_teams(self.db.get(models.Player, player_id), self.db)
-        teams[1]["characters"].reverse()
+        if replacement is None:
+            teams[1]["characters"].reverse()
+        else:
+            self.db.add(models.Character(id=replacement, name="Replacement", is_arena_relevant=True))
+            teams[1]["characters"][0]["id"] = replacement
         self.tournament.publication_status = "draft"
         self.db.commit()
         response = self.client.post(f"/api/tournaments/{self.tournament.id}/teams",
@@ -191,7 +198,16 @@ class LegacyLeagueAchievementTest(unittest.TestCase):
         self.assertEqual(invoke("apply", plan["digest"])["action"], "already_applied")
         self.assert_achievement("best64", clear_cache=False)
         self.assertEqual(arena_phases.state(self.tournament, self.db), before)
+
+        self.correct_legacy_registration(match.defender_id, replacement=226)
+        corrected = "94,107,109,147,226"
+        self.assert_achievement("best64", clear_cache=False, target=corrected, removed=TARGET)
+        after = arena_phases.state(self.tournament, self.db)
+        self.assertEqual(
+            [(m["legacy_match_id"], m["revision_id"], m["winner_id"], m["rounds"], m["advancement"]) for m in before["matches"]],
+            [(m["legacy_match_id"], m["revision_id"], m["winner_id"], m["rounds"], m["advancement"]) for m in after["matches"]],
+        )
         self.assertEqual(self.db.query(models.ArenaMatchRevision).count(), 0)
         self.assertEqual(invoke("rollback", plan["digest"])["action"], "rolled_back")
-        self.assert_achievement(None, clear_cache=False)
-        self.assertEqual(arena_phases.state(self.tournament, self.db), before)
+        self.assertNotEqual(arena_phases.state(self.tournament, self.db), before)
+        self.assertEqual(arena_phases.state(self.tournament, self.db), after)

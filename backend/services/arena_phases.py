@@ -330,6 +330,8 @@ def save_registration(tournament, player_id, phase, payload, db, *, commit=True)
     db.add(registration)
     db.flush()
     if supported(tournament) and tournament.registration_scope == "full_64" and previous_teams:
+        if phase == "initial":
+            relink_approved_legacy_results(db, tournament.id, nodes, registration)
         # Use only active results with independently stored snapshots. Keep their
         # IDs so the bracket and later registration qualifications stay valid.
         revision_ids = {node["revision_id"] for node in nodes.values()
@@ -455,11 +457,10 @@ def initial_deck_sets(db, player_ids):
     return result
 
 
-def legacy_league_link_input(node):
+def legacy_league_link_input(node, *, allow_corrected=False):
     """Return the current evidence for one active old league match."""
     if (node["remaining"] not in (64, 32, 16) or node["result_phase"] != "initial"
-            or node["revision_id"] is not None or node["legacy_match_id"] is None
-            or node["registration_ids"] != [None, None]):
+            or node["revision_id"] is not None or node["legacy_match_id"] is None):
         return None
     participants = node["result_participants"]
     rounds = node["rounds"]
@@ -467,14 +468,47 @@ def legacy_league_link_input(node):
             or any(winner not in participants for winner in rounds)
             or rounds.count(node["winner_id"]) < 3):
         return None
-    current = dict(zip(node["participants"], node["teams"]))
-    signatures = [exact_set_signature(teams) for teams in node["result_teams"]]
-    if len(signatures) != 2 or not all(signatures) or signatures != [
-            exact_set_signature(current.get(pid, [])) for pid in participants]:
+    current = dict(zip(node["participants"], zip(node["teams"], node["registration_ids"])))
+    teams, ids = map(list, zip(*(current.get(pid, ([], None)) for pid in participants)))
+    signatures = [exact_set_signature(side) for side in teams]
+    if not all(signatures) or (any(ids) and not allow_corrected):
         return None
-    return {"match_key": node["key"], "match_id": node["legacy_match_id"],
+    if any(reg_id is None and signature != exact_set_signature(original)
+           for reg_id, signature, original in zip(ids, signatures, node["result_teams"])):
+        return None
+    link = {"match_key": node["key"], "match_id": node["legacy_match_id"],
             "participants": participants, "winner": node["winner_id"], "rounds": rounds,
-            "teams": node["result_teams"]}
+            "teams": teams if any(ids) else node["result_teams"]}
+    if any(ids):
+        link["registration_ids"] = ids
+    return link
+
+
+def approved_legacy_link(node, link):
+    if link is None:
+        return None
+    live = legacy_league_link_input(node, allow_corrected=True)
+    return link if live is not None and fingerprint(live) == fingerprint(link) else None
+
+
+def relink_approved_legacy_results(db, tournament_id, nodes, registration):
+    batch = db.get(models.ArenaLegacyLeagueLinkBatch, tournament_id)
+    if batch is None or exact_set_signature(registration.teams) is None:
+        return
+    links = dict(batch.links)
+    for key, link in batch.links.items():
+        node = nodes.get(key)
+        if node is None or registration.player_id not in node["result_participants"] or not approved_legacy_link(node, link):
+            continue
+        side = link["participants"].index(registration.player_id)
+        teams = list(link["teams"])
+        ids = list(link.get("registration_ids", [None, None]))
+        teams[side] = registration.teams
+        ids[side] = registration.id
+        links[key] = {**link, "teams": teams, "registration_ids": ids}
+    if links != batch.links:
+        batch.links = links
+        db.flush()
 
 
 def effective_matches(db, tournament_ids):
@@ -499,11 +533,11 @@ def effective_matches(db, tournament_ids):
             pid1, pid2 = node["result_participants"]
             identity = -node["revision_id"] if node["revision_id"] else node["legacy_match_id"]
             saved_teams = node["result_teams"] if node["revision_id"] else None
-            link = approved.get(tournament.id, {}).get(node["key"])
+            registration_ids = node["result_registration_ids"]
+            link = approved_legacy_link(node, approved.get(tournament.id, {}).get(node["key"]))
             if link is not None:
-                live = legacy_league_link_input(node)
-                if live is not None and fingerprint(live) == fingerprint(link):
-                    saved_teams = link["teams"]
+                saved_teams = link["teams"]
+                registration_ids = link.get("registration_ids", registration_ids)
             result.append(SimpleNamespace(id=identity, tournament_id=tournament.id, tournament=tournament,
                 attacker=by_id.get(pid1), defender=by_id.get(pid2), winner=by_id.get(node["winner_id"]), created_at=None,
                 stage="Final" if node["remaining"] == 2 else f"Best {node['remaining']}",
@@ -513,9 +547,10 @@ def effective_matches(db, tournament_ids):
                 round_results=[SimpleNamespace(match_id=identity, round_number=i+1, winner_id=pid) for i, pid in enumerate(node["rounds"])],
                 arena_phase=node["result_phase"], arena_deck_history_verified=saved_teams is not None,
                 arena_remaining=node["remaining"],
-                arena_registration_ids=dict(zip(node["result_participants"], node["result_registration_ids"])),
+                arena_registration_ids=dict(zip(node["result_participants"], registration_ids)),
                 arena_saved_teams=dict(zip(node["result_participants"], saved_teams)) if saved_teams is not None else {},
-                arena_decks={pid: projected_deck(pid, teams, -pid) for pid, teams in zip(node["result_participants"], node["result_teams"])}))
+                arena_decks={pid: projected_deck(pid, teams, -pid) for pid, teams in zip(
+                    node["result_participants"], saved_teams if saved_teams is not None else node["result_teams"])}))
     return result
 
 
