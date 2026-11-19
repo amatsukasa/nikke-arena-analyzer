@@ -49,6 +49,8 @@ python -m scripts.link_legacy_league apply --tournament-id 206 --expect-database
 3. 作業前と同じ試合数、勝敗、トーナメント進行であることを確認します。提供者が通常の画面でリーグ戦編成を訂正すると、有効な補正の紐づけは保存と同時に新しい登録版へ引き継がれます。公開中は編集前に下書きに戻し、保存後に再公開する従来の手順を使います。補正ツールの再適用は不要です。保存処理を通らずに試合結果や紐づけ先のデータが変更され、承認済みの内容と一致しなくなった旧試合には補正を使いません。
 4. 取り消す場合は同じ大会IDと初回承認時のハッシュを指定します。補正行が削除され、提供者が保存した編成訂正は残ります。その後、プレビューの `active_digest: null` と画面を確認します。
 
+提供者が編成を訂正した後に rollback すると、訂正済みの選手を含む旧試合は次回の初回補正候補から外れます。取り消し後に補正を戻す予定がある場合は、先に復旧方法を確認してください。
+
 ```sh
 python -m scripts.link_legacy_league rollback --tournament-id 206 --expect-database "$EXPECTED_DB" --digest "$REVIEWED_DIGEST"
 ```
