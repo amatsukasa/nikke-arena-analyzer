@@ -203,9 +203,16 @@ export default function TeamMatchupHistory({
           {Array.from(opponentGroups, ([key, { rows, wins, losses }]) => {
             const rate = Math.round(wins / (wins + losses) * 1000) / 10;
             return <section key={key} className="space-y-3 rounded-xl bg-slate-800/50 p-2 ring-1 ring-white/10 sm:p-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
-                <span className="font-semibold">{t("stats.winsLosses", { wins, losses })} · {rate}%</span>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <span className="shrink-0 rounded-md bg-purple-500/20 px-2 py-1 text-xs font-black tracking-wider text-purple-200 ring-1 ring-inset ring-purple-400/40 sm:px-3 sm:text-sm">VS</span>
+                  <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
+                </div>
+                <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-lg bg-slate-950/60 px-2.5 py-1.5 text-base font-extrabold tabular-nums text-white ring-1 ring-inset ring-white/15 sm:px-3 sm:text-lg">
+                  {t("stats.winsLosses", { wins, losses })}
+                  <span className="text-slate-400">·</span>
+                  <span className="text-purple-200">{rate}%</span>
+                </span>
               </div>
               {renderRounds(rows)}
             </section>;
