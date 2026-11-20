@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import TeamDisplay from "./TeamDisplay";
 import { formatMatchStageForDisplay, localizedMatchStage, sortUniqueMatchStageDisplays } from "@/lib/matchStageDisplay";
-import { matchupSideResults, type MatchupResult } from "@/lib/teamMatchupPerspective";
+import { groupOpponentMatchups, matchupSideResults, type MatchupResult } from "@/lib/teamMatchupPerspective";
 import type { RegistrationScope } from "@/lib/tournaments";
 import { tournamentResultClass } from "@/lib/tournamentResult";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -68,22 +68,17 @@ export default function TeamMatchupHistory({
     [displayMatchups],
   );
 
-  const filteredMatchups = displayMatchups.filter((match) => {
+  const stageMatchups = displayMatchups.filter((match) =>
+    stageFilter === "ALL" || (match.displayStage || "不明") === stageFilter,
+  );
+  const filteredMatchups = stageMatchups.filter((match) => {
     if (resultFilter === "WIN" && !match.isWin) return false;
     if (resultFilter === "LOSE" && match.isWin) return false;
     if (sideFilter === "ATTACK" && !match.isAttacker) return false;
     if (sideFilter === "DEFENSE" && match.isAttacker) return false;
-    if (stageFilter !== "ALL" && (match.displayStage || "不明") !== stageFilter) return false;
     return true;
   });
-  const opponentGroups = new Map<string, typeof filteredMatchups>();
-  if (groupByOpponent) {
-    for (const match of filteredMatchups) {
-      const rows = opponentGroups.get(match.opponentCanonical) ?? [];
-      rows.push(match);
-      opponentGroups.set(match.opponentCanonical, rows);
-    }
-  }
+  const opponentGroups = groupByOpponent ? groupOpponentMatchups(stageMatchups, filteredMatchups) : null;
 
   const resultBadge = (result: MatchupResult, emphasized: boolean, sideLabel: string) => (
     <span
@@ -204,14 +199,13 @@ export default function TeamMatchupHistory({
       </div>
 
       {filteredMatchups.length > 0 ? (
-        groupByOpponent ? <div className="space-y-2">
-          {Array.from(opponentGroups, ([key, rows]) => {
-            const wins = rows.filter(match => match.isWin).length;
-            const rate = Math.round(wins / rows.length * 1000) / 10;
+        opponentGroups ? <div className="space-y-2">
+          {Array.from(opponentGroups, ([key, { rows, wins, losses }]) => {
+            const rate = Math.round(wins / (wins + losses) * 1000) / 10;
             return <section key={key} className="space-y-3 rounded-xl bg-slate-800/50 p-2 ring-1 ring-white/10 sm:p-4">
               <div className="flex flex-wrap items-center gap-3">
                 <TeamDisplay charIds={rows[0].opponent} allCharacters={allCharacters}/>
-                <span className="font-semibold">{t("stats.winsLosses", { wins, losses: rows.length - wins })} · {rate}%</span>
+                <span className="font-semibold">{t("stats.winsLosses", { wins, losses })} · {rate}%</span>
               </div>
               {renderRounds(rows)}
             </section>;
