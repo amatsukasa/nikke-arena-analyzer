@@ -65,3 +65,28 @@ export function teamMatchupPerspective(matchups: any[], targetKey: string, teamK
 
   return { details, totalWins, totalLosses, attackWins, attackLosses, defenseWins, defenseLosses };
 }
+
+export function groupOpponentMatchups<Match extends { opponentCanonical: string; isWin: boolean }>(
+  scopedMatchups: Match[],
+  visibleMatchups: Match[],
+) {
+  const groups = new Map<string, { rows: Match[]; wins: number; losses: number }>();
+
+  // Keep cards in the order of their first visible round.
+  for (const match of visibleMatchups) {
+    let group = groups.get(match.opponentCanonical);
+    if (!group) {
+      group = { rows: [], wins: 0, losses: 0 };
+      groups.set(match.opponentCanonical, group);
+    }
+    group.rows.push(match);
+  }
+
+  for (const match of scopedMatchups) {
+    const group = groups.get(match.opponentCanonical);
+    if (!group) continue;
+    if (match.isWin) group.wins += 1;
+    else group.losses += 1;
+  }
+  return groups;
+}
