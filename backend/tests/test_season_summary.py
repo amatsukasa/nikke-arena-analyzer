@@ -1,5 +1,6 @@
 """Regression coverage for Summary scope, arithmetic, ranking and article references."""
 
+from collections import Counter
 from types import SimpleNamespace
 from datetime import date
 from unittest import TestCase
@@ -28,11 +29,65 @@ class SeasonSummaryMathTest(TestCase):
         initial = match(1, 1, 2, 1, [(1, 1), (1, 1), (2, 1), (3, 1), (4, 2), (5, 2)])
         undecided = match(2, 3, 4, None, [(1, 4), (2, None), (3, 3), (3, 4), (6, 3)])
         unknown = match(3, None, 5, 5, [(1, 5)])
-        totals = season_summary.side_results([initial, initial, undecided, unknown])
+        totals, _, _ = season_summary.side_results([initial, initial, undecided, unknown], {})
         self.assertEqual(totals, {
             "rounds": {"attack": 3, "defense": 3, "total": 6},
             "matches": {"attack": 1, "defense": 0, "total": 1},
         })
+
+    def test_side_leaders_use_valid_rounds_and_skip_one_off_results(self):
+        def team(number, *ids):
+            return SimpleNamespace(team_number=number, **{f"char{i}_id": cid for i, cid in enumerate(ids, 1)})
+
+        a = SimpleNamespace(teams=[team(i, 11, 12, 9999, None, None) for i in range(1, 6)])
+        d = SimpleNamespace(teams=[team(i, 22, 12, 23 if i == 1 else None, None, None) for i in range(1, 6)])
+        match = SimpleNamespace(
+            id=1, tournament_id=206, attacker_id=1, defender_id=2, winner_id=1,
+            arena_decks={1: a, 2: d},
+            round_results=[SimpleNamespace(round_number=i, winner_id=1 if i < 4 else 2) for i in range(1, 6)],
+        )
+        _, counts, wins = season_summary.side_results([match, match], {})
+        leaders = season_summary.side_leaders(counts, wins, {id: str(id) for id in (11, 12, 22, 23, 9999)})
+        self.assertEqual([row["id"] for row in leaders["attack"]], [11, 12])
+        self.assertEqual([row["id"] for row in leaders["defense"]], [12, 22])
+        self.assertEqual(leaders["attack"][0]["win_rate"], 60.0)
+        self.assertEqual(leaders["defense"][0]["win_rate"], 40.0)
+
+    def test_partners_are_sorted_across_all_burst_types_using_team_registrations(self):
+        usage = [
+            {"character_ids": [47, 80, 9999, 51, 51], "count": 4},
+            {"character_ids": [47, 13, 84, 51, 80], "count": 3},
+            {"character_ids": [47, 13, 81, 81, 90], "count": 3},
+            {"character_ids": [51, 53], "count": 99},
+        ]
+        values = season_summary.partner_counts(usage, {47})
+        self.assertEqual(values[47][51], 7)
+        self.assertNotIn(9999, values[47])
+        counts = season_summary.character_section(8, 10, 6, 12, values[47], 10, {id: str(id) for id in values[47]})
+        self.assertEqual([(row["id"], row["rate"]) for row in counts["partners"]], [(51, 70.0), (80, 70.0), (13, 60.0), (81, 30.0)])
+
+    def test_overall_keeps_one_commander_who_registered_at_multiple_stages(self):
+        def simulated_adoption(db, bulk, ids, stage, debut_ids, population, adopted):
+            population.update((1, 2) if stage == "league" else (1,))
+            adopted[47].add(1)
+
+        def aggregate(ids, db, stage):
+            return {"total_players": 2 if stage == "league" else 1,
+                    "character_stats": [{"id": 47, "player_count": 1, "count": 1, "win_count": 1, "total_matches": 2}],
+                    "team_usage": [{"character_ids": [47, 13 if stage == "league" else 20], "count": 1}]}
+
+        with patch.object(season_summary, "adoption_by_commander", simulated_adoption):
+            result = season_summary.debut_statistics(
+                None, [47], {"league": [206], "championship": [206]}, ("league", "championship"), "championship",
+                aggregate, {}, {47: "センチ", 13: "ノア", 20: "ネオン"},
+                {"attack": Counter({47: 2}), "defense": Counter({47: 2})},
+                {"attack": Counter({47: 1}), "defense": Counter({47: 1})},
+            )
+        sections = result["characters"][0]["sections"]
+        self.assertEqual((sections["all"]["count"], sections["all"]["population"], sections["all"]["rate"]), (1, 2, 50.0))
+        self.assertEqual(sections["all"]["rounds"], 4)
+        self.assertEqual([row["rate"] for row in sections["all"]["partners"]], [50.0, 50.0])
+        self.assertEqual(sections["championship"]["partners"][0]["rate"], 100.0)
 
     def test_rank_five_includes_ties_and_earlier_rates_distinguish_no_population(self):
         groups = {"league": [], "championship": [8], "final": [8]}
@@ -127,12 +182,18 @@ class SeasonSummaryApiTest(TestCase):
         debut = self.summary(12)["debut"]
         self.assertEqual(debut["stage"], "championship")
         self.assertEqual(debut["tournament_ids"], [206, 207])
-        self.assertEqual(debut["characters"], [
-            {"id": 47, "name": "センチ", "count": 0, "population": 0, "rate": None,
-             "wins": 0, "losses": 0, "rounds": 0, "win_rate": None},
-        ])
+        character = debut["characters"][0]
+        self.assertEqual({key: value for key, value in character.items() if key != "sections"},
+                         {"id": 47, "name": "センチ", "count": 0, "population": 0, "rate": None,
+                          "wins": 0, "losses": 0, "rounds": 0, "win_rate": None})
+        self.assertEqual(set(character["sections"]), {"all", "league", "championship", "final"})
+        self.assertEqual(character["sections"]["all"]["partners"], [])
+        self.assertEqual(debut["tournament_ids_by_stage"]["league"], [206])
         self.assertEqual(self.admin.put(edit, json={"name": "Season 1", "debut_character_ids": []}).status_code, 200)
         self.assertIsNone(self.summary(12)["debut"])
+        self.assertEqual(self.admin.put("/api/championships/13", json={"name": "Beta", "debut_character_ids": [47]}).status_code, 200)
+        beta = self.summary(13)["debut"]["characters"][0]["sections"]
+        self.assertEqual(beta["all"], beta["legacy"])
 
     def test_reference_capture_changes_only_on_explicit_capture_and_publication(self):
         body = {"kind": "season", "championship_id": 12, "title": "Note", "character_ids": [],

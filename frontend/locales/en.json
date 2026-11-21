@@ -445,5 +445,11 @@
   "seasonSummary.currentCount": "Current scope: {count} public tournaments",
   "seasonSummary.capture": "Record the current scope",
   "seasonSummary.cancelCapture": "Cancel scope update",
-  "seasonSummary.capturePending": "The tournament count for this server will be recorded on save."
+  "seasonSummary.capturePending": "The tournament count for this server will be recorded on save.",
+  "seasonSummary.sideMinimum": "Nikkes with at least {count} recorded rounds on that side",
+  "seasonSummary.attackLeaders": "Top Nikkes by attack win rate",
+  "seasonSummary.defenseLeaders": "Top Nikkes by defense win rate",
+  "seasonSummary.overall": "Overall",
+  "seasonSummary.partners": "Most frequent teammates and co-pick rates",
+  "seasonSummary.openCharacter": "Open character details for this stage"
 }

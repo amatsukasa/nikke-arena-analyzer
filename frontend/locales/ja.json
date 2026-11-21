@@ -445,5 +445,11 @@
   "seasonSummary.currentCount": "現在の集計範囲：公開{count}大会",
   "seasonSummary.capture": "現在の範囲を記事に記録",
   "seasonSummary.cancelCapture": "範囲の更新を取り消す",
-  "seasonSummary.capturePending": "次の保存で、このサーバーの大会数を記録します。"
+  "seasonSummary.capturePending": "次の保存で、このサーバーの大会数を記録します。",
+  "seasonSummary.sideMinimum": "各側{count}ラウンド以上出場したニケが対象",
+  "seasonSummary.attackLeaders": "攻撃側の勝率上位ニケ",
+  "seasonSummary.defenseLeaders": "防衛側の勝率上位ニケ",
+  "seasonSummary.overall": "全体",
+  "seasonSummary.partners": "一緒に編成されたニケ・同時採用率",
+  "seasonSummary.openCharacter": "この段階のニケ詳細を開く"
 }

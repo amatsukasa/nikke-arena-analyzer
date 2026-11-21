@@ -445,5 +445,11 @@
   "seasonSummary.currentCount": "Périmètre actuel : {count} tournois publics",
   "seasonSummary.capture": "Enregistrer le périmètre actuel",
   "seasonSummary.cancelCapture": "Annuler la mise à jour du périmètre",
-  "seasonSummary.capturePending": "Le nombre de tournois de ce serveur sera enregistré à la sauvegarde."
+  "seasonSummary.capturePending": "Le nombre de tournois de ce serveur sera enregistré à la sauvegarde.",
+  "seasonSummary.sideMinimum": "Nikkes ayant disputé au moins {count} manches de ce côté",
+  "seasonSummary.attackLeaders": "Meilleures Nikkes en attaque",
+  "seasonSummary.defenseLeaders": "Meilleures Nikkes en défense",
+  "seasonSummary.overall": "Ensemble",
+  "seasonSummary.partners": "Nikkes les plus souvent associées",
+  "seasonSummary.openCharacter": "Voir les détails de cette phase"
 }

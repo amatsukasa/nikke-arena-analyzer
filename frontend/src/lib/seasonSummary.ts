@@ -30,14 +30,23 @@ export type RankedTeam = Adoption & {
   earlier?: Partial<Record<SummaryStage, Adoption>>;
 };
 export type Ranking = { tournament_ids: number[]; population: number; teams: RankedTeam[] };
-export type DebutCharacter = Adoption & { id: number; name: string; wins: number; losses: number; rounds: number; win_rate: number | null };
+type NamedNikke = { id: number; name: string };
+export type SideLeaders = { minimum_rounds: number } & Record<"attack" | "defense",
+  (NamedNikke & { wins: number; rounds: number; win_rate: number })[]>;
+export type DebutResults = Adoption & {
+  wins: number; losses: number; rounds: number; win_rate: number | null;
+  partners: (NamedNikke & { rate: number })[];
+};
+type DebutCharacter = NamedNikke & { sections: { all: DebutResults } & Partial<Record<SummaryStage, DebutResults>> };
 
 export type SummaryStatistics = Scope & {
   rounds: Result;
   matches: Result;
+  side_leaders: SideLeaders;
   initial_stage: SummaryStage;
   rankings: Partial<Record<SummaryStage, Ranking>>;
-  debut: { stage: SummaryStage; tournament_ids: number[]; characters: DebutCharacter[] } | null;
+  debut: { stage: SummaryStage; tournament_ids: number[]; characters: DebutCharacter[];
+    tournament_ids_by_stage: Partial<Record<SummaryStage, number[]>> } | null;
 };
 
 export function summaryEndpoint(championship: number, server: PlayServer, scopeOnly = false) {
