@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query, BackgroundTasks
 import auth as auth_module
+import article_routes
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, or_, select, union_all
 from sqlalchemy.exc import IntegrityError
@@ -41,6 +42,8 @@ app = FastAPI(
     description="API for extracting and analyzing NIKKE Arena data",
     version="1.0.0"
 )
+
+article_routes.register_article_routes(app)
 
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(

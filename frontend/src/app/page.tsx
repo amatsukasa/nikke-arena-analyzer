@@ -1,4 +1,5 @@
 "use client";
+import dynamicComponent from "next/dynamic";
 import { TeamSearchPanel, TeamWinRatePanel, useTeamSearchFilters, useTeamWinRateFilters } from "@/components/TeamAnalysisPanels";
 import CompositionDetails from "@/components/CompositionDetails";
 import TrendsRankings from "@/components/TrendsRankings";
@@ -27,8 +28,10 @@ const SERVER_LABELS: Record<string, string> = {
   SEA: "server.sea",
 };
 
-type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
-const PUBLIC_TABS = new Set<DashboardTab>(["team_winrate", "matchups", "search", "overview"]);
+const SeasonSummary = dynamicComponent(() => import("@/components/articles/SeasonSummary"));
+
+type DashboardTab = "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8" | "summary";
+const PUBLIC_TABS = new Set<DashboardTab>(["team_winrate", "matchups", "search", "overview", "summary"]);
 
 function PlayerAvatar({ url, seed }: { url?: string | null; seed: number }) {
   const [failed, setFailed] = useState(false);
@@ -59,6 +62,7 @@ function DashboardContent() {
 
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
+  const summaryChampionship = requestedTab === "summary" ? Number(searchParams.get("championship")) : 0;
   const [registrationPhase, setRegistrationPhase] = useState(() => {
     const phase = searchParams.get("registration_phase");
     return phase && ["legacy", "league", "championship", "final"].includes(phase) ? phase : phase === "initial" ? "league" : "championship";
@@ -174,7 +178,9 @@ function DashboardContent() {
           const savedSpecificIdsStr = localStorage.getItem('nikke_filter_specific_ids');
 
           const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
-          const initialServer = (savedServer && availableServers.has(savedServer)) ? savedServer : (fallbackServer || "");
+          const summaryTournament = summaryChampionship && data.find(item => item.championship_id === summaryChampionship);
+          const initialServer = (summaryTournament && summaryTournament.play_server)
+            || ((savedServer && availableServers.has(savedServer)) ? savedServer : (fallbackServer || ""));
           setFilterServer(initialServer);
 
           const serverTournaments = data.filter(t => t.play_server === initialServer);
@@ -187,7 +193,8 @@ function DashboardContent() {
           }) : null;
           const initialSeasonFallback = latest?.season || "β30";
 
-          const initialSeason = (savedSeason && serverSeasons.has(savedSeason)) ? savedSeason : initialSeasonFallback;
+          const initialSeason = (summaryTournament && (summaryTournament.season || "β30"))
+            || ((savedSeason && serverSeasons.has(savedSeason)) ? savedSeason : initialSeasonFallback);
           setFilterSeason(initialSeason);
 
           if (savedIsAll !== null) {
@@ -553,6 +560,12 @@ function DashboardContent() {
           {/* Tabs */}
           <div className="sticky top-0 z-20 -mx-3 bg-slate-950/95 px-3 py-2 backdrop-blur-xl sm:-mx-4 sm:px-4 md:static md:mx-0 md:bg-transparent md:p-0">
           <div className="flex snap-x snap-mandatory bg-slate-900/80 backdrop-blur-xl p-1 rounded-lg md:p-1.5 md:rounded-2xl ring-1 ring-white/10 shadow-2xl overflow-x-auto hide-scrollbar">
+            <button
+              onClick={() => setActiveTab("summary")}
+              className={`flex snap-start items-center px-3 py-2.5 text-xs md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "summary" ? "bg-sky-700 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+            >
+              <span>{t("articles.summary")}</span>
+            </button>
             <button 
               onClick={() => setActiveTab("team_winrate")}
               className={`flex snap-start items-center space-x-1.5 px-3 py-2.5 text-xs md:space-x-2 md:px-6 md:py-3 md:text-base rounded-md md:rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
@@ -587,6 +600,13 @@ function DashboardContent() {
 
           {/* Content */}
           <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
+        {activeTab === "summary" && (
+          <SeasonSummary key={JSON.stringify([filterServer, filterSeason])} preferredId={summaryChampionship}
+            championships={Array.from(new Set<number>(seasonTournaments.flatMap(item =>
+              item.championship_id ? [item.championship_id] : [],
+            ))).map(id => ({ id, label: `${filterSeason} (#${id})` }))} />
+        )}
+
         {/* OVERVIEW TAB */}
         {activeTab === "overview" && <TrendsRankings formal={hasSelectedFormal} tournamentIds={selectedTournamentIds} allCharacters={allCharacters} onSelectCharacter={setSelectedCharId} onTeamClick={handleTeamClick}/>}
 

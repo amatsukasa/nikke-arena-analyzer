@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useI18n } from "@/i18n/I18nProvider";
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import LocalizedLink from "@/components/LocalizedLink";
 import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
 
 
@@ -597,6 +598,11 @@ export default function AdminPage() {
           >
             🖼️ Characterテンプレート管理
           </button>
+          {currentUser?.role === "admin" && (
+            <LocalizedLink href="/admin/articles" prefetch={false} className="whitespace-nowrap px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-slate-200">
+              {t("articles.admin")}
+            </LocalizedLink>
+          )}
         </div>
       </div>
 
