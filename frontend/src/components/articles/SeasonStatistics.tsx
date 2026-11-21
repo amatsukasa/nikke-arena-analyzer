@@ -141,6 +141,7 @@ function TeamRow({ team, stage, ids, scope, characters }: {
 
 function RankingPanel({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
   const { t } = useI18n();
+  const fixedDecks = data.initial_stage === "legacy";
   const [stage, setStage] = useState(data.initial_stage);
   const ranking = data.rankings[stage];
   if (!ranking) return null;
@@ -149,15 +150,17 @@ function RankingPanel({ data, characters }: { data: SummaryStatistics; character
     ids={ranking.tournament_ids} scope={data} characters={characters} />;
   return (
     <section aria-labelledby="summary-ranks" className={panel}>
-      <h3 id="summary-ranks" className="text-lg font-bold">{t("seasonSummary.ranking")}</h3>
-      <div role="group" aria-label={t("teamMeaning.registrationPhase")} className="flex flex-wrap gap-2">
-        {stageOrder.filter(key => data.rankings[key]).map(key => (
-          <button key={key} type="button" aria-pressed={stage === key} onClick={() => setStage(key)}
-            className="min-h-11 rounded-lg border border-white/15 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-white/10 aria-pressed:border-sky-500 aria-pressed:bg-sky-900 aria-pressed:text-white">
-            {t(summaryStageLabel(key))}
-          </button>
-        ))}
-      </div>
+      <h3 id="summary-ranks" className="text-lg font-bold">{t(fixedDecks ? "seasonSummary.rankingWholeEvent" : "seasonSummary.ranking")}</h3>
+      {!fixedDecks && (
+        <div role="group" aria-label={t("teamMeaning.registrationPhase")} className="flex flex-wrap gap-2">
+          {stageOrder.filter(key => data.rankings[key]).map(key => (
+            <button key={key} type="button" aria-pressed={stage === key} onClick={() => setStage(key)}
+              className="min-h-11 rounded-lg border border-white/15 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-white/10 aria-pressed:border-sky-500 aria-pressed:bg-sky-900 aria-pressed:text-white">
+              {t(summaryStageLabel(key))}
+            </button>
+          ))}
+        </div>
+      )}
       <p className="text-sm text-slate-300">{t("seasonSummary.population", { total: ranking.population })}</p>
       {!ranking.tournament_ids.length ? (
         <p className="text-slate-400">{t(data.tournament_count ? "seasonSummary.notApplicable" : "seasonSummary.noRegistrations")}</p>

@@ -424,6 +424,7 @@
   "seasonSummary.noRounds": "没有对战记录",
   "seasonSummary.matchWins": "按整场比赛统计，进攻方在 {total} 场中获胜 {wins} 场",
   "seasonSummary.ranking": "各登记阶段阵容采用率前五",
+  "seasonSummary.rankingWholeEvent": "阵容采用率前五（整个赛事）",
   "seasonSummary.wholeEvent": "整个赛事",
   "seasonSummary.place": "第 {rank} 名",
   "seasonSummary.adopters": "采用人数 {count} / {total}",

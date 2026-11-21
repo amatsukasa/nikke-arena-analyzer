@@ -424,6 +424,7 @@
   "seasonSummary.noRounds": "No recorded rounds",
   "seasonSummary.matchWins": "Attack won {wins} of {total} recorded matches.",
   "seasonSummary.ranking": "Top 5 teams by registration stage",
+  "seasonSummary.rankingWholeEvent": "Top 5 teams by adoption (entire tournament)",
   "seasonSummary.wholeEvent": "Entire tournament",
   "seasonSummary.place": "#{rank}",
   "seasonSummary.adopters": "Picked by {count} / {total}",

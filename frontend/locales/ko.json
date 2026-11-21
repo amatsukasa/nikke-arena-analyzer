@@ -424,6 +424,7 @@
   "seasonSummary.noRounds": "대전 기록 없음",
   "seasonSummary.matchWins": "경기 기준 공격 측 {total}경기 중 {wins}승",
   "seasonSummary.ranking": "등록 단계별 편성 채용률 상위 5",
+  "seasonSummary.rankingWholeEvent": "편성 채용률 상위 5 (대회 전체)",
   "seasonSummary.wholeEvent": "대회 전체",
   "seasonSummary.place": "{rank}위",
   "seasonSummary.adopters": "채용 {count}명 / {total}명",

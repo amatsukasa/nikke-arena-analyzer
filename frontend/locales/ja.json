@@ -424,6 +424,7 @@
   "seasonSummary.noRounds": "対戦記録なし",
   "seasonSummary.matchWins": "試合単位では攻撃側が{total}試合中{wins}勝",
   "seasonSummary.ranking": "登録段階ごとの編成採用率トップ5",
+  "seasonSummary.rankingWholeEvent": "編成採用率トップ5（大会全体）",
   "seasonSummary.wholeEvent": "大会全体",
   "seasonSummary.place": "{rank}位",
   "seasonSummary.adopters": "採用 {count}人／{total}人",

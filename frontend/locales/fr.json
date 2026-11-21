@@ -424,6 +424,7 @@
   "seasonSummary.noRounds": "Aucune manche enregistrée",
   "seasonSummary.matchWins": "L’attaque a remporté {wins} matchs sur {total}.",
   "seasonSummary.ranking": "Top 5 des compositions par phase",
+  "seasonSummary.rankingWholeEvent": "Top 5 des compositions du tournoi entier",
   "seasonSummary.wholeEvent": "Tournoi entier",
   "seasonSummary.place": "Nº {rank}",
   "seasonSummary.adopters": "Choisie par {count} / {total}",
