@@ -115,6 +115,7 @@ class Championship(Base):
     is_champion_arena = Column(Boolean, nullable=True)
     include_in_statistics = Column(Boolean, nullable=True)
     display_order = Column(Integer, nullable=True)
+    debut_character_ids = Column(JSON, nullable=False, default=list, server_default="[]")
 
     creator = relationship("AppUser", back_populates="championships")
     tournaments = relationship("Tournament", back_populates="championship")

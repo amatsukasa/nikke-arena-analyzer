@@ -1,9 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import LocalizedLink from "@/components/LocalizedLink";
 import ArticleBody from "@/components/articles/ArticleBody";
+import ArticleReferenceScope, { ReferenceScopeText } from "@/components/articles/ArticleReferenceScope";
+import type { PlayServer } from "@/lib/seasonSummary";
 import { useAuth } from "@/context/AuthContext";
 import { useCharacterCatalog } from "@/hooks/useCharacterCatalog";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -35,6 +37,7 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
   const [uploading, setUploading] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState("");
+  const [referenceServer, setReferenceServer] = useState<PlayServer | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     const controller = new AbortController();
@@ -65,14 +68,17 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
       const response = await fetch(saved ? `${endpoint}/${saved.id}` : endpoint, {
         method: saved ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draft, publish, ...(saved ? { revision: saved.revision } : {}) }),
+        body: JSON.stringify({ draft, publish, ...(saved ? { revision: saved.revision } : {}), ...(referenceServer ? { reference_server: referenceServer } : {}) }),
       });
       if (!response.ok) {
         const key = response.status === 409 ? "articles.conflict" : publish && response.status === 422 ? "articles.publishRequired" : "articles.saveError";
         setError(t(key));
         return;
       }
-      setSaved(await response.json());
+      const updated: AdminArticle = await response.json();
+      setSaved(updated);
+      setDraft(current => ({ ...current, reference_scope: updated.draft.reference_scope }));
+      setReferenceServer(null);
       setDirty(false);
       setNotice(t(publish ? "articles.publishedNotice" : "articles.savedNotice"));
     } catch {
@@ -99,9 +105,10 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="block text-sm">
               {t("articles.kind")}
-              <select className={field} aria-label={t("articles.kind")} value={draft.kind} onChange={event => change({
-                kind: event.target.value as ArticleKind, championship_id: null, character_ids: [],
-              })}>
+              <select className={field} aria-label={t("articles.kind")} value={draft.kind} onChange={event => {
+                setReferenceServer(null);
+                change({ kind: event.target.value as ArticleKind, championship_id: null, character_ids: [], reference_scope: undefined });
+              }}>
                 <option value="season">{t("articles.season")}</option>
                 <option value="guide">{t("articles.guide")}</option>
               </select>
@@ -109,9 +116,10 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
             {draft.kind === "season" && (
               <label className="block text-sm">
                 {t("articles.championship")}
-                <select className={field} aria-label={t("articles.championship")} value={draft.championship_id ?? ""} onChange={event => change({
-                  championship_id: Number(event.target.value) || null,
-                })}>
+                <select className={field} aria-label={t("articles.championship")} value={draft.championship_id ?? ""} onChange={event => {
+                  setReferenceServer(null);
+                  change({ championship_id: Number(event.target.value) || null, reference_scope: undefined });
+                }}>
                   <option value="">{t("articles.selectChampionship")}</option>
                   {championships.map(championship => <option key={championship.id} value={championship.id}>
                     {championship.name} (#{championship.id})
@@ -121,6 +129,13 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
               </label>
             )}
           </div>
+          {draft.kind === "season" && draft.championship_id && (
+            <ArticleReferenceScope key={draft.championship_id} championship={draft.championship_id}
+              saved={draft.reference_scope} pending={referenceServer} onCapture={server => {
+                setReferenceServer(server);
+                if (server) { setDirty(true); setNotice(""); }
+              }} />
+          )}
           {draft.kind === "guide" && (
             <RelatedCharacters selected={draft.character_ids} search={search} setSearch={setSearch}
               setSelected={character_ids => change({ character_ids })} />
@@ -134,6 +149,7 @@ function ArticleForm({ initial, onBack }: { initial: AdminArticle | null; onBack
         {preview && (
           <section aria-label={t("articles.preview")} className="space-y-4 rounded-xl border border-white/15 bg-slate-900 p-4">
             <h2 className="break-words text-2xl font-bold">{draft.title || t("articles.untitled")}</h2>
+            {draft.reference_scope && <p className="text-sm text-slate-300"><ReferenceScopeText scope={draft.reference_scope} /></p>}
             <ArticleBody body={draft.body} />
           </section>
         )}
@@ -195,6 +211,7 @@ export default function ArticleAdminPage() {
   const [error, setError] = useState("");
   const [opening, setOpening] = useState(false);
   const isAdmin = user?.role === "admin";
+  const openedFromLink = useRef(false);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -225,6 +242,13 @@ export default function ArticleAdminPage() {
       setOpening(false);
     }
   }
+
+  useEffect(() => {
+    if (!isAdmin || !articles || openedFromLink.current) return;
+    openedFromLink.current = true;
+    const id = new URLSearchParams(window.location.search).get("article");
+    if (id && articles.some(article => article.id === id)) void open(id);
+  }, [isAdmin, articles]);
 
   if (isLoading) return <main className={adminPage}><p role="status">{t("articles.loading")}</p></main>;
   if (!isAdmin) return <main className={adminPage}><p role="alert">{t("articles.forbidden")}</p></main>;

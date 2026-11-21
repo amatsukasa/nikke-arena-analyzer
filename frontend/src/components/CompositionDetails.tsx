@@ -22,11 +22,12 @@ type Props = {
   onSelectCharacter: (id: number) => void;
   registrationScopeByTournamentId: Record<number, RegistrationScope | undefined>;
   formal: boolean;
+  legacyOnly?: boolean;
 };
 
 export default function CompositionDetails({
   tournamentId, tournamentIds, playServer, championshipId, phase, canonicalId, onPhaseChange,
-  onTeamChange, allCharacters, onSelectCharacter, registrationScopeByTournamentId, formal,
+  onTeamChange, allCharacters, onSelectCharacter, registrationScopeByTournamentId, formal, legacyOnly = false,
 }: Props) {
   const { t } = useI18n();
   const [response, setResponse] = useState<{ key: string; scope: string; data?: any; failed?: boolean }>();
@@ -39,7 +40,7 @@ export default function CompositionDetails({
   const stages = eightOnly ? ["championship", "final"] : ["league", "championship", "final"];
   const normalizedPhase = phase === "initial" ? (eightOnly ? "championship" : "league")
     : phase === "best8" ? "championship" : phase;
-  const stage = formal && stages.includes(normalizedPhase) ? normalizedPhase : "all";
+  const stage = legacyOnly ? "legacy" : formal && stages.includes(normalizedPhase) ? normalizedPhase : "all";
   const query = new URLSearchParams({ registration_phase: stage, detail_team: selected }).toString();
   const scopeKey = JSON.stringify([tournamentId, scopeIds, playServer, championshipId]);
   const requestKey = JSON.stringify([scopeKey, query, attempt]);

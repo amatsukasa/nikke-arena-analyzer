@@ -29,7 +29,8 @@ def describe(title, tournaments):
             conflicts.append(key)
         else:
             values[key] = next(iter(observed), default)
-    revision = hashlib.sha256(json.dumps({"stored": stored, "display_order": title.display_order, "rows": rows}, sort_keys=True).encode()).hexdigest()
+    revision = hashlib.sha256(json.dumps({"stored": stored, "display_order": title.display_order, "rows": rows,
+                                         "debut_character_ids": getattr(title, "debut_character_ids", None) or []}, sort_keys=True).encode()).hexdigest()
     return {**values, "display_order": title.display_order, "configuration_conflicts": conflicts, "inherited_settings": inherited,
             "linked_tournaments": rows, "settings_revision": revision}
 

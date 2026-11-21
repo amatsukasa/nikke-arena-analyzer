@@ -6,6 +6,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from services.season_summary import PlayServer
+
+
+class ReferenceScope(BaseModel):
+    play_server: PlayServer
+    tournament_count: int = Field(ge=0)
+
 
 ArticleKind = Literal["season", "guide"]
 MAX_CAPTION = 300
@@ -100,6 +107,7 @@ class ArticleVersion(BaseModel):
     character_ids: list[Annotated[int, Field(gt=0)]] = Field(default_factory=list, max_length=300)
     title: str = Field(max_length=200)
     body: ArticleNode
+    reference_scope: ReferenceScope | None = None
 
     @field_validator("title")
     @classmethod
@@ -137,6 +145,7 @@ class ArticleWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     draft: ArticleVersion
     publish: bool = False
+    reference_server: PlayServer | None = None
 
 
 class ArticleUpdate(ArticleWrite):

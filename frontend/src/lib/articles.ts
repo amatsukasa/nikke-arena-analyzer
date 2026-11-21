@@ -1,3 +1,5 @@
+import type { ReferenceScope } from "./seasonSummary";
+
 export type ArticleKind = "season" | "guide";
 
 export type ArticleMark = { type: string; attrs?: Record<string, unknown> };
@@ -16,6 +18,7 @@ export type ArticleDraft = {
   character_ids: number[];
   title: string;
   body: ArticleNode;
+  reference_scope?: ReferenceScope;
 };
 
 export type ArticleSummary = {
@@ -27,7 +30,7 @@ export type ArticleSummary = {
   updated_at: string;
 };
 
-export type PublishedArticle = ArticleSummary & Pick<ArticleDraft, "body" | "character_ids">;
+export type PublishedArticle = ArticleSummary & Pick<ArticleDraft, "body" | "character_ids" | "reference_scope">;
 export type SeasonArticles = { latest: PublishedArticle | null; earlier: ArticleSummary[] };
 
 export type AdminArticle = {

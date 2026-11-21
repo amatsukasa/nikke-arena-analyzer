@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 from datetime import date as date_type, datetime
 
 class CharacterBase(BaseModel):
@@ -34,6 +34,7 @@ class ChampionshipCreate(ChampionshipBase):
     include_in_statistics: Optional[bool] = None
     settings_revision: Optional[str] = None
     apply_to_existing: bool = False
+    debut_character_ids: list[Annotated[int, Field(gt=0)]] = Field(default_factory=list, max_length=300)
     model_config = ConfigDict(extra="forbid")
 
     @field_validator("deck_registration_phases", "is_champion_arena", "include_in_statistics")
@@ -58,6 +59,7 @@ class ChampionshipAdminResponse(ChampionshipResponse):
     inherited_settings: List[str] = Field(default_factory=list)
     linked_tournaments: List[dict] = Field(default_factory=list)
     settings_revision: str
+    debut_character_ids: list[int] = Field(default_factory=list)
 
 class ArenaResultEvent(BaseModel):
     id: str

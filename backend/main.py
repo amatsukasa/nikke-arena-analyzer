@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
-from services import championship_settings
+from services import championship_settings, season_summary
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime, timedelta, timezone
 import json
@@ -2154,7 +2154,18 @@ def get_championship(id: int, db: Session = Depends(get_db)):
     return db_championship
 
 def championship_admin_payload(title, tournaments):
-    return {**schemas.ChampionshipResponse.model_validate(title).model_dump(), **championship_settings.describe(title, tournaments)}
+    return {**schemas.ChampionshipResponse.model_validate(title).model_dump(),
+            **championship_settings.describe(title, tournaments),
+            "debut_character_ids": title.debut_character_ids or []}
+
+
+def validated_debut_characters(db, ids):
+    if not ids:
+        return []
+    known = set(db.scalars(select(models.Character.id).where(models.Character.id.in_(ids))))
+    if known != set(ids) or EMPTY_SLOT_CHARACTER_ID in known:
+        raise HTTPException(422, "Unknown debut character")
+    return list(dict.fromkeys(ids))
 
 
 @app.get("/api/admin/championships", response_model=List[schemas.ChampionshipAdminResponse])
@@ -2175,6 +2186,7 @@ def create_championship(
     data = championship.model_dump(exclude=championship_settings.FIELDS | {"settings_revision", "apply_to_existing"})
     data.update({key: getattr(championship, key) if key in championship.model_fields_set else value for key, value in championship_settings.DEFAULTS.items()})
     data["created_by"] = current_user.id
+    data["debut_character_ids"] = validated_debut_characters(db, championship.debut_character_ids)
     db_championship = models.Championship(**data)
     db.add(db_championship)
     db.commit()
@@ -2196,6 +2208,11 @@ def update_championship(
         affected = championship_settings.save(db, title, championship, tournaments)
         previous_date = title.date
         changes = championship.model_dump(exclude_unset=True)
+        if "debut_character_ids" in changes:
+            if championship.settings_revision is not None and not (championship_settings.FIELDS & championship.model_fields_set):
+                if championship.settings_revision != championship_settings.describe(title, tournaments)["settings_revision"]:
+                    raise HTTPException(409, "Title or linked tournaments changed; reload before saving")
+            title.debut_character_ids = validated_debut_characters(db, changes["debut_character_ids"])
         for field in ("name", "date", "start_date", "owner_name", "display_order"):
             if field in changes:
                 setattr(title, field, changes[field])
@@ -5594,7 +5611,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     return stats
 
 
-def _trends_stats(ids, db, phase, finish):
+def _trends_stats(ids, db, phase, finish, *, shared_matches=None):
     """One population for both adoption rankings; no per-composition queries."""
     thresholds = {"all": None, "best16": 16, "best8": 8, "best4": 4, "runner_up": 2, "champion": 1}
     if finish not in thresholds or phase not in ("legacy", "league", "championship", "final"):
@@ -5603,7 +5620,8 @@ def _trends_stats(ids, db, phase, finish):
         with arena_phases.analysis_scope(db, ids) as scope:
             tournaments = {tid:t for tid,t in scope["tournaments"].items() if arena_phases.analysis_applicable(t, phase)}
             players = [p for p in scope["players"] if p.tournament_id in tournaments]
-            matches = arena_phases.effective_matches(db, list(tournaments))
+            matches = (arena_phases.effective_matches(db, list(tournaments)) if shared_matches is None
+                       else [match for match in shared_matches if match.tournament_id in tournaments])
             results = {}
             for tid,tournament in tournaments.items():
                 codes = calculate_player_results(tournament, [p for p in players if p.tournament_id==tid], [m for m in matches if m.tournament_id==tid])
@@ -5648,6 +5666,18 @@ def _trends_stats(ids, db, phase, finish):
             chars.sort(key=lambda row:(-row["count"],row["id"]))
             return {"registration_phase":phase,"total_players":denominator,"team_usage":teams,"character_usage_by_result":{"all":{"denominator":denominator,"characters":chars}}}
     return cross_analytics.cached(db,ids,phase,"trends-population-v1:"+finish,compute)
+
+
+@app.get("/api/season-summary/{championship_id}")
+def get_season_summary(
+    championship_id: int, play_server: season_summary.PlayServer,
+    response: Response, scope_only: bool = False, db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    title, rows, scope = season_summary.public_scope(db, championship_id, play_server)
+    if scope_only:
+        return scope
+    return season_summary.statistics(db, title, rows, scope, _trends_stats, _cross_aggregate)
 
 
 def _cross_target_ids(body, db):

@@ -4,6 +4,7 @@ import LocalizedLink from "@/components/LocalizedLink";
 import { useI18n } from "@/i18n/I18nProvider";
 import { articleHref, type ArticleSummary, type PublishedArticle } from "@/lib/articles";
 import ArticleBody from "./ArticleBody";
+import { ReferenceScopeText } from "./ArticleReferenceScope";
 
 function ArticleDates({ article }: { article: ArticleSummary }) {
   const { locale, t } = useI18n();
@@ -16,16 +17,17 @@ function ArticleDates({ article }: { article: ArticleSummary }) {
   );
 }
 
-export function PublishedArticleView({ article, inSummary = false }: { article: PublishedArticle; inSummary?: boolean }) {
+export function PublishedArticleView({ article, inSummary = false, anchor }: { article: PublishedArticle; inSummary?: boolean; anchor?: string }) {
   const { t } = useI18n();
   const Title = inSummary ? "h3" : "h1";
   return (
-    <article className="min-w-0 space-y-4">
+    <article id={anchor} tabIndex={anchor ? -1 : undefined} className="min-w-0 scroll-mt-24 space-y-4">
       <header className="space-y-2">
         <Title lang="ja" className="break-words text-2xl font-bold text-slate-100 sm:text-3xl">
           {inSummary ? <LocalizedLink href={articleHref(article.id)} prefetch={false} className="hover:text-sky-300">{article.title}</LocalizedLink> : article.title}
         </Title>
         <ArticleDates article={article} />
+        {article.reference_scope && <p className="text-sm text-slate-300"><ReferenceScopeText scope={article.reference_scope} /></p>}
       </header>
       <div lang="ja"><ArticleBody body={article.body} /></div>
       {inSummary && <LocalizedLink href={articleHref(article.id)} prefetch={false} className="inline-block py-2 text-sm text-sky-300 underline">{t("articles.permalink")}</LocalizedLink>}

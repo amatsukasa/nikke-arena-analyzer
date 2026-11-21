@@ -19,6 +19,7 @@ import { useAuth } from "../context/AuthContext";
 import { getCharIconUrl } from "@/utils/charIcon";
 import { useI18n } from "@/i18n/I18nProvider";
 import { localizedTournamentResult } from "@/lib/tournamentResult";
+import { isPlayServer } from "@/lib/seasonSummary";
 
 const SERVER_LABELS: Record<string, string> = {
   KR: "server.kr",
@@ -63,6 +64,11 @@ function DashboardContent() {
   // URLクエリパラメータから初期タブ・編成を復元（キャラ詳細ページからの遷移用）
   const requestedTab = searchParams.get("tab") as DashboardTab | null;
   const summaryChampionship = requestedTab === "summary" ? Number(searchParams.get("championship")) : 0;
+  const summaryServerParam = requestedTab === "summary" ? searchParams.get("play_server") : null;
+  const [summaryTitle, setSummaryTitle] = useState(summaryChampionship || 0);
+  const linkedDetailsTitle = requestedTab === "matchups" ? Number(searchParams.get("summary_championship")) : 0;
+  const linkedDetailsServer = searchParams.get("summary_server");
+  const [useSummaryDetails, setUseSummaryDetails] = useState(Boolean(linkedDetailsTitle && isPlayServer(linkedDetailsServer)));
   const [registrationPhase, setRegistrationPhase] = useState(() => {
     const phase = searchParams.get("registration_phase");
     return phase && ["legacy", "league", "championship", "final"].includes(phase) ? phase : phase === "initial" ? "league" : "championship";
@@ -124,6 +130,7 @@ function DashboardContent() {
   const handleTeamClick = (canonicalId: string, team?: any) => {
     if (!canonicalId) return;
     const phase = team?.registration_phase ?? "all";
+    setUseSummaryDetails(false);
     setSelectedTeam(canonicalId);
     setDetailPhase(phase);
     setActiveTab("matchups");
@@ -178,9 +185,12 @@ function DashboardContent() {
           const savedSpecificIdsStr = localStorage.getItem('nikke_filter_specific_ids');
 
           const fallbackServer = availableServers.has("JP") ? "JP" : Array.from(availableServers)[0] as string | undefined;
-          const summaryTournament = summaryChampionship && data.find(item => item.championship_id === summaryChampionship);
-          const initialServer = (summaryTournament && summaryTournament.play_server)
+          const requestedTitle = summaryChampionship || (useSummaryDetails ? linkedDetailsTitle : 0);
+          const requestedServer = isPlayServer(summaryServerParam) ? summaryServerParam : null;
+          const initialServer = requestedServer || (useSummaryDetails && linkedDetailsServer)
             || ((savedServer && availableServers.has(savedServer)) ? savedServer : (fallbackServer || ""));
+          const titleTournaments = requestedTitle ? data.filter(item => item.championship_id === requestedTitle) : [];
+          const summaryTournament = titleTournaments.find(item => item.play_server === initialServer) ?? titleTournaments[0];
           setFilterServer(initialServer);
 
           const serverTournaments = data.filter(t => t.play_server === initialServer);
@@ -220,6 +230,16 @@ function DashboardContent() {
   }, [isFirstLoad, user?.game_start_date]);
 
   const seasonTournaments = allTournaments.filter(item => item.play_server === filterServer && (item.season || "β30") === filterSeason);
+  const summaryTitleIds = new Set<number>();
+  if (activeTab === "summary") {
+    const matchingSeason = allTournaments.filter(item => (item.season || "β30") === filterSeason);
+    for (const item of [...seasonTournaments, ...matchingSeason]) {
+      if (item.championship_id) summaryTitleIds.add(item.championship_id);
+    }
+    if (summaryTitle > 0) summaryTitleIds.add(summaryTitle);
+  }
+  const summaryServer = isPlayServer(summaryServerParam) && !allTournaments.length ? summaryServerParam
+    : isPlayServer(filterServer) ? filterServer : "JP";
   const hasFormal = seasonTournaments.some(item => item.deck_registration_phases);
   const changeRegistrationPhase = (phase:string) => {
     setRegistrationPhase(phase);
@@ -343,6 +363,12 @@ function DashboardContent() {
     </div>
   );
 
+  if (allTournaments.length === 0 && activeTab === "summary" && summaryTitle > 0) {
+    return <main className="mx-auto max-w-5xl bg-slate-950 px-4 py-8"><SeasonSummary
+      selectedId={summaryTitle} onSelect={setSummaryTitle} championships={[{ id: summaryTitle, label: String(summaryTitle) }]}
+      server={summaryServer} characters={allCharacters} /></main>;
+  }
+
   if (allTournaments.length === 0) {
     return (
       <div className="flex flex-col min-h-screen bg-slate-950 text-slate-100 font-sans">
@@ -404,6 +430,15 @@ function DashboardContent() {
       .map(item => [Number(item.id), item.registration_scope]),
   );
 
+  const linkedIds = new Set((searchParams.get("tournaments") ?? "").split(",").map(Number));
+  const linkedTournaments = useSummaryDetails ? allTournaments.filter(item =>
+    linkedIds.has(item.id) && item.championship_id === linkedDetailsTitle && item.play_server === linkedDetailsServer,
+  ) : [];
+  const detailsIds = useSummaryDetails ? linkedTournaments.map(item => item.id) : selectedTournamentIds;
+  const detailsFormal = useSummaryDetails ? linkedTournaments.some(item => item.deck_registration_phases) : hasSelectedFormal;
+  const detailsScopes = useSummaryDetails ? Object.fromEntries(linkedTournaments
+    .filter(item => item.deck_registration_phases).map(item => [item.id, item.registration_scope])) : registrationScopeByTournamentId;
+
   const seasons = Array.from(new Set(allTournaments.map(t => t.season || "β30")));
   const playServers = Object.keys(SERVER_LABELS);
   const availableServers = new Set(allTournaments.map(t => t.play_server).filter(Boolean));
@@ -412,7 +447,7 @@ function DashboardContent() {
   )).sort() as string[];
 
   return (
-    <main className="p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden">
+    <main className={`p-3 sm:p-4 md:p-8 max-w-[1400px] mx-auto space-y-4 md:space-y-8 pb-24 overflow-x-hidden ${activeTab === "summary" ? "min-h-screen bg-slate-950" : ""}`}>
       <h1 className="sr-only">{t('dashboard.title')}</h1>
 
 
@@ -458,6 +493,8 @@ function DashboardContent() {
                   onChange={(e) => {
                     const newServer = e.target.value;
                     if (newServer === filterServer) return;
+                    setUseSummaryDetails(false);
+                    if (activeTab === "summary" && !summaryTitle) setSummaryTitle(summaryTitleIds.values().next().value ?? 0);
                     setFilterServer(newServer);
                     const newServerTournaments = allTournaments.filter(t => t.play_server === newServer);
                     const newServerSeasons = Array.from(new Set(newServerTournaments.map(t => t.season || "β30").filter(Boolean)));
@@ -486,6 +523,8 @@ function DashboardContent() {
                   onChange={(e) => {
                     const newSeason = e.target.value;
                     if (newSeason === filterSeason) return;
+                    setUseSummaryDetails(false);
+                    setSummaryTitle(0);
                     setFilterSeason(newSeason);
                     setIsAllTournamentsSelected(true);
                     setSelectedSpecificTournamentIds([]);
@@ -506,7 +545,7 @@ function DashboardContent() {
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
                       checked={isAllTournamentsSelected} 
-                      onChange={() => setIsAllTournamentsSelected(true)}
+                      onChange={() => { setUseSummaryDetails(false); setIsAllTournamentsSelected(true); }}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
                     <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('common.all')}</span>
@@ -514,7 +553,7 @@ function DashboardContent() {
                   <label className="flex items-center space-x-2 cursor-pointer group">
                     <input type="radio" 
                       checked={!isAllTournamentsSelected} 
-                      onChange={() => setIsAllTournamentsSelected(false)}
+                      onChange={() => { setUseSummaryDetails(false); setIsAllTournamentsSelected(false); }}
                       className="w-4 h-4 text-blue-500 bg-slate-800 border-white/20 focus:ring-blue-500 focus:ring-offset-slate-900" 
                     />
                     <span className="text-sm font-medium text-slate-300 group-hover:text-white transition-colors">{t('filter.individual')}</span>
@@ -530,6 +569,7 @@ function DashboardContent() {
                       <label key={tournament.id} className="flex items-center space-x-3 cursor-pointer group">
                         <input type="checkbox" checked={selectedSpecificTournamentIds.includes(tournament.id)}
                           onChange={(e) => {
+                            setUseSummaryDetails(false);
                             if (e.target.checked) {
                               setSelectedSpecificTournamentIds([...selectedSpecificTournamentIds, tournament.id]);
                             } else {
@@ -601,10 +641,10 @@ function DashboardContent() {
           {/* Content */}
           <div className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-3 sm:p-4 md:p-8 rounded-lg sm:rounded-xl md:rounded-3xl shadow-2xl min-h-[500px]">
         {activeTab === "summary" && (
-          <SeasonSummary key={JSON.stringify([filterServer, filterSeason])} preferredId={summaryChampionship}
-            championships={Array.from(new Set<number>(seasonTournaments.flatMap(item =>
-              item.championship_id ? [item.championship_id] : [],
-            ))).map(id => ({ id, label: `${filterSeason} (#${id})` }))} />
+          <SeasonSummary selectedId={summaryTitle} onSelect={setSummaryTitle} server={summaryServer}
+            characters={allCharacters} championships={Array.from(summaryTitleIds, id => ({
+              id, label: `${allTournaments.find(item => item.championship_id === id)?.season || "—"} (#${id})`,
+            }))} />
         )}
 
         {/* OVERVIEW TAB */}
@@ -615,14 +655,15 @@ function DashboardContent() {
           allCharacters={allCharacters} selectedTeam={selectedTeam} onTeamClick={handleTeamClick} filters={winRateFilters}/>}
 
         {activeTab === "matchups" && <CompositionDetails
-          tournamentIds={selectedTournamentIds} playServer={filterServer} championshipId={selectedChampionshipId}
-          formal={hasSelectedFormal} phase={detailPhase} canonicalId={selectedTeam}
+          tournamentIds={detailsIds} playServer={useSummaryDetails ? linkedDetailsServer : filterServer}
+          championshipId={useSummaryDetails ? linkedDetailsTitle : selectedChampionshipId}
+          formal={detailsFormal} legacyOnly={useSummaryDetails && detailPhase === "legacy"} phase={detailPhase} canonicalId={selectedTeam}
           onPhaseChange={setDetailPhase} onTeamChange={key => {
             setSelectedTeam(key);
-            if (key) writeTeamDetailsUrl(key, detailPhase, includedCharacterIds, selectedTournamentIds);
+            if (key) writeTeamDetailsUrl(key, detailPhase, includedCharacterIds, detailsIds);
           }}
           allCharacters={allCharacters} onSelectCharacter={setSelectedCharId}
-          registrationScopeByTournamentId={registrationScopeByTournamentId}/>}
+          registrationScopeByTournamentId={detailsScopes}/>}
 
         {/* SEARCH TAB */}
         {activeTab === "search" && <TeamSearchPanel scope={{ tournamentIds: selectedTournamentIds, playServer: filterServer, championshipId: selectedChampionshipId }} formal={hasSelectedFormal}

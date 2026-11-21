@@ -13,6 +13,7 @@ import models
 from article_schemas import ArticleUpdate, ArticleWrite
 from auth import get_current_user_optional, require_admin
 from database import get_db
+from services.season_summary import public_scope
 from services.article_images import image_path, store_article_image
 from services.player_icons import MAX_BYTES, IconTooLarge, InvalidIcon
 
@@ -44,6 +45,8 @@ def public_article(article, *, body=False):
     }
     if body:
         result.update(body=version["body"], character_ids=version["character_ids"])
+        if version.get("reference_scope"):
+            result["reference_scope"] = version["reference_scope"]
     return result
 
 
@@ -137,8 +140,19 @@ def save_article(db, article, payload):
     images = version.image_ids()
     if any(not image_path(image_id).is_file() for image_id in images):
         raise HTTPException(422, "Unknown article image")
-    article.draft = version.model_dump(exclude_none=True)
-    article.draft.setdefault("championship_id", None)
+    saved_draft = article.draft or {}
+    draft = version.model_dump(exclude_none=True, exclude={"reference_scope"})
+    draft.setdefault("championship_id", None)
+    if payload.reference_server and (version.kind != "season" or not version.championship_id):
+        raise HTTPException(422, "A reference server requires a season article and championship")
+    if version.kind == "season":
+        if payload.reference_server:
+            _, _, scope = public_scope(db, version.championship_id, payload.reference_server)
+            draft["reference_scope"] = {key: scope[key] for key in ("play_server", "tournament_count")}
+        elif (saved_draft.get("championship_id") == version.championship_id
+              and saved_draft.get("reference_scope")):
+            draft["reference_scope"] = saved_draft["reference_scope"]
+    article.draft = draft
     if payload.publish and not version.can_publish():
         raise HTTPException(422, "Title, content and any required championship must be set")
     if payload.publish and article.published != article.draft:
