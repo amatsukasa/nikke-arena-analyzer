@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
-from services import championship_settings, season_summary
+from services import article_image_cleanup, championship_settings, season_summary
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime, timedelta, timezone
 import json
@@ -441,6 +441,14 @@ def run_stale_upload_cleanup():
         print(f"[Cleanup] Scheduled cleanup failed: {error}")
     finally:
         db.close()
+
+
+    if os.environ.get("ARTICLE_IMAGE_CLEANUP_ENABLED", "1") != "0":
+        with SessionLocal() as db:
+            try:
+                article_image_cleanup.collect_unused(db)
+            except Exception as error:
+                print(f"[Cleanup] Scheduled article image cleanup failed: {error}")
 
 
 async def periodic_upload_cleanup():

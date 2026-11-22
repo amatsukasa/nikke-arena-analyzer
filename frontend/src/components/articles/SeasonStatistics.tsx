@@ -21,25 +21,26 @@ function usePercent() {
   return (value: number | null) => value == null ? "—" : formatter.format(value / 100);
 }
 
-function NikkeBadge({ nikke, characters }: { nikke: { id: number; name: string }; characters: Character[] }) {
+function NikkeBadge({ nikke, characters, iconOnly = false }: {
+  nikke: { id: number; name: string }; characters: Character[]; iconOnly?: boolean;
+}) {
   const [failedUrl, setFailedUrl] = useState("");
   const url = getCharIconUrl(characters.find(character => character.id === nikke.id));
   return (
-    <div className="flex min-w-0 flex-col items-center gap-1 text-center" title={nikke.name}>
-      <div className="flex size-9 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-slate-800 sm:size-10">
+    <span className="flex min-w-0 flex-col items-center gap-1 text-center" title={nikke.name}>
+      <span className="flex size-9 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-slate-800 sm:size-10">
         {url && failedUrl !== url ? (
           <img src={url} alt="" loading="lazy" decoding="async" onError={() => setFailedUrl(url)} className="size-full object-cover" />
         ) : <span aria-hidden="true" className="text-[10px] text-slate-300">{nikke.name.slice(0, 3)}</span>}
-      </div>
-      <span className="break-words text-[11px] leading-tight text-slate-300">{nikke.name}</span>
-    </div>
+      </span>
+      {!iconOnly && <span className="break-words text-[11px] leading-tight text-slate-300">{nikke.name}</span>}
+    </span>
   );
 }
 
-function SideLeaderList({ leaders, characters }: { leaders: SideLeaders; characters: Character[] }) {
-  const { t } = useI18n();
+function SideLeaderList({ leaders, characters, scope }: { leaders: SideLeaders; characters: Character[]; scope: Scope }) {
+  const { t, href } = useI18n();
   const percent = usePercent();
-  if (!leaders.attack.length && !leaders.defense.length) return null;
   return (
     <div className="space-y-3 border-t border-white/10 pt-4">
       <p className="text-xs text-slate-400">{t("seasonSummary.sideMinimum", { count: leaders.minimum_rounds })}</p>
@@ -50,15 +51,26 @@ function SideLeaderList({ leaders, characters }: { leaders: SideLeaders; charact
               {t(side === "attack" ? "seasonSummary.attackLeaders" : "seasonSummary.defenseLeaders")}
             </h4>
             {leaders[side].length ? (
-              <ol className="grid grid-cols-5 gap-1">
-                {leaders[side].map(nikke => (
-                  <li key={nikke.id} className="min-w-0 text-center">
-                    <NikkeBadge nikke={nikke} characters={characters} />
-                    <span className="text-xs text-slate-200 tabular-nums" title={`${nikke.wins}/${nikke.rounds}`}>{percent(nikke.win_rate)}</span>
+              <ol className="grid gap-2">
+                {leaders[side].map(team => (
+                  <li key={team.canonical_id} className="space-y-1 rounded-xl border border-white/10 bg-slate-900/70 p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <TeamDisplay charIds={team.character_ids} allCharacters={characters} />
+                      <span className="text-sm text-slate-300 tabular-nums">
+                        {t("stats.winsLosses", { wins: team.wins, losses: team.losses })}{" "}
+                        <strong className={side === "attack" ? "text-blue-300" : "text-red-300"}>{percent(team.win_rate)}</strong>
+                      </span>
+                    </div>
+                    {team.has_details && (
+                      <a href={href(compositionSummaryHref(scope, "all", scope.tournament_ids, team.canonical_id, side))}
+                        className="inline-block py-1 text-xs text-sky-300 underline">
+                        {t("seasonSummary.openSideComposition", { side: t(side === "attack" ? "seasonSummary.attack" : "seasonSummary.defense") })}
+                      </a>
+                    )}
                   </li>
                 ))}
               </ol>
-            ) : <p className="text-sm text-slate-400">{t("seasonSummary.noRounds")}</p>}
+            ) : <p className="text-sm text-slate-400">{t("seasonSummary.noQualifiedSideTeams")}</p>}
           </div>
         ))}
       </div>
@@ -66,9 +78,8 @@ function SideLeaderList({ leaders, characters }: { leaders: SideLeaders; charact
   );
 }
 
-function SideResults({ rounds, matches, side_leaders, characters }: Pick<SummaryStatistics, "rounds" | "matches" | "side_leaders"> & {
-  characters: Character[];
-}) {
+function SideResults({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
+  const { rounds, matches, side_leaders } = data;
   const { t } = useI18n();
   const percent = usePercent();
   const attackShare = rounds.total ? 100 * rounds.attack / rounds.total : 0;
@@ -102,7 +113,7 @@ function SideResults({ rounds, matches, side_leaders, characters }: Pick<Summary
       {matches.total > 0 && (
         <p className="text-sm text-slate-300">{t("seasonSummary.matchWins", { total: matches.total, wins: matches.attack })}</p>
       )}
-      <SideLeaderList leaders={side_leaders} characters={characters} />
+      {rounds.total > 0 && <SideLeaderList leaders={side_leaders} characters={characters} scope={data} />}
     </section>
   );
 }
@@ -216,40 +227,45 @@ function DebutPanel({ debut, characters }: { debut: NonNullable<SummaryStatistic
     <section aria-labelledby="summary-debut" className={panel}>
       <h3 id="summary-debut" className="text-lg font-bold">{t("seasonSummary.debut")}</h3>
       <ul className="grid items-start gap-3 lg:grid-cols-2">
-        {debut.characters.map(character => (
-          <li key={character.id} className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-3">
-            <h4 className="break-words font-semibold text-slate-100">
-              {debut.tournament_ids.length ? (
-                <LocalizedLink href={characterSummaryHref(character.id, debut.stage, debut.tournament_ids)} prefetch={false}
-                  title={t(summaryStageLabel(debut.stage))}
-                  className="inline-flex items-center gap-2 text-sky-300 underline">
-                  <div aria-hidden="true"><TeamDisplay charIds={[character.id]} allCharacters={characters} /></div>
-                  {character.name}
-                </LocalizedLink>
-              ) : character.name}
-            </h4>
-            <div className="space-y-2" aria-label={t("seasonSummary.overall")}>
-              <h5 className="text-sm font-semibold">{t("seasonSummary.overall")}</h5>
-              <DebutNumbers data={character.sections.all} characters={characters} />
-            </div>
-            {official && (["league", "championship", "final"] as const).map(stage => {
-              const ids = debut.tournament_ids_by_stage[stage] ?? [];
-              const data = character.sections[stage];
-              return (
-                <details key={stage} className="border-t border-white/10 pt-2">
-                  <summary className="min-h-10 cursor-pointer py-2 text-sm font-medium">{t(summaryStageLabel(stage))}</summary>
-                  {ids.length && data ? (
-                    <div className="space-y-2 pb-2">
-                      <DebutNumbers data={data} characters={characters} />
-                      <LocalizedLink href={characterSummaryHref(character.id, stage, ids)} prefetch={false}
-                        className="inline-block text-xs text-sky-300 underline">{t("seasonSummary.openCharacter")}</LocalizedLink>
-                    </div>
-                  ) : <p className="pb-2 text-sm text-slate-400">{t(debut.tournament_ids.length ? "seasonSummary.notApplicable" : "seasonSummary.noRegistrations")}</p>}
-                </details>
-              );
-            })}
-          </li>
-        ))}
+        {debut.characters.map(character => {
+          const identity = <>
+            <span className="shrink-0" aria-hidden="true"><NikkeBadge nikke={character} characters={characters} iconOnly /></span>
+            <span>{character.name}</span>
+          </>;
+          return (
+            <li key={character.id} className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-3">
+              <h4 className="break-words font-semibold text-slate-100">
+                {!official && debut.tournament_ids.length ? (
+                  <LocalizedLink href={characterSummaryHref(character.id, "legacy", debut.tournament_ids)} prefetch={false}
+                    title={t(summaryStageLabel("legacy"))}
+                    className="inline-flex items-center gap-2 text-sky-300 underline">
+                    {identity}
+                  </LocalizedLink>
+                ) : <span className="inline-flex items-center gap-2">{identity}</span>}
+              </h4>
+              <div className="space-y-2" aria-label={t("seasonSummary.overall")}>
+                <h5 className="text-sm font-semibold">{t("seasonSummary.overall")}</h5>
+                <DebutNumbers data={character.sections.all} characters={characters} />
+              </div>
+              {official && (["league", "championship", "final"] as const).map(stage => {
+                const ids = debut.tournament_ids_by_stage[stage] ?? [];
+                const data = character.sections[stage];
+                return (
+                  <details key={stage} className="border-t border-white/10 pt-2">
+                    <summary className="min-h-10 cursor-pointer py-2 text-sm font-medium">{t(summaryStageLabel(stage))}</summary>
+                    {ids.length && data ? (
+                      <div className="space-y-2 pb-2">
+                        <DebutNumbers data={data} characters={characters} />
+                        <LocalizedLink href={characterSummaryHref(character.id, stage, ids)} prefetch={false}
+                          className="inline-block text-xs text-sky-300 underline">{t("seasonSummary.openCharacter")}</LocalizedLink>
+                      </div>
+                    ) : <p className="pb-2 text-sm text-slate-400">{t(debut.tournament_ids.length ? "seasonSummary.notApplicable" : "seasonSummary.noRegistrations")}</p>}
+                  </details>
+                );
+              })}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -258,7 +274,7 @@ function DebutPanel({ debut, characters }: { debut: NonNullable<SummaryStatistic
 export default function SeasonStatistics({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
   return (
     <div className="space-y-4">
-      <SideResults rounds={data.rounds} matches={data.matches} side_leaders={data.side_leaders} characters={characters} />
+      <SideResults data={data} characters={characters} />
       <RankingPanel data={data} characters={characters} />
       {data.debut && <DebutPanel debut={data.debut} characters={characters} />}
     </div>

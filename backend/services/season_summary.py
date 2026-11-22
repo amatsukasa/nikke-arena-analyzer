@@ -2,13 +2,15 @@
 
 from collections import Counter, defaultdict
 from contextlib import nullcontext
+from fractions import Fraction
 from typing import Literal
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
 import models
-from services import arena_phases, cross_analytics
+from services import arena_phases, composition_analytics, cross_analytics
+from services.team_statistics_display import canonical
 
 
 PlayServer = Literal["JP", "GLOBAL", "KR", "NA", "SEA"]
@@ -67,6 +69,8 @@ def side_results(matches, legacy_decks):
     rounds_by_side, matches_by_side = Counter(), Counter()
     counts = {side: Counter() for side in BATTLE_SIDES}
     wins = {side: Counter() for side in BATTLE_SIDES}
+    team_counts = {side: Counter() for side in BATTLE_SIDES}
+    team_wins = {side: Counter() for side in BATTLE_SIDES}
     seen = set()
     for match in matches:
         match_key = (match.tournament_id, match.id)
@@ -80,33 +84,54 @@ def side_results(matches, legacy_decks):
         if match.winner_id in sides:
             matches_by_side[sides[match.winner_id]] += 1
         decks = getattr(match, "arena_decks", legacy_decks)
-        teams = {side: {team.team_number: nikke_ids(team) for team in decks[player].teams}
+        teams = {side: {team.team_number: team for team in decks[player].teams}
                  for side, player in participants.items() if decks.get(player)}
         for number, winner_side in recorded_winners(match, sides):
             rounds_by_side[winner_side] += 1
             for side, roster in teams.items():
-                characters = roster.get(number, ())
+                team = roster.get(number)
+                if team is None:
+                    continue
+                characters = nikke_ids(team)
                 counts[side].update(characters)
                 if side == winner_side:
                     wins[side].update(characters)
+                if len(characters) == 5 and min(characters) > 0:
+                    key = canonical(team)
+                    team_counts[side][key] += 1
+                    team_wins[side][key] += int(side == winner_side)
 
     def totals(counter):
         return {"attack": counter["attack"], "defense": counter["defense"], "total": sum(counter.values())}
 
-    return {"rounds": totals(rounds_by_side), "matches": totals(matches_by_side)}, counts, wins
+    return {"rounds": totals(rounds_by_side), "matches": totals(matches_by_side)}, counts, wins, team_counts, team_wins
 
 
-def side_leaders(counts, wins, names):
+def side_leaders(counts, wins):
     leaders = {}
     for side in BATTLE_SIDES:
-        eligible = [(cid, total) for cid, total in counts[side].items() if total >= MIN_SIDE_ROUNDS and cid in names]
-        eligible.sort(key=lambda row: (-wins[side][row[0]] / row[1], -row[1], row[0]))
+        eligible = [(key, total) for key, total in counts[side].items() if total >= MIN_SIDE_ROUNDS]
+        eligible.sort(key=lambda row: (-Fraction(wins[side][row[0]], row[1]), -row[1], row[0]))
         leaders[side] = [{
-            "id": cid, "name": names[cid], "wins": wins[side][cid], "rounds": total,
-            "win_rate": rate(wins[side][cid], total),
-        } for cid, total in eligible[:5]]
+            "canonical_id": key, "character_ids": [int(cid) for cid in key.split(",")],
+            "wins": wins[side][key], "losses": total - wins[side][key], "rounds": total,
+            "win_rate": rate(wins[side][key], total),
+        } for key, total in eligible[:5]]
     return {"minimum_rounds": MIN_SIDE_ROUNDS, **leaders}
 
+
+def add_details_links(leaders, details_rows):
+    by_key = {row["canonical_id"]: row for row in details_rows}
+    for side in BATTLE_SIDES:
+        for team in leaders[side]:
+            row = by_key.get(team["canonical_id"])
+            if not row:
+                team["has_details"] = False
+                continue
+            wins, rounds = row["attack_wins"], row["attack_matches"]
+            if side == "defense":
+                wins, rounds = row["win_count"] - wins, row["total_matches"] - rounds
+            team["has_details"] = (team["wins"], team["rounds"]) == (wins, rounds)
 
 def rate(count, population):
     return round(count * 100 / population, 1) if population else None
@@ -255,7 +280,7 @@ def statistics(db, title, rows, scope, trends, aggregate):
     debut_ids = title.debut_character_ids or []
     # Include the selection in the key so a warmed response cannot serve a
     # previous roster after an administrator edits this title.
-    cache_kind = f"season-summary-v2:{title.id}:{scope['play_server']}:{','.join(map(str, debut_ids))}"
+    cache_kind = f"season-summary-v3:{title.id}:{scope['play_server']}:{','.join(map(str, debut_ids))}"
 
     def compute():
         with (arena_phases.analysis_scope(db, ids) if ids else nullcontext({})) as bulk:
@@ -263,18 +288,18 @@ def statistics(db, title, rows, scope, trends, aggregate):
             legacy_decks = {}
             for deck in bulk.get("decks", []):
                 legacy_decks.setdefault(deck.player_id, deck)
-            sides, counts, wins = side_results(matches, legacy_decks)
-            visible_ids = set(debut_ids)
-            for side in BATTLE_SIDES:
-                visible_ids.update(counts[side])
+            sides, counts, wins, team_counts, team_wins = side_results(matches, legacy_decks)
+            leaders = side_leaders(team_counts, team_wins)
+            if any(leaders[side] for side in BATTLE_SIDES):
+                # Some recorded teams have no Details card, and malformed rounds can differ.
+                # Verify the actual Details totals once over the shared analysis scope.
+                details = composition_analytics.build(db, bulk, ids, None, matches=matches)
+                add_details_links(leaders, details["teams"]["all"])
             catalog = select(models.Character.id, models.Character.name)
-            # Associated Nikkes may have registered without a recorded round.
-            if not debut_ids:
-                catalog = catalog.where(models.Character.id.in_(visible_ids))
-            names = {cid: name for cid, name in db.execute(catalog)} if visible_ids else {}
+            names = {cid: name for cid, name in db.execute(catalog)} if debut_ids else {}
             return {
                 **sides,
-                "side_leaders": side_leaders(counts, wins, names),
+                "side_leaders": leaders,
                 "initial_stage": initial,
                 "rankings": ranking_sections(db, groups, stages, trends, matches),
                 "debut": debut_statistics(db, debut_ids, groups, stages, character_stage, aggregate, bulk, names, counts, wins),

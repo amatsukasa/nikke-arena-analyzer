@@ -1,8 +1,12 @@
 """Exercise the article routes with separate admin, provider and public clients."""
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import UUID, uuid4
 import unittest
 from unittest.mock import patch
 
@@ -14,8 +18,9 @@ from sqlalchemy.pool import StaticPool
 
 from auth import create_access_token
 from database import Base, get_db
-from main import app
-from models import AppUser, Championship, Character
+from main import app, periodic_upload_cleanup
+from models import AppUser, ArticleImageLifecycle, Championship, Character
+from services import article_image_cleanup, article_images
 
 
 ARTICLE_URL = "/api/articles"
@@ -50,7 +55,7 @@ class ArticlePublicationTest(unittest.TestCase):
         engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
         self.addCleanup(engine.dispose)
         Base.metadata.create_all(engine)
-        session = sessionmaker(bind=engine)
+        session = self.session = sessionmaker(bind=engine, autoflush=False)
 
         with session.begin() as db:
             db.add_all([
@@ -67,7 +72,8 @@ class ArticlePublicationTest(unittest.TestCase):
 
         root = TemporaryDirectory()
         self.addCleanup(root.cleanup)
-        self.enterContext(patch("services.article_images.ARTICLE_IMAGE_ROOT", Path(root.name)))
+        self.root = Path(root.name)
+        self.enterContext(patch("services.article_images.ARTICLE_IMAGE_ROOT", self.root))
         self.enterContext(patch.dict(app.dependency_overrides, {get_db: test_db}))
         self.reader = TestClient(app)
         self.admin = TestClient(app, headers={"Authorization": f"Bearer {create_access_token({'sub': '1'})}"})
@@ -139,6 +145,98 @@ class ArticlePublicationTest(unittest.TestCase):
         self.assertEqual(self.reader.get(path).json()["updated_at"], current["updated_at"])
         self.assertEqual(self.reader.get(first_image).status_code, 404)
         self.assertEqual(self.reader.get(replacement_path).status_code, 200)
+
+    def image_age(self, image_id):
+        with self.session() as db:
+            row = db.get(ArticleImageLifecycle, UUID(image_id))
+            self.assertIsNotNone(row)
+            return row.unreferenced_since.replace(tzinfo=timezone.utc) if row.unreferenced_since else None
+
+    def sweep(self, now):
+        with self.session() as db:
+            article_image_cleanup.collect_unused(db, now=now)
+
+    def test_last_reference_and_reuse_restart_grace_for_old_shared_images(self):
+        unused, shared, draft_only = (self.upload() for _ in range(3))
+
+        def path(image_id):
+            return article_images.image_path(UUID(image_id))
+
+        since = self.image_age(unused)
+        old_timestamp = (since - timedelta(days=180)).timestamp()
+        os.utime(path(shared), (old_timestamp, old_timestamp))
+        first = self.create(draft(image=shared), publish=True)
+        second = self.create(draft(image=shared))
+        first = self.save(first, draft(image=draft_only))
+        self.assertIsNone(self.image_age(shared))
+        self.assertIsNone(self.image_age(draft_only))
+
+        future = since + timedelta(days=8)
+        self.sweep(since + timedelta(days=6))
+        self.assertTrue(path(unused).exists())
+        self.sweep(future)
+        self.assertFalse(path(unused).exists())
+        self.assertTrue(path(shared).exists())
+        self.assertTrue(path(draft_only).exists())
+        first = self.save(first, draft(image=draft_only), publish=True)
+        self.assertIsNone(self.image_age(shared))  # Still in the second article's draft.
+        self.sweep(future)
+        self.assertTrue(path(shared).exists())
+
+        second = self.save(second, draft())
+        detached = self.image_age(shared)
+        self.assertGreater(detached, since)
+        self.sweep(detached + timedelta(days=7, seconds=-1))
+        self.assertTrue(path(shared).exists())
+        second = self.save(second, draft(image=shared))
+        self.assertIsNone(self.image_age(shared))
+        self.sweep(detached + timedelta(days=8))
+        self.assertTrue(path(shared).exists())
+        self.save(second, draft())
+        detached_again = self.image_age(shared)
+        self.assertGreater(detached_again, detached)
+        self.sweep(detached_again + timedelta(days=7))
+        self.assertFalse(path(shared).exists())
+        self.assertTrue(path(draft_only).exists())
+        self.assertEqual(self.admin.post(ADMIN_URL, json={"draft": draft(image=shared), "publish": True}).status_code, 422)
+
+    def test_old_untracked_files_and_retry_without_an_article_operation(self):
+        legacy = self.root / f"{uuid4()}.webp"
+        legacy.write_bytes(b"unused legacy file")
+        unrelated = self.root / "other.webp"
+        unrelated.write_bytes(b"unmanaged file")
+        outside = self.root / "checks"
+        outside.mkdir()
+        other = outside / f"{uuid4()}.webp"
+        other.write_bytes(b"unmanaged subdirectory")
+        old = (datetime.now(timezone.utc) - timedelta(days=180)).timestamp()
+        os.utime(legacy, (old, old))
+        now = datetime.now(timezone.utc)
+        self.sweep(now)
+        self.assertEqual(self.image_age(legacy.stem), now)
+        self.assertTrue(legacy.exists())
+
+        with patch("main.SessionLocal", self.session), patch("main.cleanup_stale_uploads", autospec=True), \
+                patch("main.os.environ", {"UPLOAD_CLEANUP_INTERVAL_MINUTES": "5"}), \
+                patch.object(article_image_cleanup, "GRACE_PERIOD", timedelta(0)), \
+                patch("main.asyncio.sleep", side_effect=[None, None, asyncio.CancelledError]) as sleep:
+            original_unlink = Path.unlink
+
+            def unlink(path, **kwargs):
+                if path == legacy and not failures:
+                    failures.append(path)
+                    raise PermissionError("temporary filesystem failure")
+                original_unlink(path, **kwargs)
+
+            failures = []
+            with patch.object(Path, "unlink", unlink), self.assertLogs(article_image_cleanup.logger, level="WARNING"):
+                with self.assertRaises(asyncio.CancelledError):
+                    asyncio.run(periodic_upload_cleanup())
+        self.assertEqual(failures, [legacy])
+        self.assertEqual(sleep.await_count, 3)
+        self.assertFalse(legacy.exists())
+        self.assertTrue(unrelated.exists())
+        self.assertTrue(other.exists())
 
     def test_championship_order_and_standalone_guides(self):
         earlier = self.create(draft("Earlier"), publish=True)

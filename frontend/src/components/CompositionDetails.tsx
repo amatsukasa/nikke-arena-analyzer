@@ -74,6 +74,12 @@ export default function CompositionDetails({
   const selectedKey = data?.canonical_id ?? selected;
   const label = (ids: number[]) => ids.map(id => id === 9999 ? t("character.emptySlot") : characterNames.get(id) ?? String(id)).join(" / ");
   const team = data?.team;
+  useEffect(() => {
+    const target = window.location.hash;
+    if (team && (target === "#detail-attack" || target === "#detail-defense")) {
+      document.getElementById(target.slice(1))?.scrollIntoView({ block: "nearest" });
+    }
+  }, [team]);
   const defenseWins = team ? team.win_count - team.attack_wins : 0;
   const defenseRounds = team ? team.total_matches - team.attack_matches : 0;
   const perspective = teamMatchupPerspective(data?.matchups ?? [], selectedKey, value => String(value ?? ""));
@@ -112,14 +118,14 @@ export default function CompositionDetails({
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col items-center justify-center rounded-2xl bg-blue-500/10 p-6 text-center ring-1 ring-blue-500/20">
+        <div id="detail-attack" className="flex flex-col items-center justify-center rounded-2xl bg-blue-500/10 p-6 text-center ring-1 ring-blue-500/20 target:ring-2">
           <p className="mb-2 text-sm text-blue-400">{t("stats.attackWinRate")}</p>
           <p className="text-4xl font-black text-blue-400">{sideRate(team.attack_wins, team.attack_matches)}</p>
           <p className="mt-2 text-sm text-blue-300">
             {t("stats.winsLosses", { wins: team.attack_wins, losses: team.attack_matches - team.attack_wins })}
           </p>
         </div>
-        <div className="flex flex-col items-center justify-center rounded-2xl bg-red-500/10 p-6 text-center ring-1 ring-red-500/20">
+        <div id="detail-defense" className="flex flex-col items-center justify-center rounded-2xl bg-red-500/10 p-6 text-center ring-1 ring-red-500/20 target:ring-2">
           <p className="mb-2 text-sm text-red-400">{t("stats.defenseWinRate")}</p>
           <p className="text-4xl font-black text-red-400">
             {sideRate(defenseWins, defenseRounds)}

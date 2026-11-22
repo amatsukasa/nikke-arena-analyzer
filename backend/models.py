@@ -376,3 +376,10 @@ class ArticlePublicImage(Base):
 
     article_id = Column(Uuid, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True)
     image_id = Column(Uuid, primary_key=True, index=True)
+
+
+class ArticleImageLifecycle(Base):
+    __tablename__ = "article_image_lifecycle"
+
+    id = Column(Uuid, primary_key=True)
+    unreferenced_since = Column(DateTime(timezone=True), nullable=True, index=True)

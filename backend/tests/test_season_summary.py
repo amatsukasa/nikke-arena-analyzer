@@ -29,29 +29,62 @@ class SeasonSummaryMathTest(TestCase):
         initial = match(1, 1, 2, 1, [(1, 1), (1, 1), (2, 1), (3, 1), (4, 2), (5, 2)])
         undecided = match(2, 3, 4, None, [(1, 4), (2, None), (3, 3), (3, 4), (6, 3)])
         unknown = match(3, None, 5, 5, [(1, 5)])
-        totals, _, _ = season_summary.side_results([initial, initial, undecided, unknown], {})
+        totals, *_ = season_summary.side_results([initial, initial, undecided, unknown], {})
         self.assertEqual(totals, {
             "rounds": {"attack": 3, "defense": 3, "total": 6},
             "matches": {"attack": 1, "defense": 0, "total": 1},
         })
 
-    def test_side_leaders_use_valid_rounds_and_skip_one_off_results(self):
+    def test_side_leaders_count_complete_compositions_in_each_side_of_mirrors(self):
         def team(number, *ids):
             return SimpleNamespace(team_number=number, **{f"char{i}_id": cid for i, cid in enumerate(ids, 1)})
 
-        a = SimpleNamespace(teams=[team(i, 11, 12, 9999, None, None) for i in range(1, 6)])
-        d = SimpleNamespace(teams=[team(i, 22, 12, 23 if i == 1 else None, None, None) for i in range(1, 6)])
-        match = SimpleNamespace(
-            id=1, tournament_id=206, attacker_id=1, defender_id=2, winner_id=1,
-            arena_decks={1: a, 2: d},
-            round_results=[SimpleNamespace(round_number=i, winner_id=1 if i < 4 else 2) for i in range(1, 6)],
-        )
-        _, counts, wins = season_summary.side_results([match, match], {})
-        leaders = season_summary.side_leaders(counts, wins, {id: str(id) for id in (11, 12, 22, 23, 9999)})
-        self.assertEqual([row["id"] for row in leaders["attack"]], [11, 12])
-        self.assertEqual([row["id"] for row in leaders["defense"]], [12, 22])
-        self.assertEqual(leaders["attack"][0]["win_rate"], 60.0)
-        self.assertEqual(leaders["defense"][0]["win_rate"], 40.0)
+        complete = (11, 12, 13, 14, 15)
+        offense_only = (31, 32, 33, 34, 35)
+        attack = SimpleNamespace(teams=[team(i, *complete) for i in range(1, 6)])
+        defense = SimpleNamespace(teams=[team(i, *reversed(complete)) for i in range(1, 6)])
+        next_attack = SimpleNamespace(teams=[team(i, *offense_only) for i in range(1, 6)])
+        partial_defense = SimpleNamespace(teams=[
+            team(i, 22, 22, 23, 9999, None) for i in range(1, 6)
+        ])
+
+        def match(mid, decks, phase):
+            return SimpleNamespace(
+                id=mid, tournament_id=206, attacker_id=1, defender_id=2, winner_id=1, arena_phase=phase,
+                arena_decks=decks,
+                round_results=[SimpleNamespace(round_number=i, winner_id=1 if i < 4 else 2) for i in range(1, 6)],
+            )
+
+        mirror = match(1, {1: attack, 2: defense}, "initial")
+        other = match(2, {1: next_attack, 2: partial_defense}, "final")
+        totals, character_counts, _, counts, wins = season_summary.side_results([mirror, mirror, other], {})
+        self.assertEqual(totals["rounds"], {"attack": 6, "defense": 4, "total": 10})
+        self.assertEqual(character_counts["defense"][22], 5)
+        leaders = season_summary.side_leaders(counts, wins)
+        self.assertEqual([row["character_ids"] for row in leaders["attack"]], [list(complete), list(offense_only)])
+        self.assertEqual([row["character_ids"] for row in leaders["defense"]], [list(complete)])
+        attack_row, = leaders["attack"][:1]
+        defense_row, = leaders["defense"]
+        self.assertEqual((attack_row["wins"], attack_row["losses"], attack_row["win_rate"]), (3, 2, 60.0))
+        self.assertEqual((defense_row["wins"], defense_row["losses"], defense_row["win_rate"]), (2, 3, 40.0))
+
+        season_summary.add_details_links(leaders, [{
+            "canonical_id": "11,12,13,14,15", "attack_wins": 3, "attack_matches": 5,
+            "win_count": 6, "total_matches": 11,
+        }])
+        self.assertTrue(attack_row["has_details"])
+        self.assertFalse(defense_row["has_details"])
+        self.assertFalse(leaders["attack"][1]["has_details"])
+
+    def test_composition_rates_are_sorted_before_rounding_with_stable_ties(self):
+        stages = ["1,2,3,4," + str(cid) for cid in range(5, 12)]
+        counts = {"attack": Counter(dict(zip(stages, [5, 10, 10, 10, 1000, 9998, 4]))), "defense": Counter()}
+        wins = {"attack": Counter(dict(zip(stages, [4, 8, 8, 8, 800, 7999, 4]))), "defense": Counter()}
+        leaders = season_summary.side_leaders(counts, wins)
+        self.assertEqual([row["canonical_id"] for row in leaders["attack"]],
+                         [stages[i] for i in (5, 4, 1, 2, 3)])
+        self.assertEqual({row["win_rate"] for row in leaders["attack"]}, {80.0})
+        self.assertEqual(leaders["defense"], [])
 
     def test_partners_are_sorted_across_all_burst_types_using_team_registrations(self):
         usage = [

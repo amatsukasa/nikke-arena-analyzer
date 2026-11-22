@@ -13,6 +13,7 @@ import models
 from article_schemas import ArticleUpdate, ArticleWrite
 from auth import get_current_user_optional, require_admin
 from database import get_db
+from services import article_image_cleanup
 from services.season_summary import public_scope
 from services.article_images import image_path, store_article_image
 from services.player_icons import MAX_BYTES, IconTooLarge, InvalidIcon
@@ -115,10 +116,13 @@ def edit_article(article_id: UUID, db: Session = Depends(get_db)):
     return admin_article(get_article(db, article_id))
 
 
-def upload_image(file: UploadFile = File()):
+def upload_image(file: UploadFile = File(), db: Session = Depends(get_db)):
     data = file.file.read(MAX_BYTES + 1)
     try:
-        image_id = store_article_image(data)
+        with article_image_cleanup.image_transaction(db):
+            image_id = store_article_image(data)
+            article_image_cleanup.track(db, {image_id}, datetime.now(timezone.utc))
+            db.commit()
     except IconTooLarge as exc:
         raise HTTPException(413, "Image is too large") from exc
     except InvalidIcon as exc:
@@ -140,6 +144,7 @@ def save_article(db, article, payload):
     images = version.image_ids()
     if any(not image_path(image_id).is_file() for image_id in images):
         raise HTTPException(422, "Unknown article image")
+    previous_images = article_image_cleanup.version_images(article.draft, article.published)
     saved_draft = article.draft or {}
     draft = version.model_dump(exclude_none=True, exclude={"reference_scope"})
     draft.setdefault("championship_id", None)
@@ -170,6 +175,7 @@ def save_article(db, article, payload):
     db.add(article)
     result = admin_article(article)
     try:
+        article_image_cleanup.update_references(db, article, previous_images)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -178,16 +184,18 @@ def save_article(db, article, payload):
 
 
 def create_article(payload: ArticleWrite, db: Session = Depends(get_db)):
-    article = models.Article(id=uuid4(), revision=1)
-    return save_article(db, article, payload)
+    with article_image_cleanup.image_transaction(db):
+        article = models.Article(id=uuid4(), revision=1)
+        return save_article(db, article, payload)
 
 
 def update_article(article_id: UUID, payload: ArticleUpdate, db: Session = Depends(get_db)):
-    article = get_article(db, article_id, lock=True)
-    if article.revision != payload.revision:
-        raise HTTPException(409, "The article has changed. Reload before saving again.")
-    article.revision += 1
-    return save_article(db, article, payload)
+    with article_image_cleanup.image_transaction(db):
+        article = get_article(db, article_id, lock=True)
+        if article.revision != payload.revision:
+            raise HTTPException(409, "The article has changed. Reload before saving again.")
+        article.revision += 1
+        return save_article(db, article, payload)
 
 
 def register_article_routes(app: FastAPI):

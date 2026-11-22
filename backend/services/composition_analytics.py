@@ -15,11 +15,12 @@ def load(db, tournament_ids, seed):
     return cross_analytics.cached(db, tournament_ids, "all", f"compositions-v1:{seed}", compute)
 
 
-def build(db, scope, tournament_ids, seed):
+def build(db, scope, tournament_ids, seed, *, matches=None):
     tournaments = {tid: scope["tournaments"][tid] for tid in tournament_ids if tid in scope["tournaments"]}
     scope_players = [p for p in scope["players"] if p.tournament_id in tournaments]
     players = {p.id: p for p in scope_players if seed is None or p.seed_number == seed}
-    matches = arena_phases.effective_matches(db, tournaments)
+    if matches is None:
+        matches = arena_phases.effective_matches(db, tournaments)
     players_by_tournament, matches_by_tournament = defaultdict(list), defaultdict(list)
     for player in scope_players:
         players_by_tournament[player.tournament_id].append(player)

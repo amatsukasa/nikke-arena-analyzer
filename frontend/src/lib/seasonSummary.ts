@@ -31,8 +31,11 @@ export type RankedTeam = Adoption & {
 };
 export type Ranking = { tournament_ids: number[]; population: number; teams: RankedTeam[] };
 type NamedNikke = { id: number; name: string };
-export type SideLeaders = { minimum_rounds: number } & Record<"attack" | "defense",
-  (NamedNikke & { wins: number; rounds: number; win_rate: number })[]>;
+export type BattleSide = "attack" | "defense";
+export type SideLeaders = { minimum_rounds: number } & Record<BattleSide, {
+  canonical_id: string; character_ids: number[]; wins: number; losses: number;
+  rounds: number; win_rate: number; has_details: boolean;
+}[]>;
 export type DebutResults = Adoption & {
   wins: number; losses: number; rounds: number; win_rate: number | null;
   partners: (NamedNikke & { rate: number })[];
@@ -53,12 +56,14 @@ export function summaryEndpoint(championship: number, server: PlayServer, scopeO
   return `/api/season-summary/${championship}?play_server=${server}${scopeOnly ? "&scope_only=true" : ""}`;
 }
 
-export function compositionSummaryHref(scope: Scope, stage: SummaryStage, ids: number[], composition: string) {
+export function compositionSummaryHref(
+  scope: Scope, stage: SummaryStage | "all", ids: number[], composition: string, side?: BattleSide,
+) {
   const params = new URLSearchParams({
     tab: "matchups", teamKey: composition, detail_phase: stage, tournaments: ids.join(","),
     summary_championship: String(scope.championship_id), summary_server: scope.play_server,
   });
-  return `/?${params}`;
+  return `/?${params}${side ? `#detail-${side}` : ""}`;
 }
 
 export function characterSummaryHref(id: number, stage: SummaryStage, ids: number[]) {
