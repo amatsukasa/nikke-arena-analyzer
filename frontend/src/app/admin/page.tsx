@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useI18n } from "@/i18n/I18nProvider";
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import LocalizedLink from "@/components/LocalizedLink";
+import DebutCharacterPicker from "@/components/admin/DebutCharacterPicker";
 import CharacterTemplatesAdmin from '../../components/admin/CharacterTemplatesAdmin';
 
 
@@ -93,6 +95,12 @@ export default function AdminPage() {
   const [formChampOrder, setFormChampOrder] = useState('');
   const [formTitleSettings,setFormTitleSettings]=useState<Record<TitleSetting,boolean|null>>({deck_registration_phases:false,is_champion_arena:false,include_in_statistics:true});
   const [editingTitleSettings,setEditingTitleSettings]=useState<any>(null);
+  const [debutIds, setDebutIds] = useState<number[]>([]);
+  const [savingDebut, setSavingDebut] = useState(false);
+
+  useEffect(() => {
+    if (window.location.hash === '#championships') setActiveTab('championships');
+  }, []);
 
   // 共通エラー・メッセージ
   const [error, setError] = useState('');
@@ -188,6 +196,7 @@ export default function AdminPage() {
       name: formChampName.trim(),
       date: formChampDate ? formChampDate : null,
       display_order: formChampOrder === "" ? null : Number(formChampOrder),
+      debut_character_ids: debutIds,
       ...formTitleSettings,
       apply_to_existing: requiresApply,
       ...(editingTitleSettings?{settings_revision:editingTitleSettings.settings_revision}:{})
@@ -228,6 +237,31 @@ export default function AdminPage() {
     }
   };
 
+  async function saveLegacyDebutRoster() {
+    if (!editingChampId || !editingTitleSettings || savingDebut) return;
+    setSavingDebut(true);
+    setModalError('');
+    try {
+      const response = await apiFetch(`/api/championships/${editingChampId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: editingTitleSettings.name,
+          settings_revision: editingTitleSettings.settings_revision,
+          debut_character_ids: debutIds,
+        }),
+      });
+      if (!response.ok) throw new Error(t("articles.saveError"));
+      setEditingTitleSettings(await response.json());
+      setMessage(t("seasonSummary.debutSaved"));
+      setIsChampModalOpen(false);
+      void fetchChampionships();
+    } catch {
+      setModalError(t("articles.saveError"));
+    } finally {
+      setSavingDebut(false);
+    }
+  }
+
   const handleDeleteChamp = async (id: number, name: string) => {
     if (!window.confirm(`「${name}」を削除してもよろしいですか？\n※この大会に関連する対戦データやプレイヤー情報などもすべて削除されます。`)) {
       return;
@@ -256,6 +290,7 @@ export default function AdminPage() {
     setError('');
     setMessage('');
     setModalError('');
+    setDebutIds(champ?.debut_character_ids ?? []);
     if (mode === 'edit' && champ) {
       setEditingChampId(champ.id);
       setEditingTitleSettings(champ);
@@ -597,6 +632,11 @@ export default function AdminPage() {
           >
             🖼️ Characterテンプレート管理
           </button>
+          {currentUser?.role === "admin" && (
+            <LocalizedLink href="/admin/articles" prefetch={false} className="whitespace-nowrap px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-slate-200">
+              {t("articles.admin")}
+            </LocalizedLink>
+          )}
         </div>
       </div>
 
@@ -966,7 +1006,7 @@ export default function AdminPage() {
       {/* --- 大会タイトル追加・編集用モーダル --- */}
       {isChampModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 shadow-2xl text-slate-100 my-8">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto w-full p-6 shadow-2xl text-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-800 mb-6">
               <h3 className="text-lg font-bold text-slate-200">
                 {champModalMode === 'create' ? '🏆 新規大会タイトル登録' : '🏆 大会タイトル情報編集'}
@@ -1028,8 +1068,15 @@ export default function AdminPage() {
                 </div>}
                 {!editingTitleSettings?.configuration_conflicts?.length&&Boolean(editingTitleSettings?.inherited_settings?.length)&&<p className="text-xs text-amber-300">{t("titleSettings.legacyNotice")}</p>}
               </fieldset>
+              <DebutCharacterPicker selected={debutIds} onChange={setDebutIds} />
+              {champModalMode === "edit" && !editingTitleSettings?.date && !formChampDate && (
+                <button type="button" disabled={savingDebut} onClick={() => void saveLegacyDebutRoster()}
+                  className="min-h-11 rounded-lg border border-slate-700 px-3 text-sm text-sky-200 disabled:opacity-50">
+                  {t("seasonSummary.saveDebut")}
+                </button>
+              )}
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
+              <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-slate-800 mt-6">
                 <button
                   type="button"
                   onClick={() => setIsChampModalOpen(false)}

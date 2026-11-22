@@ -24,9 +24,18 @@ export function registrationAnalysisRequest(target: RegistrationAnalysisTarget, 
   return {url, body};
 }
 
-async function registrationResponse(response: Response, fallback: string) {
+type Translate = (key: string) => string;
+
+export function registrationErrorMessage(data: unknown, fallback: string, translate?: Translate) {
+  if (translate && data && typeof data === "object" && "code" in data && data.code === "tournament_published") {
+    return translate("arenaPhases.published");
+  }
+  return apiErrorMessage(data, fallback);
+}
+
+async function registrationResponse(response: Response, fallback: string, translate?: Translate) {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(apiErrorMessage(data, fallback));
+  if (!response.ok) throw new Error(registrationErrorMessage(data, fallback, translate));
   return data;
 }
 
@@ -37,9 +46,12 @@ export async function analyzeRegistrationDecks(target: RegistrationAnalysisTarge
 
 // Callers retain their own eligibility/version context and post-save refresh.
 // Only serialization, transport and API error handling are shared here.
-export async function saveRegistrationDecks(url: string, method: "POST" | "PUT", teams: RegistrationTeam[], context: Record<string, unknown> = {}, fetcher: Fetcher = fetch) {
+export async function saveRegistrationDecks(
+  url: string, method: "POST" | "PUT", teams: RegistrationTeam[],
+  context: Record<string, unknown> = {}, fetcher: Fetcher = fetch, translate?: Translate,
+) {
   return registrationResponse(await fetcher(url, {
     method, headers: {"Content-Type": "application/json"},
     body: JSON.stringify({...context, teams: registrationTeamsPayload(teams)}),
-  }), "編成を保存できませんでした。");
+  }), "編成を保存できませんでした。", translate);
 }

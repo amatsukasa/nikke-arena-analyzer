@@ -21,6 +21,7 @@ const mainItems = [
   { href: '/', label: 'TOP' },
   { href: '/about', label: 'ABOUT' },
   { href: '/guide', label: 'GUIDE' },
+  { href: '/guides', labelKey: 'articles.guide' },
   { href: '/champion-arena/results', labelKey: 'nav.championArenaResults' },
   { href: '/links', label: 'LINK' },
   { href: '/updates', label: 'UPDATE' },

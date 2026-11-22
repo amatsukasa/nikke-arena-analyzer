@@ -58,12 +58,13 @@ export default function PhaseRegistrationPage(){
   }
   async function save(){
     if(!entry||!window.confirm(t(phase==="best8"?"arenaPhases.confirmBest8":data?.format==="champion_8"?"arenaPhases.confirmFinal8":"arenaPhases.confirmFinal64")))return;setBusy("teams");setError("");
-    try{const next=await saveRegistrationDecks(`${base}/players/${entry.player_id}/${phase}`,"PUT",teams,{qualification:entry.qualification,revision_id:entry.revision_id});setData(next);setEditing(false);setDirty(false);setHistory([]);if(!await refreshCharacters())setError(t("arenaPhases.error"));
+    try{const next=await saveRegistrationDecks(`${base}/players/${entry.player_id}/${phase}`,"PUT",teams,{qualification:entry.qualification,revision_id:entry.revision_id},fetch,t);setData(next);setEditing(false);setDirty(false);setHistory([]);if(!await refreshCharacters())setError(t("arenaPhases.error"));
     }catch(e){setError(e instanceof Error?e.message:t("arenaPhases.error"));}finally{setBusy("");}
   }
   async function loadHistory(){try{const response=await fetch(base+"/history",{cache:"no-store"});if(!response.ok)throw new Error(t("arenaPhases.error"));setHistory((await response.json()).registrations);}catch(e){setError(e instanceof Error?e.message:t("arenaPhases.error"));}}
   return <main className="mx-auto max-w-7xl space-y-8 p-4 pb-32 md:p-8">
     <div className="flex flex-wrap items-center gap-4"><Link href={back} onClick={event=>{if(!discard())event.preventDefault();}} className="rounded-full bg-white/5 p-2 text-slate-400" aria-label={t("arenaPhases.backToBracket")}><ChevronLeft size={24}/></Link><div><h1 className="text-2xl font-black text-slate-100 md:text-3xl">{t(`arenaPhases.${registrationStage(phase,data?.format) ?? "unknown"}`)}</h1><p className="text-sm text-slate-400">{tournament?.name}</p></div></div>
+    {tournament?.publication_status==="published"&&<p role="alert" className="text-amber-300">{t("arenaPhases.published")}</p>}
     {error&&<p role="alert" className="rounded-xl bg-red-950/50 p-3 text-red-300">{error}</p>}
     {!data||isLoading?(error?null:<p>{t("arenaPhases.loading")}</p>):<section className="rounded-3xl bg-slate-900/80 p-6 shadow-2xl ring-1 ring-white/10">
       <h2 className="mb-4 text-2xl font-black text-slate-200">{t("arenaPhases.registrations")}: {t(`arenaPhases.${registrationStage(phase,data?.format) ?? "unknown"}`)}</h2><p className="mb-5 text-sm text-slate-400">{t("arenaPhases.emptyNotice")}</p>

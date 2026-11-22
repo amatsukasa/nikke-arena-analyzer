@@ -11,7 +11,7 @@ import DeckRegistrationViewer from "../../../components/DeckRegistrationViewer";
 import { usePrivatePlayerNames } from "@/hooks/usePrivatePlayerNames";
 import PrivatePlayerNameEditor from "@/components/PrivatePlayerNameEditor";
 import PlayerIconEditor from "../../../components/PlayerIconEditor";
-import { analyzeRegistrationDecks, saveRegistrationDecks } from "../../../lib/deckRegistrationApi";
+import { analyzeRegistrationDecks, registrationErrorMessage, saveRegistrationDecks } from "../../../lib/deckRegistrationApi";
 import TournamentBracketViewport from "@/components/TournamentBracketViewport";
 import TournamentPlayerPill from "../../../components/TournamentPlayerPill";
 import MatchResultEditor from "../../../components/MatchResultEditor";
@@ -243,6 +243,7 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
   };
 
   const handleSave = async () => {
+    if (published) { alert(t("arenaPhases.published")); return; }
     // The champion tab must never submit through the initial-registration API.
     if (registrationPhases && activeTab === "champion") return;
     const issues = validateRegistrationTeams(selectedTeams, new Set(characters.map(character => character.id)));
@@ -254,7 +255,7 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
     try {
       const data = await saveRegistrationDecks(`/api/tournaments/${tournamentId}/teams`, "POST", selectedTeams, {
         seed_number: seed, player_icon_url: formPlayerIcon ? formPlayerIcon.split("?")[0] : null,
-      });
+      }, fetch, t);
       {
         const catalogUpdated = await refreshCharacters();
         if (data.history_preserved) {
@@ -280,6 +281,7 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
   };
 
   const uploadFull64PlayerIcon = async (file: File) => {
+    if (published) throw new Error(t("arenaPhases.published"));
     if (!tournamentId) throw new Error("大会IDが確定していません。");
     setIsUploadingIcon(true);
     try {
@@ -289,7 +291,7 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
       formData.append("seed_number", String(seed));
       const response = await fetch("/api/upload/player-icon", { method: "POST", body: formData, credentials: "include" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.detail || `アップロードに失敗しました (HTTP ${response.status})`);
+      if (!response.ok) throw new Error(registrationErrorMessage(data, `アップロードに失敗しました (HTTP ${response.status})`, t));
       const revision = Date.now();
       setPlayerIconRevision(revision);
       setFormPlayerIcon(playerIconUrl(data.url, revision) ?? "");
@@ -555,6 +557,9 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
       {/* Upload Form Area */}
       {!(registrationPhases && activeTab === "champion" && mode === "deck") && <div ref={formRef} className="bg-slate-900/80 backdrop-blur-xl ring-1 ring-white/10 p-6 rounded-3xl shadow-2xl flex flex-col mt-12 scroll-mt-24">
         <h2 className="text-2xl font-black mb-6 text-center text-slate-200">データ登録フォーム</h2>
+        {canEdit && published && mode === "deck" && (
+          <p role="alert" className="mb-4 text-amber-300">{t("arenaPhases.published")}</p>
+        )}
 
         {/* Mode Switcher */}
         <div className="flex bg-slate-800 p-1 rounded-xl mb-6 ring-1 ring-white/5 max-w-md mx-auto w-full">
@@ -597,20 +602,23 @@ function Full64TournamentDetail({ canEdit, registrationPhases, published }: { ca
                   playerIconUrl={formPlayerIcon || null}
                   teams={selectedTeams}
                   characters={characters}
-                  canEdit={canEdit}
-                  onEditPlayer={canEdit ? editFull64PlayerInfo : undefined}
-                  onEditTeams={canEdit ? () => setDeckScreen("edit") : undefined}
+                  canEdit={canEdit && !published}
+                  onEditPlayer={canEdit && !published ? editFull64PlayerInfo : undefined}
+                  onEditTeams={canEdit && !published ? () => setDeckScreen("edit") : undefined}
                 />
               ) : (
                 <div className="space-y-6" data-registration-mode="edit">
-                  <PrivatePlayerNameEditor tournamentId={Number(tournamentId)} seedNumber={seed} value={privateNames.players.find(p=>p.seed_number===seed)?.private_name??null} onSaved={privateNames.refresh}/>
-                  <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} cropSettings={playerIconCropSettings} onCropSettingsChange={setPlayerIconCropSettings} />
+                  <PrivatePlayerNameEditor tournamentId={Number(tournamentId)} seedNumber={seed} value={privateNames.players.find(p=>p.seed_number===seed)?.private_name??null} disabled={!canEdit || published} onSaved={async created => {
+                    await privateNames.refresh();
+                    if (created) void fetchBracket().catch(() => {});
+                  }}/>
+                  <PlayerIconEditor key={`full64-icon-${tournamentId}-${seed}`} iconUrl={formPlayerIcon||null} disabled={!canEdit || published} busy={isUploadingIcon} onUpload={uploadFull64PlayerIcon} cropSettings={playerIconCropSettings} onCropSettingsChange={setPlayerIconCropSettings} />
                   <DeckRegistrationEditor
                     key={`full64-${tournamentId}-${seed}`}
                     teams={selectedTeams}
                     characters={characters}
                     saved={registeredDecks.length>0}
-                    disabled={!canEdit}
+                    disabled={!canEdit || published}
                     dirty={deckDirty}
                     busy={isUploading?"analysis":""}
                     onTeamsChange={next=>{setSelectedTeams(next);setDeckDirty(true);}}

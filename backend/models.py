@@ -1,6 +1,6 @@
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import select, func
-from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, Float, UniqueConstraint, CheckConstraint, JSON
+from sqlalchemy import Column, Integer, SmallInteger, String, Boolean, ForeignKey, Date, DateTime, Float, UniqueConstraint, CheckConstraint, Index, JSON, Uuid
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -115,6 +115,7 @@ class Championship(Base):
     is_champion_arena = Column(Boolean, nullable=True)
     include_in_statistics = Column(Boolean, nullable=True)
     display_order = Column(Integer, nullable=True)
+    debut_character_ids = Column(JSON, nullable=False, default=list, server_default="[]")
 
     creator = relationship("AppUser", back_populates="championships")
     tournaments = relationship("Tournament", back_populates="championship")
@@ -351,3 +352,34 @@ class ArenaLegacyLeagueLinkBatch(Base):
     operator = Column(String(120), nullable=False)
     links = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Article(Base):
+    __tablename__ = "articles"
+    __table_args__ = (
+        Index("ix_articles_public_listing", "published_kind", "published_championship_id", "published_at"),
+    )
+
+    id = Column(Uuid, primary_key=True)
+    revision = Column(Integer, nullable=False)
+    draft = Column(JSON, nullable=False)
+    published = Column(JSON(none_as_null=True), nullable=True)
+    published_kind = Column(String(20), nullable=True)
+    published_championship_id = Column(Integer, ForeignKey("championships.id", ondelete="SET NULL"), nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+    published_updated_at = Column(DateTime(timezone=True), nullable=True)
+    public_images = relationship("ArticlePublicImage", cascade="all, delete-orphan")
+
+
+class ArticlePublicImage(Base):
+    __tablename__ = "article_public_images"
+
+    article_id = Column(Uuid, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True)
+    image_id = Column(Uuid, primary_key=True, index=True)
+
+
+class ArticleImageLifecycle(Base):
+    __tablename__ = "article_image_lifecycle"
+
+    id = Column(Uuid, primary_key=True)
+    unreferenced_since = Column(DateTime(timezone=True), nullable=True, index=True)

@@ -1,12 +1,14 @@
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request, Response, Query, BackgroundTasks
 import auth as auth_module
+import article_routes
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from database import engine, Base, get_db, SessionLocal
 import models, schemas
-from services import championship_settings
+from services import article_image_cleanup, championship_settings, season_summary
 from typing import List, Literal, Optional
 from datetime import date as date_type, datetime, timedelta, timezone
 import json
@@ -20,6 +22,7 @@ import os
 import time
 import re
 from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from services.template_management import (
     describe_template,
@@ -41,6 +44,8 @@ app = FastAPI(
     description="API for extracting and analyzing NIKKE Arena data",
     version="1.0.0"
 )
+
+article_routes.register_article_routes(app)
 
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(
@@ -438,6 +443,14 @@ def run_stale_upload_cleanup():
         print(f"[Cleanup] Scheduled cleanup failed: {error}")
     finally:
         db.close()
+
+
+    if os.environ.get("ARTICLE_IMAGE_CLEANUP_ENABLED", "1") != "0":
+        with SessionLocal() as db:
+            try:
+                article_image_cleanup.collect_unused(db)
+            except Exception as error:
+                print(f"[Cleanup] Scheduled article image cleanup failed: {error}")
 
 
 async def periodic_upload_cleanup():
@@ -2049,6 +2062,9 @@ def update_tournament_publication(
         tournament = require_locked_champion_tournament_manager(
             tournament_id, db, current_user
         )
+    elif not tournament.deck_registration_phases:
+        # Check readiness only after any in-progress legacy deck save has committed.
+        tournament = require_legacy_registration_path(tournament_id, db, current_user)
     publish = body.get("published") is True
     readiness = get_publication_readiness(tournament, db)
 
@@ -2151,7 +2167,18 @@ def get_championship(id: int, db: Session = Depends(get_db)):
     return db_championship
 
 def championship_admin_payload(title, tournaments):
-    return {**schemas.ChampionshipResponse.model_validate(title).model_dump(), **championship_settings.describe(title, tournaments)}
+    return {**schemas.ChampionshipResponse.model_validate(title).model_dump(),
+            **championship_settings.describe(title, tournaments),
+            "debut_character_ids": title.debut_character_ids or []}
+
+
+def validated_debut_characters(db, ids):
+    if not ids:
+        return []
+    known = set(db.scalars(select(models.Character.id).where(models.Character.id.in_(ids))))
+    if known != set(ids) or EMPTY_SLOT_CHARACTER_ID in known:
+        raise HTTPException(422, "Unknown debut character")
+    return list(dict.fromkeys(ids))
 
 
 @app.get("/api/admin/championships", response_model=List[schemas.ChampionshipAdminResponse])
@@ -2172,6 +2199,7 @@ def create_championship(
     data = championship.model_dump(exclude=championship_settings.FIELDS | {"settings_revision", "apply_to_existing"})
     data.update({key: getattr(championship, key) if key in championship.model_fields_set else value for key, value in championship_settings.DEFAULTS.items()})
     data["created_by"] = current_user.id
+    data["debut_character_ids"] = validated_debut_characters(db, championship.debut_character_ids)
     db_championship = models.Championship(**data)
     db.add(db_championship)
     db.commit()
@@ -2193,6 +2221,11 @@ def update_championship(
         affected = championship_settings.save(db, title, championship, tournaments)
         previous_date = title.date
         changes = championship.model_dump(exclude_unset=True)
+        if "debut_character_ids" in changes:
+            if championship.settings_revision is not None and not (championship_settings.FIELDS & championship.model_fields_set):
+                if championship.settings_revision != championship_settings.describe(title, tournaments)["settings_revision"]:
+                    raise HTTPException(409, "Title or linked tournaments changed; reload before saving")
+            title.debut_character_ids = validated_debut_characters(db, changes["debut_character_ids"])
         for field in ("name", "date", "start_date", "owner_name", "display_order"):
             if field in changes:
                 setattr(title, field, changes[field])
@@ -2314,12 +2347,37 @@ def require_locked_champion_tournament_manager(
     return tournament
 
 
-def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
-    if tournament.publication_status == "published":
-        raise HTTPException(
+class TournamentPublishedError(HTTPException):
+    def __init__(self):
+        super().__init__(
             status_code=409,
             detail="Unpublish this tournament before editing it, then validate and publish it again.",
         )
+
+
+@app.exception_handler(TournamentPublishedError)
+async def tournament_published_response(_request: Request, error: TournamentPublishedError):
+    return JSONResponse({"detail": error.detail, "code": "tournament_published"}, status_code=error.status_code)
+
+
+def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
+    if tournament.publication_status == "published":
+        raise TournamentPublishedError()
+
+
+def get_seed_player(tournament, seed_number, db):
+    if tournament.registration_scope != "full_64" or type(seed_number) is not int or not 1 <= seed_number <= 64:
+        raise HTTPException(422, "Invalid seed")
+    return db.query(models.Player).filter_by(tournament_id=tournament.id, seed_number=seed_number).first()
+
+
+def create_seed_player(tournament, seed_number, db, *, icon_url=None):
+    # All seed-based writers lock the tournament before looking for the Player.
+    require_unpublished_champion_edit(tournament)
+    player = models.Player(tournament_id=tournament.id, seed_number=seed_number,
+                           name=automatic_player_name(seed_number), icon_url=icon_url)
+    db.add(player)
+    return player
 
 
 def validate_champion_slot(champion_slot: int) -> None:
@@ -2802,7 +2860,7 @@ def invalidate_dashboard_cache_safely(tournament_id: int) -> None:
         print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
 
 
-async def save_player_icon(image, player, final_path, icon_url, db):
+async def read_player_icon(image):
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
@@ -2810,9 +2868,13 @@ async def save_player_icon(image, player, final_path, icon_url, db):
     data = await image.read(CHAMPION_ICON_MAX_BYTES + 1)
     if len(data) > CHAMPION_ICON_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
+    return data
+
+
+def save_player_icon(data, player, final_path, icon_url, db):
     token = secrets.token_hex(8)
     upload_path, normalized_path, backup_path = champion_icon_temporary_paths(final_path, token)
-    # Finish all awaits before acquiring the process/file lock.
+    # The caller has already read the upload, so no awaits occur while locked.
     with icon_mutation_lock(PLAYER_ICONS_DIR):
         db.flush()
         db.query(models.Player).filter(models.Player.id == player.id).populate_existing().with_for_update().one()
@@ -2894,11 +2956,16 @@ async def upload_champion_player_icon(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    _, player = require_champion_player_manager(
-        tournament_id, player_id, db, current_user
-    )
+    tournament, _ = require_champion_player_manager(tournament_id, player_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    data = await read_player_icon(image)
+    return await run_in_threadpool(persist_champion_player_icon, tournament_id, player_id, data, db, current_user)
+
+
+def persist_champion_player_icon(tournament_id, player_id, data, db, current_user):
+    _, player = require_locked_champion_player_manager(tournament_id, player_id, db, current_user)
     final_path, icon_url = champion_player_icon_location(tournament_id, player.id)
-    await save_player_icon(image, player, final_path, icon_url, db)
+    save_player_icon(data, player, final_path, icon_url, db)
     invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
@@ -2918,9 +2985,7 @@ def delete_champion_player_icon(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    _, player = require_champion_player_manager(
-        tournament_id, player_id, db, current_user
-    )
+    _, player = require_locked_champion_player_manager(tournament_id, player_id, db, current_user)
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     final_path, _ = champion_player_icon_location(tournament_id, player.id)
@@ -3850,27 +3915,17 @@ async def update_player_info(
 ):
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
     with icon_mutation_lock(PLAYER_ICONS_DIR):
-        tournament = require_tournament_manager(tournament_id, db, current_user)
-        player = db.query(models.Player).filter(
-            models.Player.tournament_id == tournament_id,
-            models.Player.seed_number == seed_number
-        ).first()
-    
+        player = get_seed_player(tournament, seed_number, db)
         icon_url = validated_player_icon_reference(data.get("icon_url"), tournament_id, db)
         previous_icon_url = player.icon_url if player else None
-        player_name = automatic_player_name(seed_number)
-    
-        if not player:
-            player = models.Player(
-                tournament_id=tournament_id,
-                seed_number=seed_number,
-                name=player_name,
-                icon_url=icon_url
-            )
-            db.add(player)
+
+        if player is None:
+            player = create_seed_player(tournament, seed_number, db, icon_url=icon_url)
         else:
-            player.name = player_name
+            player.name = automatic_player_name(seed_number)
             if icon_url: player.icon_url = icon_url
     
         db.commit()
@@ -3887,76 +3942,44 @@ async def save_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
-    if phase_tournament.deck_registration_phases:
-        if phase_tournament.registration_scope != "full_64":
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    seed_number = data.get("seed_number")
+    if tournament.deck_registration_phases:
+        if tournament.registration_scope != "full_64":
             raise HTTPException(409, "Use the result/registration API for this tournament format")
-        require_unpublished_champion_edit(phase_tournament)
-        seed = data.get("seed_number") if isinstance(data, dict) else None
-        if type(seed) is not int or seed not in range(1, 65):
-            raise HTTPException(422, "seed_number must be between 1 and 64")
-        player = db.query(models.Player).filter_by(tournament_id=tournament_id, seed_number=seed).first()
+        player = get_seed_player(tournament, seed_number, db)
         is_update = player is not None and bool(arena_phases.initial_deck_sets(db, [player.id]))
         if player is None:
-            player = models.Player(tournament_id=tournament_id, seed_number=seed, name=automatic_player_name(seed))
-            db.add(player)
+            player = create_seed_player(tournament, seed_number, db)
             db.flush()
-        save_initial_arena_registration(phase_tournament, player, data.get("teams"), db, current_user)
+        save_initial_arena_registration(tournament, player, data.get("teams"), db, current_user)
         invalidate_dashboard_cache_safely(tournament_id)
         return {"ok": True, "is_update": is_update, "history_preserved": True}
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
-    tournament = require_tournament_manager(tournament_id, db, current_user)
     temporary_crop_urls = [
         character.get(url_field)
         for team in data.get("teams", [])
         for character in team.get("characters", [])
         for url_field in ("image_url", "template_source_url")
     ]
+    created_template_paths: list[Path] = []
     try:
-        seed_number = data.get("seed_number")
         teams = data.get("teams", [])
-        player_icon_url = data.get("player_icon_url")
-        
-        is_update = False  # 上書きフラグ
-        
-        with icon_mutation_lock(PLAYER_ICONS_DIR):
-            player_icon_url = validated_player_icon_reference(player_icon_url, tournament_id, db)
-            player = db.query(models.Player).filter(
-                models.Player.tournament_id == tournament_id,
-                models.Player.seed_number == seed_number
-            ).first()
-            # 編成登録前の icon_url を記録（上書き防止のため）
-            previous_icon_url = player.icon_url if player else None
 
-            if not player:
-                # Player が存在しない場合は新規作成
-                # icon_url はフロントから送られた場合のみ設定（なければ None のまま）
-                player = models.Player(
-                    tournament_id=tournament_id,
-                    seed_number=seed_number,
-                    name=automatic_player_name(seed_number),
-                    icon_url=player_icon_url or None,
-                )
-                db.add(player)
-                db.commit()
-                db.refresh(player)
-                print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+        with icon_mutation_lock(PLAYER_ICONS_DIR):
+            icon_url = validated_player_icon_reference(data.get("player_icon_url"), tournament_id, db)
+            player = get_seed_player(tournament, seed_number, db)
+            previous_icon_url = player.icon_url if player else None
+            if player is None:
+                player = create_seed_player(tournament, seed_number, db, icon_url=icon_url)
+                db.flush()
             else:
-                # 既存 Player 更新
                 player.name = automatic_player_name(seed_number)
-                # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
-                # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
-                if player_icon_url:
-                    player.icon_url = player_icon_url
-                db.commit()
-                print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
-            cleanup_replaced_player_icon(
-                db,
-                player.id,
-                previous_icon_url,
-                player.icon_url,
-            )
+                if icon_url:
+                    player.icon_url = icon_url
+            player_id = player.id
 
         # 重複キャラクターのバリデーション
         all_char_ids = []
@@ -3988,25 +4011,18 @@ async def save_teams(
         if len(all_char_ids) != len(set(all_char_ids)):
             raise HTTPException(status_code=400, detail="同じキャラクターを複数の部隊に編成することはできません")
 
-        # 既存の編成データを削除（関連する DeckTeam を先に消す必要がある）
-        existing_sets = db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).all()
-        if existing_sets:
-            is_update = True
-            deleted_count = len(existing_sets)
-            for es in existing_sets:
-                db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id == es.id).delete()
-                db.delete(es)
-            db.commit()
-            print(f"[save_teams] 古い編成データを {deleted_count} 件削除しました（上書き登録）: player_id={player.id}")
-        
-        deck_set = models.DeckSet(player_id=player.id)
+        # Keep the tournament lock through the replacement and the final commit.
+        existing_sets = db.query(models.DeckSet).filter_by(player_id=player_id).all()
+        for existing in existing_sets:
+            db.query(models.DeckTeam).filter_by(deck_set_id=existing.id).delete()
+            db.delete(existing)
+
+        deck_set = models.DeckSet(player_id=player_id)
         db.add(deck_set)
-        db.commit()
-        db.refresh(deck_set)
-        
-        template_dir = "uploads/templates"
-        os.makedirs(template_dir, exist_ok=True)
-        templates_added = 0
+        db.flush()
+
+        template_dir = Path(UPLOAD_DIR) / "templates"
+        template_dir.mkdir(parents=True, exist_ok=True)
         
         for team_data in teams:
             chars = team_data.get("characters", [])
@@ -4066,13 +4082,13 @@ async def save_teams(
                         if template_source is None:
                             raise OSError(f"Failed to decode template source: {local_path}")
                         created_path = install_champion_character_template(int(c_id), template_source, db)
-                        representative = representative_template(Path(template_dir), int(c_id))
-                        saved_template_filename = representative.name if representative else None
                         if created_path is not None:
-                            templates_added += 1
+                            created_template_paths.append(created_path)
                             print(f"[Template] 追加: {created_path}")
                         else:
                             print(f"[Template] スキップ（重複）: char_{c_id}")
+                        representative = representative_template(template_dir, int(c_id))
+                        saved_template_filename = representative.name if representative else None
                         add_template_correction_review(
                             db,
                             payload=char_info,
@@ -4082,26 +4098,34 @@ async def save_teams(
                             actor=current_user,
                         )
 
-        
+
         db.commit()
-        if templates_added:
-            _invalidate_template_matcher_cache()
-        deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
-        if deleted_crops:
-            print(f"[Cleanup] Removed {deleted_crops} registered crop images")
-        invalidate_dashboard_cache(tournament_id)
-        return {
-            "ok": True,
-            "is_update": is_update,
-            "templates_added": templates_added,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
+    except Exception as exc:
+        db.rollback()
+        remove_registration_assets(created_template_paths, "rollback")
+        if isinstance(exc, HTTPException):
+            raise
         import traceback
-        print(f"Error in save_teams: {e}")
+        print(f"Error in save_teams: {exc}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # A failed replacement must leave the previous icon and the source crops available.
+    if previous_icon_url and icon_url and previous_icon_url != icon_url:
+        with icon_mutation_lock(PLAYER_ICONS_DIR):
+            current_icon_url = db.scalar(select(models.Player.icon_url).where(models.Player.id == player_id))
+            cleanup_replaced_player_icon(db, player_id, previous_icon_url, current_icon_url)
+    if created_template_paths:
+        _invalidate_template_matcher_cache()
+    deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
+    if deleted_crops:
+        print(f"[Cleanup] Removed {deleted_crops} registered crop images")
+    invalidate_dashboard_cache_safely(tournament_id)
+    return {
+        "ok": True,
+        "is_update": bool(existing_sets),
+        "templates_added": len(created_template_paths),
+    }
 
 
 @app.post("/api/upload/player-icon")
@@ -4125,24 +4149,20 @@ async def upload_player_icon(
     if tournament_id <= 0 or seed_number <= 0:
         raise HTTPException(status_code=422, detail="tournament_id と seed_number は正の整数である必要があります")
 
-    # 権限チェック：admin または大会作成者のみ操作可能
-    require_tournament_manager(tournament_id, db, current_user)
+    # Check before reading the upload, then recheck under lock before saving.
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    data = await read_player_icon(image)
+    return await run_in_threadpool(persist_full64_player_icon, tournament_id, seed_number, data, db, current_user)
 
-    # tournament_id + seed_number で Player を検索し、存在しなければ自動作成
-    player = db.query(models.Player).filter(
-        models.Player.tournament_id == tournament_id,
-        models.Player.seed_number == seed_number,
-    ).first()
-    if not player:
-        # 顔画像先行登録：Player を自動作成（名前はデフォルト、後から編成登録時に更新可能）
-        player = models.Player(
-            tournament_id=tournament_id,
-            seed_number=seed_number,
-            name=automatic_player_name(seed_number),
-        )
-        db.add(player)
-        # Flush inside the shared icon lock to keep filesystem/DB lock order consistent.
 
+def persist_full64_player_icon(tournament_id, seed_number, data, db, current_user):
+    # Use the same tournament lock as first-time name and deck registration.
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    player = get_seed_player(tournament, seed_number, db)
+    if player is None:
+        player = create_seed_player(tournament, seed_number, db)
     else:
         player.name = automatic_player_name(seed_number)
 
@@ -4151,7 +4171,7 @@ async def upload_player_icon(
         raise HTTPException(status_code=422, detail="Unsafe icon path")
     file_path = icon_dir / f"seed_{seed_number}.webp"
     icon_url = f"/api/uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.webp"
-    await save_player_icon(image, player, file_path, icon_url, db)
+    save_player_icon(data, player, file_path, icon_url, db)
     invalidate_dashboard_cache_safely(tournament_id)
     return {"url": icon_url, "player_id": player.id}
 
@@ -5591,7 +5611,7 @@ def get_cross_tournament_stats(body: CrossTournamentRequest, db: Session = Depen
     return stats
 
 
-def _trends_stats(ids, db, phase, finish):
+def _trends_stats(ids, db, phase, finish, *, shared_matches=None):
     """One population for both adoption rankings; no per-composition queries."""
     thresholds = {"all": None, "best16": 16, "best8": 8, "best4": 4, "runner_up": 2, "champion": 1}
     if finish not in thresholds or phase not in ("legacy", "league", "championship", "final"):
@@ -5600,7 +5620,8 @@ def _trends_stats(ids, db, phase, finish):
         with arena_phases.analysis_scope(db, ids) as scope:
             tournaments = {tid:t for tid,t in scope["tournaments"].items() if arena_phases.analysis_applicable(t, phase)}
             players = [p for p in scope["players"] if p.tournament_id in tournaments]
-            matches = arena_phases.effective_matches(db, list(tournaments))
+            matches = (arena_phases.effective_matches(db, list(tournaments)) if shared_matches is None
+                       else [match for match in shared_matches if match.tournament_id in tournaments])
             results = {}
             for tid,tournament in tournaments.items():
                 codes = calculate_player_results(tournament, [p for p in players if p.tournament_id==tid], [m for m in matches if m.tournament_id==tid])
@@ -5645,6 +5666,18 @@ def _trends_stats(ids, db, phase, finish):
             chars.sort(key=lambda row:(-row["count"],row["id"]))
             return {"registration_phase":phase,"total_players":denominator,"team_usage":teams,"character_usage_by_result":{"all":{"denominator":denominator,"characters":chars}}}
     return cross_analytics.cached(db,ids,phase,"trends-population-v1:"+finish,compute)
+
+
+@app.get("/api/season-summary/{championship_id}")
+def get_season_summary(
+    championship_id: int, play_server: season_summary.PlayServer,
+    response: Response, scope_only: bool = False, db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    title, rows, scope = season_summary.public_scope(db, championship_id, play_server)
+    if scope_only:
+        return scope
+    return season_summary.statistics(db, title, rows, scope, _trends_stats, _cross_aggregate)
 
 
 def _cross_target_ids(body, db):
@@ -6763,11 +6796,8 @@ async def put_arena_result(tournament_id: int, match_key: str, request: Request,
 
 
 @app.post("/api/tournaments/{tournament_id}/arena-phases/players")
-async def create_arena_player(tournament_id: int, request: Request, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+def create_arena_player(tournament_id: int, data: dict, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
     tournament = arena_access(tournament_id, db, current_user, True)
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(422, "JSON object required")
     position = data.get("position")
     maximum = 8 if tournament.registration_scope == "champion_8" else 64
     if type(position) is not int or position not in range(1, maximum + 1):
@@ -6817,10 +6847,13 @@ def get_private_player_names(tournament_id: int, response: Response, db: Session
 
 
 @app.put("/api/tournaments/{tournament_id}/private-player-names")
-async def update_private_player_name(tournament_id: int, request: Request, response: Response, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+def update_private_player_name(
+    tournament_id: int, data: dict, response: Response,
+    db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
     tournament = require_legacy_registration_path(tournament_id, db, current_user)
-    data = await request.json()
-    if not isinstance(data, dict) or set(data) - {"player_id", "seed_number", "private_name"}:
+    require_unpublished_champion_edit(tournament)
+    if set(data) - {"player_id", "seed_number", "private_name"}:
         raise HTTPException(422, "Invalid private name request")
     name = data.get("private_name")
     if name is not None and not isinstance(name, str):
@@ -6828,21 +6861,25 @@ async def update_private_player_name(tournament_id: int, request: Request, respo
     name = name.strip() or None if isinstance(name, str) else None
     if name and (len(name) > 50 or any(ord(ch) < 32 for ch in name)):
         raise HTTPException(422, "Private name must be at most 50 characters without control characters")
-    query = db.query(models.Player).filter_by(tournament_id=tournament_id)
+    created = False
     if "player_id" in data:
         if type(data["player_id"]) is not int:
             raise HTTPException(422, "Invalid Player")
-        player = query.filter_by(id=data["player_id"]).first()
+        player = db.query(models.Player).filter_by(tournament_id=tournament_id, id=data["player_id"]).first()
         if player is None:
             raise HTTPException(404, "Player not found")
     else:
         seed = data.get("seed_number")
-        if tournament.registration_scope != "full_64" or type(seed) is not int or not 1 <= seed <= 64:
-            raise HTTPException(422, "Invalid seed")
-        player = query.filter_by(seed_number=seed).first()
+        player = get_seed_player(tournament, seed, db)
         if player is None:
-            raise HTTPException(404, "Player not found")
+            if name is None:
+                raise HTTPException(404, "Player not found")
+            player = create_seed_player(tournament, seed, db)
+            created = True
     player.private_name = name
     db.commit()
+    if created:
+        invalidate_dashboard_cache_safely(tournament_id)
     response.headers["Cache-Control"] = "private, no-store"
-    return {"id": player.id, "seed_number": player.seed_number, "champion_slot": player.champion_slot, "private_name": player.private_name}
+    return {"id": player.id, "seed_number": player.seed_number, "champion_slot": player.champion_slot,
+            "private_name": player.private_name, "created": created}
