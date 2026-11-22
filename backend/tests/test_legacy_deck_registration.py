@@ -1,36 +1,87 @@
 """Exercise the legacy save and publication APIs with independent PostgreSQL connections."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
 from time import monotonic, sleep
 from unittest import TestCase
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import event, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import CreateSchema, DropSchema
 
-import main
-import models
-from auth import create_access_token
-from database import Base, SessionLocal, engine
+from database_safety import TEST_DATABASE_NAME, normalize_postgresql_driver_url, validate_test_database_url
+
+
+@contextmanager
+def isolated_test_schema(test_url):
+    schema = f"legacy_deck_test_{uuid4().hex}"
+    engine = create_engine(
+        test_url,
+        connect_args={"options": f"-c search_path={schema}"},
+        execution_options={"schema_translate_map": {None: schema}},
+    )
+    try:
+        with engine.begin() as connection:
+            if connection.scalar(text("SELECT current_database()")) != TEST_DATABASE_NAME:
+                raise RuntimeError("Connection did not resolve to the dedicated test database")
+            connection.execute(CreateSchema(schema))
+        try:
+            with engine.connect() as connection:
+                if connection.scalar(text("SELECT current_schema()")) != schema:
+                    raise RuntimeError("Connection did not resolve to the isolated test schema")
+            yield engine
+        finally:
+            with engine.begin() as connection:
+                connection.execute(DropSchema(schema, cascade=True))
+    finally:
+        engine.dispose()
 
 
 class LegacyDeckRegistrationTest(TestCase):
     def setUp(self):
-        if engine.dialect.name != "postgresql":
-            self.skipTest("requires disposable PostgreSQL")
-        Base.metadata.drop_all(bind=engine)
-        Base.metadata.create_all(bind=engine)
+        try:
+            raw_url = validate_test_database_url(
+                os.environ.get("TEST_DATABASE_URL"),
+                acceptance_url=os.environ.get("ACCEPTANCE_DATABASE_URL"),
+            )
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+        test_url = make_url(normalize_postgresql_driver_url(raw_url))
+        # Query options must not override the host and database approved above.
+        if test_url.query.keys() & {"host", "hostaddr", "port", "database", "dbname", "service"}:
+            self.skipTest("TEST_DATABASE_URL must specify the test server and database in the URL itself")
+
+        self.engine = self.enterContext(isolated_test_schema(test_url))
+        self.sessions = sessionmaker(bind=self.engine, autoflush=False)
+
+        import main
+        import models
+        from database import Base, get_db
+
+        def test_db():
+            with self.sessions() as db:
+                yield db
+
+        Base.metadata.create_all(bind=self.engine, checkfirst=False)
+        self.main = main
+        self.models = models
         root = Path(self.enterContext(TemporaryDirectory()))
+        self.enterContext(patch.dict(main.app.dependency_overrides, {get_db: test_db}))
         self.enterContext(patch.object(main, "UPLOAD_DIR", str(root)))
         self.enterContext(patch.object(main, "PLAYER_ICONS_DIR", root / "player_icons"))
         self.enterContext(patch.object(main, "recompute_snapshot"))
         self.addCleanup(main._dashboard_cache.clear)
         main._dashboard_cache.clear()
-        with SessionLocal() as db:
+        with self.sessions() as db:
             db.add_all([
                 models.AppUser(id=1, email="owner@example.invalid", hashed_password="unused",
                                role="contributor", approval_status="active"),
@@ -44,8 +95,10 @@ class LegacyDeckRegistrationTest(TestCase):
             db.commit()
 
     def client(self, user_id):
+        from auth import create_access_token
+
         token = create_access_token({"sub": str(user_id)})
-        client = TestClient(main.app, headers={"Authorization": f"Bearer {token}"})
+        client = TestClient(self.main.app, headers={"Authorization": f"Bearer {token}"})
         self.addCleanup(client.close)
         return client
 
@@ -67,8 +120,8 @@ class LegacyDeckRegistrationTest(TestCase):
         ]
 
     def saved_decks(self, seed):
-        with SessionLocal() as db:
-            player = db.query(models.Player).filter_by(tournament_id=1, seed_number=seed).one_or_none()
+        with self.sessions() as db:
+            player = db.query(self.models.Player).filter_by(tournament_id=1, seed_number=seed).one_or_none()
             if player is None:
                 return None
             return [
@@ -81,7 +134,7 @@ class LegacyDeckRegistrationTest(TestCase):
         # Check PostgreSQL directly so a slow request alone does not count as waiting.
         until = monotonic() + 5
         while monotonic() < until:
-            with engine.connect() as connection:
+            with self.engine.connect() as connection:
                 if connection.scalar(text("""
                     SELECT EXISTS (
                         SELECT 1 FROM pg_stat_activity
@@ -121,15 +174,15 @@ class LegacyDeckRegistrationTest(TestCase):
         writing, resume = Event(), Event()
         connection_ids = []
 
-        def pause_before_insert(conn, _cursor, statement, _parameters, _context, _executemany):
-            if statement.startswith("INSERT INTO deck_teams"):
+        def pause_before_insert(conn, _cursor, _statement, _parameters, context, _executemany):
+            if context.isinsert and context.compiled.statement.table.name == self.models.DeckTeam.__tablename__:
                 connection_ids.append(conn.connection.driver_connection.get_backend_pid())
                 writing.set()
                 if not resume.wait(8):
                     raise TimeoutError("Legacy deck write was not released")
 
-        event.listen(engine, "before_cursor_execute", pause_before_insert)
-        self.addCleanup(event.remove, engine, "before_cursor_execute", pause_before_insert)
+        event.listen(self.engine, "before_cursor_execute", pause_before_insert)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", pause_before_insert)
         with ThreadPoolExecutor(max_workers=2) as pool:
             save = pool.submit(self.save)
             try:
@@ -151,7 +204,7 @@ class LegacyDeckRegistrationTest(TestCase):
         previous = self.saved_decks(1)
         publishing, resume = Event(), Event()
         connection_ids = []
-        original = main.get_publication_readiness
+        original = self.main.get_publication_readiness
 
         def pause_readiness(tournament, db):
             connection_ids.append(db.connection().connection.driver_connection.get_backend_pid())
@@ -162,7 +215,7 @@ class LegacyDeckRegistrationTest(TestCase):
 
         changed = self.decks()
         changed[-1]["characters"][-1]["id"] = 26
-        with patch.object(main, "get_publication_readiness", pause_readiness), ThreadPoolExecutor(max_workers=2) as pool:
+        with patch.object(self.main, "get_publication_readiness", pause_readiness), ThreadPoolExecutor(max_workers=2) as pool:
             publish = pool.submit(self.publish)
             try:
                 self.assertTrue(publishing.wait(5))
