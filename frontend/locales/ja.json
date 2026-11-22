@@ -254,7 +254,7 @@
   "arenaPhases.locked": "登録待ち",
   "arenaPhases.error": "処理に失敗しました。再読込して状態を確認してください。",
   "arenaPhases.loading": "読み込み中…",
-  "arenaPhases.published": "編集には大会を非公開に戻してください。",
+  "arenaPhases.published": "非公開にしてから編集してください。",
   "arenaPhases.reload": "再読込",
   "arenaPhases.discard": "未保存の編集を破棄しますか？",
   "arenaPhases.confirmSave": "この段階の5編成を新しい版として保存しますか？過去の結果は変わりません。",

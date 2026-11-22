@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Req
 import auth as auth_module
 import article_routes
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ import os
 import time
 import re
 from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from services.template_management import (
     describe_template,
@@ -2342,12 +2344,37 @@ def require_locked_champion_tournament_manager(
     return tournament
 
 
-def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
-    if tournament.publication_status == "published":
-        raise HTTPException(
+class TournamentPublishedError(HTTPException):
+    def __init__(self):
+        super().__init__(
             status_code=409,
             detail="Unpublish this tournament before editing it, then validate and publish it again.",
         )
+
+
+@app.exception_handler(TournamentPublishedError)
+async def tournament_published_response(_request: Request, error: TournamentPublishedError):
+    return JSONResponse({"detail": error.detail, "code": "tournament_published"}, status_code=error.status_code)
+
+
+def require_unpublished_champion_edit(tournament: models.Tournament) -> None:
+    if tournament.publication_status == "published":
+        raise TournamentPublishedError()
+
+
+def get_seed_player(tournament, seed_number, db):
+    if tournament.registration_scope != "full_64" or type(seed_number) is not int or not 1 <= seed_number <= 64:
+        raise HTTPException(422, "Invalid seed")
+    return db.query(models.Player).filter_by(tournament_id=tournament.id, seed_number=seed_number).first()
+
+
+def create_seed_player(tournament, seed_number, db, *, icon_url=None):
+    # All seed-based writers lock the tournament before looking for the Player.
+    require_unpublished_champion_edit(tournament)
+    player = models.Player(tournament_id=tournament.id, seed_number=seed_number,
+                           name=automatic_player_name(seed_number), icon_url=icon_url)
+    db.add(player)
+    return player
 
 
 def validate_champion_slot(champion_slot: int) -> None:
@@ -2830,7 +2857,7 @@ def invalidate_dashboard_cache_safely(tournament_id: int) -> None:
         print(f"[dashboard-cache] invalidate failed tournament={tournament_id}: {exc}")
 
 
-async def save_player_icon(image, player, final_path, icon_url, db):
+async def read_player_icon(image):
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     if image.content_type not in CHAMPION_ICON_IMAGE_TYPES:
@@ -2838,9 +2865,13 @@ async def save_player_icon(image, player, final_path, icon_url, db):
     data = await image.read(CHAMPION_ICON_MAX_BYTES + 1)
     if len(data) > CHAMPION_ICON_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Image exceeds 10 MB")
+    return data
+
+
+def save_player_icon(data, player, final_path, icon_url, db):
     token = secrets.token_hex(8)
     upload_path, normalized_path, backup_path = champion_icon_temporary_paths(final_path, token)
-    # Finish all awaits before acquiring the process/file lock.
+    # The caller has already read the upload, so no awaits occur while locked.
     with icon_mutation_lock(PLAYER_ICONS_DIR):
         db.flush()
         db.query(models.Player).filter(models.Player.id == player.id).populate_existing().with_for_update().one()
@@ -2922,11 +2953,16 @@ async def upload_champion_player_icon(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    _, player = require_champion_player_manager(
-        tournament_id, player_id, db, current_user
-    )
+    tournament, _ = require_champion_player_manager(tournament_id, player_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    data = await read_player_icon(image)
+    return await run_in_threadpool(persist_champion_player_icon, tournament_id, player_id, data, db, current_user)
+
+
+def persist_champion_player_icon(tournament_id, player_id, data, db, current_user):
+    _, player = require_locked_champion_player_manager(tournament_id, player_id, db, current_user)
     final_path, icon_url = champion_player_icon_location(tournament_id, player.id)
-    await save_player_icon(image, player, final_path, icon_url, db)
+    save_player_icon(data, player, final_path, icon_url, db)
     invalidate_dashboard_cache_safely(tournament_id)
     return {
         "player_id": player.id,
@@ -2946,9 +2982,7 @@ def delete_champion_player_icon(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    _, player = require_champion_player_manager(
-        tournament_id, player_id, db, current_user
-    )
+    _, player = require_locked_champion_player_manager(tournament_id, player_id, db, current_user)
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
     final_path, _ = champion_player_icon_location(tournament_id, player.id)
@@ -3878,27 +3912,17 @@ async def update_player_info(
 ):
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
     with icon_mutation_lock(PLAYER_ICONS_DIR):
-        tournament = require_tournament_manager(tournament_id, db, current_user)
-        player = db.query(models.Player).filter(
-            models.Player.tournament_id == tournament_id,
-            models.Player.seed_number == seed_number
-        ).first()
-    
+        player = get_seed_player(tournament, seed_number, db)
         icon_url = validated_player_icon_reference(data.get("icon_url"), tournament_id, db)
         previous_icon_url = player.icon_url if player else None
-        player_name = automatic_player_name(seed_number)
-    
-        if not player:
-            player = models.Player(
-                tournament_id=tournament_id,
-                seed_number=seed_number,
-                name=player_name,
-                icon_url=icon_url
-            )
-            db.add(player)
+
+        if player is None:
+            player = create_seed_player(tournament, seed_number, db, icon_url=icon_url)
         else:
-            player.name = player_name
+            player.name = automatic_player_name(seed_number)
             if icon_url: player.icon_url = icon_url
     
         db.commit()
@@ -3915,26 +3939,22 @@ async def save_teams(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.get_current_user),
 ):
-    phase_tournament = require_legacy_registration_path(tournament_id, db, current_user)
-    if phase_tournament.deck_registration_phases:
-        if phase_tournament.registration_scope != "full_64":
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    seed_number = data.get("seed_number")
+    if tournament.deck_registration_phases:
+        if tournament.registration_scope != "full_64":
             raise HTTPException(409, "Use the result/registration API for this tournament format")
-        require_unpublished_champion_edit(phase_tournament)
-        seed = data.get("seed_number") if isinstance(data, dict) else None
-        if type(seed) is not int or seed not in range(1, 65):
-            raise HTTPException(422, "seed_number must be between 1 and 64")
-        player = db.query(models.Player).filter_by(tournament_id=tournament_id, seed_number=seed).first()
+        player = get_seed_player(tournament, seed_number, db)
         is_update = player is not None and bool(arena_phases.initial_deck_sets(db, [player.id]))
         if player is None:
-            player = models.Player(tournament_id=tournament_id, seed_number=seed, name=automatic_player_name(seed))
-            db.add(player)
+            player = create_seed_player(tournament, seed_number, db)
             db.flush()
-        save_initial_arena_registration(phase_tournament, player, data.get("teams"), db, current_user)
+        save_initial_arena_registration(tournament, player, data.get("teams"), db, current_user)
         invalidate_dashboard_cache_safely(tournament_id)
         return {"ok": True, "is_update": is_update, "history_preserved": True}
     if os.environ.get("PLAYER_ICON_WRITES_PAUSED") == "1":
         raise HTTPException(status_code=503, detail="Player icon maintenance in progress")
-    tournament = require_tournament_manager(tournament_id, db, current_user)
     temporary_crop_urls = [
         character.get(url_field)
         for team in data.get("teams", [])
@@ -3942,7 +3962,6 @@ async def save_teams(
         for url_field in ("image_url", "template_source_url")
     ]
     try:
-        seed_number = data.get("seed_number")
         teams = data.get("teams", [])
         player_icon_url = data.get("player_icon_url")
         
@@ -3950,23 +3969,12 @@ async def save_teams(
         
         with icon_mutation_lock(PLAYER_ICONS_DIR):
             player_icon_url = validated_player_icon_reference(player_icon_url, tournament_id, db)
-            player = db.query(models.Player).filter(
-                models.Player.tournament_id == tournament_id,
-                models.Player.seed_number == seed_number
-            ).first()
+            player = get_seed_player(tournament, seed_number, db)
             # 編成登録前の icon_url を記録（上書き防止のため）
             previous_icon_url = player.icon_url if player else None
 
-            if not player:
-                # Player が存在しない場合は新規作成
-                # icon_url はフロントから送られた場合のみ設定（なければ None のまま）
-                player = models.Player(
-                    tournament_id=tournament_id,
-                    seed_number=seed_number,
-                    name=automatic_player_name(seed_number),
-                    icon_url=player_icon_url or None,
-                )
-                db.add(player)
+            if player is None:
+                player = create_seed_player(tournament, seed_number, db, icon_url=player_icon_url or None)
                 db.commit()
                 db.refresh(player)
                 print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
@@ -4153,24 +4161,20 @@ async def upload_player_icon(
     if tournament_id <= 0 or seed_number <= 0:
         raise HTTPException(status_code=422, detail="tournament_id と seed_number は正の整数である必要があります")
 
-    # 権限チェック：admin または大会作成者のみ操作可能
-    require_tournament_manager(tournament_id, db, current_user)
+    # Check before reading the upload, then recheck under lock before saving.
+    tournament = require_tournament_manager(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    data = await read_player_icon(image)
+    return await run_in_threadpool(persist_full64_player_icon, tournament_id, seed_number, data, db, current_user)
 
-    # tournament_id + seed_number で Player を検索し、存在しなければ自動作成
-    player = db.query(models.Player).filter(
-        models.Player.tournament_id == tournament_id,
-        models.Player.seed_number == seed_number,
-    ).first()
-    if not player:
-        # 顔画像先行登録：Player を自動作成（名前はデフォルト、後から編成登録時に更新可能）
-        player = models.Player(
-            tournament_id=tournament_id,
-            seed_number=seed_number,
-            name=automatic_player_name(seed_number),
-        )
-        db.add(player)
-        # Flush inside the shared icon lock to keep filesystem/DB lock order consistent.
 
+def persist_full64_player_icon(tournament_id, seed_number, data, db, current_user):
+    # Use the same tournament lock as first-time name and deck registration.
+    tournament = require_legacy_registration_path(tournament_id, db, current_user)
+    require_unpublished_champion_edit(tournament)
+    player = get_seed_player(tournament, seed_number, db)
+    if player is None:
+        player = create_seed_player(tournament, seed_number, db)
     else:
         player.name = automatic_player_name(seed_number)
 
@@ -4179,7 +4183,7 @@ async def upload_player_icon(
         raise HTTPException(status_code=422, detail="Unsafe icon path")
     file_path = icon_dir / f"seed_{seed_number}.webp"
     icon_url = f"/api/uploads/player_icons/tournament_{tournament_id}/seed_{seed_number}.webp"
-    await save_player_icon(image, player, file_path, icon_url, db)
+    save_player_icon(data, player, file_path, icon_url, db)
     invalidate_dashboard_cache_safely(tournament_id)
     return {"url": icon_url, "player_id": player.id}
 
@@ -6804,11 +6808,8 @@ async def put_arena_result(tournament_id: int, match_key: str, request: Request,
 
 
 @app.post("/api/tournaments/{tournament_id}/arena-phases/players")
-async def create_arena_player(tournament_id: int, request: Request, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+def create_arena_player(tournament_id: int, data: dict, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
     tournament = arena_access(tournament_id, db, current_user, True)
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(422, "JSON object required")
     position = data.get("position")
     maximum = 8 if tournament.registration_scope == "champion_8" else 64
     if type(position) is not int or position not in range(1, maximum + 1):
@@ -6858,10 +6859,13 @@ def get_private_player_names(tournament_id: int, response: Response, db: Session
 
 
 @app.put("/api/tournaments/{tournament_id}/private-player-names")
-async def update_private_player_name(tournament_id: int, request: Request, response: Response, db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user)):
+def update_private_player_name(
+    tournament_id: int, data: dict, response: Response,
+    db: Session = Depends(get_db), current_user: models.AppUser = Depends(auth_module.get_current_user),
+):
     tournament = require_legacy_registration_path(tournament_id, db, current_user)
-    data = await request.json()
-    if not isinstance(data, dict) or set(data) - {"player_id", "seed_number", "private_name"}:
+    require_unpublished_champion_edit(tournament)
+    if set(data) - {"player_id", "seed_number", "private_name"}:
         raise HTTPException(422, "Invalid private name request")
     name = data.get("private_name")
     if name is not None and not isinstance(name, str):
@@ -6869,21 +6873,25 @@ async def update_private_player_name(tournament_id: int, request: Request, respo
     name = name.strip() or None if isinstance(name, str) else None
     if name and (len(name) > 50 or any(ord(ch) < 32 for ch in name)):
         raise HTTPException(422, "Private name must be at most 50 characters without control characters")
-    query = db.query(models.Player).filter_by(tournament_id=tournament_id)
+    created = False
     if "player_id" in data:
         if type(data["player_id"]) is not int:
             raise HTTPException(422, "Invalid Player")
-        player = query.filter_by(id=data["player_id"]).first()
+        player = db.query(models.Player).filter_by(tournament_id=tournament_id, id=data["player_id"]).first()
         if player is None:
             raise HTTPException(404, "Player not found")
     else:
         seed = data.get("seed_number")
-        if tournament.registration_scope != "full_64" or type(seed) is not int or not 1 <= seed <= 64:
-            raise HTTPException(422, "Invalid seed")
-        player = query.filter_by(seed_number=seed).first()
+        player = get_seed_player(tournament, seed, db)
         if player is None:
-            raise HTTPException(404, "Player not found")
+            if name is None:
+                raise HTTPException(404, "Player not found")
+            player = create_seed_player(tournament, seed, db)
+            created = True
     player.private_name = name
     db.commit()
+    if created:
+        invalidate_dashboard_cache_safely(tournament_id)
     response.headers["Cache-Control"] = "private, no-store"
-    return {"id": player.id, "seed_number": player.seed_number, "champion_slot": player.champion_slot, "private_name": player.private_name}
+    return {"id": player.id, "seed_number": player.seed_number, "champion_slot": player.champion_slot,
+            "private_name": player.private_name, "created": created}
