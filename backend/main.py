@@ -2062,6 +2062,9 @@ def update_tournament_publication(
         tournament = require_locked_champion_tournament_manager(
             tournament_id, db, current_user
         )
+    elif not tournament.deck_registration_phases:
+        # Check readiness only after any in-progress legacy deck save has committed.
+        tournament = require_legacy_registration_path(tournament_id, db, current_user)
     publish = body.get("published") is True
     readiness = get_publication_readiness(tournament, db)
 
@@ -3961,38 +3964,22 @@ async def save_teams(
         for character in team.get("characters", [])
         for url_field in ("image_url", "template_source_url")
     ]
+    created_template_paths: list[Path] = []
     try:
         teams = data.get("teams", [])
-        player_icon_url = data.get("player_icon_url")
-        
-        is_update = False  # 上書きフラグ
-        
-        with icon_mutation_lock(PLAYER_ICONS_DIR):
-            player_icon_url = validated_player_icon_reference(player_icon_url, tournament_id, db)
-            player = get_seed_player(tournament, seed_number, db)
-            # 編成登録前の icon_url を記録（上書き防止のため）
-            previous_icon_url = player.icon_url if player else None
 
+        with icon_mutation_lock(PLAYER_ICONS_DIR):
+            icon_url = validated_player_icon_reference(data.get("player_icon_url"), tournament_id, db)
+            player = get_seed_player(tournament, seed_number, db)
+            previous_icon_url = player.icon_url if player else None
             if player is None:
-                player = create_seed_player(tournament, seed_number, db, icon_url=player_icon_url or None)
-                db.commit()
-                db.refresh(player)
-                print(f"[save_teams] 新規プレイヤー登録: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
+                player = create_seed_player(tournament, seed_number, db, icon_url=icon_url)
+                db.flush()
             else:
-                # 既存 Player 更新
                 player.name = automatic_player_name(seed_number)
-                # icon_url は player_icon_url が明示的に送られた場合のみ更新する。
-                # 顔画像先行登録で既に icon_url が設定済みの場合は上書きしない。
-                if player_icon_url:
-                    player.icon_url = player_icon_url
-                db.commit()
-                print(f"[save_teams] 既存プレイヤー更新: tournament={tournament_id}, seed={seed_number}, player_id={player.id}")
-            cleanup_replaced_player_icon(
-                db,
-                player.id,
-                previous_icon_url,
-                player.icon_url,
-            )
+                if icon_url:
+                    player.icon_url = icon_url
+            player_id = player.id
 
         # 重複キャラクターのバリデーション
         all_char_ids = []
@@ -4024,25 +4011,18 @@ async def save_teams(
         if len(all_char_ids) != len(set(all_char_ids)):
             raise HTTPException(status_code=400, detail="同じキャラクターを複数の部隊に編成することはできません")
 
-        # 既存の編成データを削除（関連する DeckTeam を先に消す必要がある）
-        existing_sets = db.query(models.DeckSet).filter(models.DeckSet.player_id == player.id).all()
-        if existing_sets:
-            is_update = True
-            deleted_count = len(existing_sets)
-            for es in existing_sets:
-                db.query(models.DeckTeam).filter(models.DeckTeam.deck_set_id == es.id).delete()
-                db.delete(es)
-            db.commit()
-            print(f"[save_teams] 古い編成データを {deleted_count} 件削除しました（上書き登録）: player_id={player.id}")
-        
-        deck_set = models.DeckSet(player_id=player.id)
+        # Keep the tournament lock through the replacement and the final commit.
+        existing_sets = db.query(models.DeckSet).filter_by(player_id=player_id).all()
+        for existing in existing_sets:
+            db.query(models.DeckTeam).filter_by(deck_set_id=existing.id).delete()
+            db.delete(existing)
+
+        deck_set = models.DeckSet(player_id=player_id)
         db.add(deck_set)
-        db.commit()
-        db.refresh(deck_set)
-        
-        template_dir = "uploads/templates"
-        os.makedirs(template_dir, exist_ok=True)
-        templates_added = 0
+        db.flush()
+
+        template_dir = Path(UPLOAD_DIR) / "templates"
+        template_dir.mkdir(parents=True, exist_ok=True)
         
         for team_data in teams:
             chars = team_data.get("characters", [])
@@ -4102,13 +4082,13 @@ async def save_teams(
                         if template_source is None:
                             raise OSError(f"Failed to decode template source: {local_path}")
                         created_path = install_champion_character_template(int(c_id), template_source, db)
-                        representative = representative_template(Path(template_dir), int(c_id))
-                        saved_template_filename = representative.name if representative else None
                         if created_path is not None:
-                            templates_added += 1
+                            created_template_paths.append(created_path)
                             print(f"[Template] 追加: {created_path}")
                         else:
                             print(f"[Template] スキップ（重複）: char_{c_id}")
+                        representative = representative_template(template_dir, int(c_id))
+                        saved_template_filename = representative.name if representative else None
                         add_template_correction_review(
                             db,
                             payload=char_info,
@@ -4118,26 +4098,34 @@ async def save_teams(
                             actor=current_user,
                         )
 
-        
+
         db.commit()
-        if templates_added:
-            _invalidate_template_matcher_cache()
-        deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
-        if deleted_crops:
-            print(f"[Cleanup] Removed {deleted_crops} registered crop images")
-        invalidate_dashboard_cache(tournament_id)
-        return {
-            "ok": True,
-            "is_update": is_update,
-            "templates_added": templates_added,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
+    except Exception as exc:
+        db.rollback()
+        remove_registration_assets(created_template_paths, "rollback")
+        if isinstance(exc, HTTPException):
+            raise
         import traceback
-        print(f"Error in save_teams: {e}")
+        print(f"Error in save_teams: {exc}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # A failed replacement must leave the previous icon and the source crops available.
+    if previous_icon_url and icon_url and previous_icon_url != icon_url:
+        with icon_mutation_lock(PLAYER_ICONS_DIR):
+            current_icon_url = db.scalar(select(models.Player.icon_url).where(models.Player.id == player_id))
+            cleanup_replaced_player_icon(db, player_id, previous_icon_url, current_icon_url)
+    if created_template_paths:
+        _invalidate_template_matcher_cache()
+    deleted_crops = delete_temporary_crop_urls(temporary_crop_urls)
+    if deleted_crops:
+        print(f"[Cleanup] Removed {deleted_crops} registered crop images")
+    invalidate_dashboard_cache_safely(tournament_id)
+    return {
+        "ok": True,
+        "is_update": bool(existing_sets),
+        "templates_added": len(created_template_paths),
+    }
 
 
 @app.post("/api/upload/player-icon")
