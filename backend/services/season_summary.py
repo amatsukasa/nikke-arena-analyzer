@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 import models
-from services import arena_phases, composition_analytics, cross_analytics
+from services import arena_phases, composition_analytics, cross_analytics, season_adoption
 from services.team_statistics_display import canonical
 
 
@@ -22,15 +22,7 @@ def public_scope(db, championship_id, play_server):
     if title is None:
         raise HTTPException(404, "Championship not found")
 
-    tournament = models.Tournament
-    rows = db.execute(select(
-        tournament.id, tournament.registration_scope, tournament.deck_registration_phases.label("deck_registration_phases"),
-    ).join(tournament.creator).where(
-        tournament.championship_id == championship_id,
-        tournament.publication_status == "published",
-        tournament.has_match_data.is_(True),
-        models.AppUser.play_server == play_server,
-    ).order_by(tournament.id)).all()
+    rows = public_rows(db, championship_id, play_server)
     scope = {
         "championship_id": title.id,
         "title": title.name,
@@ -41,6 +33,18 @@ def public_scope(db, championship_id, play_server):
         "champion_8": sum(row.registration_scope == "champion_8" for row in rows),
     }
     return title, rows, scope
+
+
+def public_rows(db, championship_id, play_server):
+    tournament = models.Tournament
+    return db.execute(select(
+        tournament.id, tournament.registration_scope, tournament.deck_registration_phases.label("deck_registration_phases"),
+    ).join(tournament.creator).where(
+        tournament.championship_id == championship_id,
+        tournament.publication_status == "published",
+        tournament.has_match_data.is_(True),
+        models.AppUser.play_server == play_server,
+    ).order_by(tournament.id)).all()
 
 
 EMPTY_NIKKE = 9999
@@ -147,9 +151,12 @@ def stage_ids(rows):
             for stage in ("legacy", *STAGES)}
 
 
-def ranking_sections(db, groups, stages, trends, matches):
-    data = {stage: trends(groups[stage], db, stage, "all", shared_matches=matches)
+def stage_trends(db, groups, stages, trends, matches):
+    return {stage: trends(groups[stage], db, stage, "all", shared_matches=matches)
             if groups[stage] else {"total_players": 0, "team_usage": []} for stage in stages}
+
+
+def ranking_sections(groups, data):
     by_composition = {stage: {row["canonical_id"]: row for row in value["team_usage"]}
                       for stage, value in data.items()}
     result = {}
@@ -278,12 +285,19 @@ def statistics(db, title, rows, scope, trends, aggregate):
     initial = "final" if formal else "legacy"
     character_stage = "championship" if formal else "legacy"
     debut_ids = title.debut_character_ids or []
-    # Include the selection in the key so a warmed response cannot serve a
-    # previous roster after an administrator edits this title.
-    cache_kind = f"season-summary-v3:{title.id}:{scope['play_server']}:{','.join(map(str, debut_ids))}"
+    mode, previous, reason = season_adoption.previous_season(db, title, formal)
+    prior_rows = public_rows(db, previous.id, scope["play_server"]) if previous else []
+    prior_groups = stage_ids(prior_rows)
+    current_full64 = [row.id for row in rows if row.deck_registration_phases and row.registration_scope == "full_64"]
+    prior_full64 = [row.id for row in prior_rows if not row.deck_registration_phases and row.registration_scope == "full_64"]
+    prior_ids = prior_full64 if mode == "transition" else [row.id for row in prior_rows]
+    dependencies = [*ids, *prior_ids]
+    # Resolve chronology and the public scope on each request, including titles with no public tournaments.
+    cache_kind = repr(("season-summary-v4", title.id, scope["play_server"], debut_ids, ids, prior_ids,
+                       mode, reason, (previous.id, previous.name) if previous else None))
 
     def compute():
-        with (arena_phases.analysis_scope(db, ids) if ids else nullcontext({})) as bulk:
+        with (arena_phases.analysis_scope(db, dependencies) if dependencies else nullcontext({})) as bulk:
             matches = arena_phases.effective_matches(db, ids) if ids else []
             legacy_decks = {}
             for deck in bulk.get("decks", []):
@@ -295,14 +309,36 @@ def statistics(db, title, rows, scope, trends, aggregate):
                 # Verify the actual Details totals once over the shared analysis scope.
                 details = composition_analytics.build(db, bulk, ids, None, matches=matches)
                 add_details_links(leaders, details["teams"]["all"])
-            catalog = select(models.Character.id, models.Character.name)
-            names = {cid: name for cid, name in db.execute(catalog)} if debut_ids else {}
+            catalog = {row.id: row for row in db.execute(select(
+                models.Character.id, models.Character.name, models.Character.weapon, models.Character.burst_phase,
+            ))} if dependencies or debut_ids else {}
+            names = {cid: row.name for cid, row in catalog.items()}
+            stage_data = stage_trends(db, groups, stages, trends, matches)
+            adoption_stages = {
+                stage: {
+                    "weapons": season_adoption.stage_weapons(db, bulk, groups[stage], stage, catalog),
+                    "burst": season_adoption.burst_rankings(stats, catalog),
+                } for stage, stats in stage_data.items()
+            }
+            season_comparison = {"mode": mode or "unavailable", "reason": reason,
+                                 "previous": {"id": previous.id, "name": previous.name} if previous else None}
+            if mode == "transition":
+                season_comparison["transition"] = season_adoption.migration_weapons(
+                    db, bulk, current_full64, prior_full64, catalog,
+                )
+            elif mode == "growth":
+                season_comparison["growth"] = {
+                    stage: season_adoption.stage_growth(db, bulk, prior_groups[stage], stage, stats, catalog, set(debut_ids))
+                    for stage, stats in stage_data.items() if stage in STAGES
+                }
             return {
                 **sides,
                 "side_leaders": leaders,
                 "initial_stage": initial,
-                "rankings": ranking_sections(db, groups, stages, trends, matches),
+                "rankings": ranking_sections(groups, stage_data),
+                "adoption_stages": adoption_stages,
+                "season_comparison": season_comparison,
                 "debut": debut_statistics(db, debut_ids, groups, stages, character_stage, aggregate, bulk, names, counts, wins),
             }
 
-    return {**scope, **cross_analytics.cached(db, ids, "all", cache_kind, compute)}
+    return {**scope, **cross_analytics.cached(db, dependencies, "all", cache_kind, compute)}
