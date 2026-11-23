@@ -21,13 +21,6 @@ class ChampionArenaMasterTest(unittest.TestCase):
         result = main.create_championship(schemas.ChampionshipCreate(name=name, date=date(2026, 1, 1), **settings), self.db, self.admin)
         return self.db.get(models.Championship, result["id"])
 
-    def _save(self, title, **changes):
-        from services import championship_settings
-        state = championship_settings.describe(title, championship_settings.children(self.db, title.id))
-        values = {key: state[key] for key in championship_settings.FIELDS}
-        values.update(changes)
-        return main.update_championship(title.id, schemas.ChampionshipCreate(name=title.name, settings_revision=state["settings_revision"], apply_to_existing=True, **values), self.db, self.admin)
-
     def test_master_creation_and_public_ordering(self):
         past = self._title("Past")
         latest = self._title("Season 1")
@@ -51,17 +44,68 @@ class ChampionArenaMasterTest(unittest.TestCase):
         self.assertTrue(tournament.has_match_data)
         self.assertTrue(tournament.is_champion_arena)
 
+    def test_personal_result_settings_and_links_keep_analysis_unchanged(self):
+        legacy = models.Tournament(name="Legacy label", date=date(1970, 1, 1), display_order=1,
+                                   legacy_is_champion_arena=True, legacy_has_match_data=False)
+        self.db.add(legacy)
+        self.db.commit()
+        older = self._title("Older")
+        older.display_order = 2
+        self.db.commit()
+        created = main.create_championship(schemas.ChampionshipCreate(
+            name="Renamed title", display_order=3, arena_results_enabled=True,
+            is_champion_arena=False, include_in_statistics=False,
+            arena_result_legacy_tournament_ids=[legacy.id],
+        ), self.db, self.admin)
+        title_id = created["id"]
+        self.assertEqual(created["arena_result_legacy_tournament_ids"], [legacy.id])
+        self.assertFalse(created["is_champion_arena"])
+        self.assertFalse(created["include_in_statistics"])
+        self.db.refresh(legacy)
+        self.assertIsNone(legacy.championship_id)
+        self.assertFalse(legacy.has_match_data)
+        self.assertEqual(legacy.publication_status, "draft")
+        events = main.get_champion_arena_tournaments(self.db)
+        self.assertEqual([row["title"] for row in events], ["Renamed title", "Older"])
+        self.assertEqual(events[0]["legacy_tournament_ids"], [legacy.id])
+        with self.assertRaises(main.HTTPException) as error:
+            main.update_championship(older.id, schemas.ChampionshipCreate(
+                name=older.name, arena_result_legacy_tournament_ids=[legacy.id],
+            ), self.db, self.admin)
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(main.get_tournaments(False, self.db, None), [])
+
+    def test_real_title_link_uses_tournament_id_without_matching_names(self):
+        title = self._title("Same name")
+        linked = models.Tournament(name="Different name", date=date.today(), championship_id=title.id,
+                                    legacy_is_champion_arena=True)
+        unlinked = models.Tournament(name=title.name, date=date.today(), legacy_is_champion_arena=True)
+        self.db.add_all([linked, unlinked])
+        self.db.commit()
+        rows = {row["id"]: row for row in main.get_champion_arena_tournaments(self.db)}
+        self.assertEqual(rows[f"championship:{title.id}"]["legacy_tournament_ids"], [linked.id])
+        self.assertIn(f"legacy-tournament:{unlinked.id}", rows)
+        title.arena_results_enabled = False
+        self.db.commit()
+        self.assertEqual([row["id"] for row in main.get_champion_arena_tournaments(self.db)],
+                         [f"legacy-tournament:{unlinked.id}"])
+
     def test_existing_tournament_can_join_and_leave_results_without_losing_match_data(self):
         title = self._title(is_champion_arena=False)
         tournament = models.Tournament(name="Beta37", date=date(2026, 3, 1), championship_id=title.id, created_by=self.admin.id, publication_status="published")
         self.db.add(tournament)
         self.db.commit()
-        self._save(title, is_champion_arena=True)
+        main.update_championship(title.id, schemas.ChampionshipCreate(
+            name=title.name, arena_results_enabled=True,
+        ), self.db, self.admin)
         self.assertEqual([row["id"] for row in main.get_champion_arena_tournaments(self.db)], [f"championship:{title.id}"])
         self.assertEqual([row.id for row in main.get_tournaments(False, self.db, None)], [tournament.id])
-        self._save(title, is_champion_arena=False)
+        main.update_championship(title.id, schemas.ChampionshipCreate(
+            name=title.name, arena_results_enabled=False,
+        ), self.db, self.admin)
         self.assertEqual(main.get_champion_arena_tournaments(self.db), [])
         self.assertTrue(tournament.has_match_data)
+        self.assertFalse(tournament.is_champion_arena)
         self.assertEqual(tournament.publication_status, "published")
 
     def test_legacy_partial_update_preserves_champion_arena_fields(self):
@@ -82,5 +126,18 @@ class ChampionArenaMasterTest(unittest.TestCase):
         ):
             dependency=inspect.signature(endpoint).parameters[parameter].default
             self.assertIs(dependency.dependency,auth_module.require_admin)
+
+    def test_legacy_link_preview_requires_admin_and_returns_only_a_legacy_master(self):
+        dependency = inspect.signature(main.preview_arena_result_legacy_master).parameters["_"].default
+        self.assertIs(dependency.dependency, auth_module.require_admin)
+        legacy = models.Tournament(name="Legacy label", date=date.today(), legacy_is_champion_arena=True)
+        non_legacy = models.Tournament(name="Normal title", date=date.today())
+        self.db.add_all([legacy, non_legacy])
+        self.db.commit()
+        self.assertEqual(main.preview_arena_result_legacy_master(legacy.id, self.admin, self.db),
+                         {"id": legacy.id, "title": "Legacy label"})
+        with self.assertRaises(main.HTTPException) as error:
+            main.preview_arena_result_legacy_master(non_legacy.id, self.admin, self.db)
+        self.assertEqual(error.exception.status_code, 404)
 
 if __name__=="__main__": unittest.main()

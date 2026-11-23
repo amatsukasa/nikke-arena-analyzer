@@ -1,4 +1,5 @@
 export const CHAMPION_ARENA_STORAGE_KEY = "nikkeari_championship_results_v1";
+export const LEGACY_ARENA_STORAGE_KEY = "nikkeari_user_data_v1";
 
 export const arenaResultLabels = {
   not_entered: "未入力", not_participated: "未出場", unknown: "不明",
@@ -8,27 +9,125 @@ export const arenaResultLabels = {
 } as const;
 
 export type ArenaResult = keyof typeof arenaResultLabels;
-export type ArenaTournament = { id:number|string; title:string; display_order:number|null; event_date?:string|null; source?:"championship"|"legacy_tournament"; tournament_id?:number|null };
-export type StoredArenaResult = { result:ArenaResult; titleSnapshot:string };
+export type ArenaTournament = {
+  id: string;
+  title: string;
+  display_order: number | null;
+  event_date?: string | null;
+  source?: "championship" | "legacy_tournament";
+  tournament_id?: number | null;
+  legacy_tournament_ids?: number[];
+};
+export type StoredArenaResult = {
+  result: ArenaResult;
+  titleSnapshot: string;
+  reviewedLegacyResults?: Record<string, ArenaResult>;
+};
 export type UserDataV1 = { version:1; championArena:{ results:Record<string, StoredArenaResult> } };
+export type ArenaResultEntry = {
+  tournament: ArenaTournament;
+  result: ArenaResult;
+  conflicts: ArenaResult[];
+  legacyResults: Record<string, ArenaResult>;
+};
 
 const participated = new Set<ArenaResult>(["unknown","league_loss","best64","best32","best16","best8","best4","runner_up","champion"]);
 const ranked: ArenaResult[] = ["league_loss","best64","best32","best16","best8","best4","runner_up","champion"];
 
 export function emptyUserData(): UserDataV1 { return { version:1, championArena:{ results:{} } }; }
-export function loadUserData(storage: Pick<Storage,"getItem">): UserDataV1 {
-  try {
-    const parsed = JSON.parse(storage.getItem(CHAMPION_ARENA_STORAGE_KEY) || "null");
-    if (parsed?.version === 1 && parsed.championArena?.results && typeof parsed.championArena.results === "object") return parsed;
-  } catch {}
-  return emptyUserData();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+
+function isArenaResult(value: unknown): value is ArenaResult {
+  return typeof value === "string" && Object.hasOwn(arenaResultLabels, value);
+}
+
+function isStoredArenaResult(value: unknown): value is StoredArenaResult {
+  if (!isRecord(value) || !isArenaResult(value.result) || typeof value.titleSnapshot !== "string") return false;
+  const reviewed = value.reviewedLegacyResults;
+  return reviewed === undefined || (isRecord(reviewed) && Object.values(reviewed).every(isArenaResult));
+}
+
+export function loadUserData(storage: Pick<Storage, "getItem">, key = CHAMPION_ARENA_STORAGE_KEY): UserDataV1 {
+  const raw = storage.getItem(key);
+  if (raw === null) return emptyUserData();
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.championArena)
+    || !isRecord(parsed.championArena.results) || !Object.values(parsed.championArena.results).every(isStoredArenaResult)) {
+    throw new Error("Unsupported Champion Arena result storage");
+  }
+  return parsed as UserDataV1;
+}
+
+function readResult(record: StoredArenaResult | undefined): ArenaResult | undefined {
+  const value = record?.result;
+  return isArenaResult(value) ? value : undefined;
+}
+
+function resolveArenaEntry(
+  tournament: ArenaTournament,
+  current: Record<string, StoredArenaResult>,
+  old: Record<string, StoredArenaResult>,
+): ArenaResultEntry {
+  const legacyResults: Record<string, ArenaResult> = {};
+  const tournamentIds = tournament.source === "legacy_tournament" && tournament.tournament_id != null
+    ? [tournament.tournament_id]
+    : tournament.legacy_tournament_ids ?? [];
+  for (const id of tournamentIds) {
+    const legacyKey = `legacy-tournament:${id}`;
+    const numericKey = `tournament:${id}`;
+    const linked = legacyKey === tournament.id ? undefined : current[legacyKey];
+    const linkedResult = readResult(linked);
+    if (linkedResult === "not_entered") continue;
+    if (linkedResult) legacyResults[legacyKey] = linkedResult;
+    const oldResult = readResult(old[String(id)]);
+    if (oldResult && oldResult !== "not_entered" && linked?.reviewedLegacyResults?.[numericKey] !== oldResult) {
+      legacyResults[numericKey] = oldResult;
+    }
+  }
+
+  const saved = current[tournament.id];
+  const savedResult = readResult(saved);
+  // Clearing a result on the previous UI was also an explicit saved choice.
+  if (savedResult === "not_entered" && !saved?.reviewedLegacyResults) {
+    return { tournament, result: savedResult, conflicts: [], legacyResults };
+  }
+  const values = new Set<ArenaResult>();
+  if (savedResult) values.add(savedResult);
+  for (const [key, value] of Object.entries(legacyResults)) {
+    if (saved?.reviewedLegacyResults?.[key] !== value) values.add(value);
+  }
+  const conflicts = values.size > 1 ? [...values] : [];
+  const result = conflicts.length ? "not_entered" : values.values().next().value ?? "not_entered";
+  return { tournament, result, conflicts, legacyResults };
+}
+
+export function resolveArenaEntries(tournaments: ArenaTournament[], current: UserDataV1, old: UserDataV1) {
+  // The API owns the display order. Both the form and the stats use these entries.
+  return tournaments.map(tournament => resolveArenaEntry(tournament, current.championArena.results, old.championArena.results));
+}
+
+export function saveArenaResult(storage: Pick<Storage, "getItem" | "setItem">, entry: ArenaResultEntry, result: ArenaResult) {
+  const data = loadUserData(storage);
+  loadUserData(storage, LEGACY_ARENA_STORAGE_KEY);
+  const updated: UserDataV1 = {
+    ...data,
+    championArena: {
+      ...data.championArena,
+      results: {
+        ...data.championArena.results,
+        [entry.tournament.id]: { result, titleSnapshot: entry.tournament.title, reviewedLegacyResults: entry.legacyResults },
+      },
+    },
+  };
+  storage.setItem(CHAMPION_ARENA_STORAGE_KEY, JSON.stringify(updated));
+  return updated;
+}
+
 export function compareArenaResults(left:ArenaResult, right:ArenaResult) { return ranked.indexOf(left) - ranked.indexOf(right); }
-export function calculateChampionArenaStats(tournaments:ArenaTournament[], results:Record<string,StoredArenaResult>) {
-  const ordered = [...tournaments].sort((a,b)=>(b.display_order ?? -Infinity)-(a.display_order ?? -Infinity)
-    || (b.event_date ? Date.parse(b.event_date) : -Infinity) - (a.event_date ? Date.parse(a.event_date) : -Infinity)
-    || String(b.id).localeCompare(String(a.id), undefined, {numeric:true}));
-  const entries = ordered.map(tournament=>({ tournament, result:results[String(tournament.id)]?.result ?? "not_entered" as ArenaResult }));
+export function calculateChampionArenaStats(entries: ArenaResultEntry[]) {
   const appearances = entries.filter(entry=>participated.has(entry.result));
   const known = appearances.filter(entry=>ranked.includes(entry.result));
   const best = known.reduce<typeof known[number] | null>((current,entry)=>!current || compareArenaResults(entry.result,current.result)>0?entry:current,null);
@@ -37,6 +136,6 @@ export function calculateChampionArenaStats(tournaments:ArenaTournament[], resul
     knownCount: known.length,
     unknownCount: appearances.filter(entry=>entry.result==="unknown").length,
     bestResult: best?.result ?? null,
-    latest: appearances[0] ?? null,
+    latest: entries.find(entry => entry.result !== "not_entered") ?? null,
   };
 }
