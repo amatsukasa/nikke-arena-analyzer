@@ -3,9 +3,8 @@
 import { useState } from "react";
 import LocalizedLink from "@/components/LocalizedLink";
 import TeamDisplay from "@/components/TeamDisplay";
-import { AdoptionPanel, TransitionPanel } from "./SeasonAdoption";
+import { BurstPanel, NikkeBadge, WeaponAdoptionPanel } from "./SeasonAdoption";
 import { useI18n } from "@/i18n/I18nProvider";
-import { getCharIconUrl } from "@/utils/charIcon";
 import {
   characterSummaryHref, compositionSummaryHref, summaryStageLabel,
   type DebutResults, type RankedTeam, type Scope, type SideLeaders, type SummaryStage, type SummaryStatistics,
@@ -22,28 +21,11 @@ function usePercent() {
   return (value: number | null) => value == null ? "—" : formatter.format(value / 100);
 }
 
-function NikkeBadge({ nikke, characters, iconOnly = false }: {
-  nikke: { id: number; name: string }; characters: Character[]; iconOnly?: boolean;
-}) {
-  const [failedUrl, setFailedUrl] = useState("");
-  const url = getCharIconUrl(characters.find(character => character.id === nikke.id));
-  return (
-    <span className="flex min-w-0 flex-col items-center gap-1 text-center" title={nikke.name}>
-      <span className="flex size-9 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-slate-800 sm:size-10">
-        {url && failedUrl !== url ? (
-          <img src={url} alt="" loading="lazy" decoding="async" onError={() => setFailedUrl(url)} className="size-full object-cover" />
-        ) : <span aria-hidden="true" className="text-[10px] text-slate-300">{nikke.name.slice(0, 3)}</span>}
-      </span>
-      {!iconOnly && <span className="break-words text-[11px] leading-tight text-slate-300">{nikke.name}</span>}
-    </span>
-  );
-}
-
 function SideLeaderList({ leaders, characters, scope }: { leaders: SideLeaders; characters: Character[]; scope: Scope }) {
   const { t, href } = useI18n();
   const percent = usePercent();
   return (
-    <div className="space-y-3 border-t border-white/10 pt-4">
+    <div className={panel}>
       <p className="text-xs text-slate-400">{t("seasonSummary.sideMinimum", { count: leaders.minimum_rounds })}</p>
       <div className="grid gap-4 lg:grid-cols-2">
         {(["attack", "defense"] as const).map(side => (
@@ -79,8 +61,8 @@ function SideLeaderList({ leaders, characters, scope }: { leaders: SideLeaders; 
   );
 }
 
-function SideResults({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
-  const { rounds, matches, side_leaders } = data;
+function SideResults({ data }: { data: SummaryStatistics }) {
+  const { rounds, matches } = data;
   const { t } = useI18n();
   const percent = usePercent();
   const attackShare = rounds.total ? 100 * rounds.attack / rounds.total : 0;
@@ -114,7 +96,6 @@ function SideResults({ data, characters }: { data: SummaryStatistics; characters
       {matches.total > 0 && (
         <p className="text-sm text-slate-300">{t("seasonSummary.matchWins", { total: matches.total, wins: matches.attack })}</p>
       )}
-      {rounds.total > 0 && <SideLeaderList leaders={side_leaders} characters={characters} scope={data} />}
     </section>
   );
 }
@@ -275,12 +256,14 @@ function DebutPanel({ debut, characters }: { debut: NonNullable<SummaryStatistic
 
 export default function SeasonStatistics({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
   const [stage, setStage] = useState(data.initial_stage);
+  const burst = data.burst_rankings[stage];
   return (
     <div className="space-y-4">
-      <TransitionPanel data={data} />
-      <SideResults data={data} characters={characters} />
+      <SideResults data={data} />
+      <WeaponAdoptionPanel data={data.weapon_adoption} isBeta={data.initial_stage === "legacy"} characters={characters} />
+      {data.rounds.total > 0 && <SideLeaderList leaders={data.side_leaders} characters={characters} scope={data} />}
       <RankingPanel data={data} characters={characters} stage={stage} setStage={setStage} />
-      <AdoptionPanel data={data} stage={stage} characters={characters} />
+      {burst && <BurstPanel data={burst} stage={stage} />}
       {data.debut && <DebutPanel debut={data.debut} characters={characters} />}
     </div>
   );

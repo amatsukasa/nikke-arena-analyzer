@@ -15,7 +15,7 @@ import models
 from auth import create_access_token
 from database import Base, get_db
 from main import app
-from services import season_adoption, season_summary
+from services import season_summary
 
 
 class SeasonSummaryMathTest(TestCase):
@@ -85,13 +85,6 @@ class SeasonSummaryMathTest(TestCase):
                          [stages[i] for i in (5, 4, 1, 2, 3)])
         self.assertEqual({row["win_rate"] for row in leaders["attack"]}, {80.0})
         self.assertEqual(leaders["defense"], [])
-
-    def test_growth_rank_uses_unrounded_percentage_points(self):
-        rows = season_adoption.growth_rows(
-            [(1, {"id": 1}, 200), (2, {"id": 2}, 201)], {1: 1, 2: 1}, 100_000, 100_000,
-        )
-        self.assertEqual([row["id"] for row in rows], [2, 1])
-        self.assertEqual([row["change_pt"] for row in rows], [0.2, 0.2])
 
     def test_partners_are_sorted_across_all_burst_types_using_team_registrations(self):
         usage = [
@@ -254,86 +247,48 @@ class SeasonSummaryApiTest(TestCase):
                 for number, team in enumerate(teams, 1)
             ]))
 
-    def test_transition_uses_first_full64_registration_and_counts_distinct_weapon_users(self):
+    def test_weapon_shares_use_current_filled_slots_and_rank_across_stages(self):
         with self.session.begin() as db:
-            for id, order in ((13, 40), (12, 41), (11, 42), (14, 43)):
-                db.get(models.Championship, id).display_order = order
-            db.get(models.Championship, 13).is_champion_arena = True
             ids = list(range(100, 125))
             db.add_all([models.Character(id=cid, name=str(cid), burst_phase="A" if cid == 100 else "2",
-                                        weapon="SG" if cid < 105 else None if cid == 124 else "SR")
+                                        weapon="SG" if cid < 106 else None if cid == 124 else "SR")
                         for cid in ids])
             self.add_registration(db, 210, 101, ids)
             self.add_registration(db, 206, 201, ids, revision=True)
             self.add_registration(db, 207, 202, ids)
+            self.add_registration(db, 208, 203, ids)
+            self.add_registration(db, 209, 204, ids)
             db.flush()
-            self.add_registration(db, 206, 201, [47, *ids[1:]], revision=True)
+            self.add_registration(db, 206, 201, [47, *ids[1:-2], 9999, 124], revision=True)
             db.get(models.Character, 47).weapon = "SR"
 
         stats = self.summary(12)
-        transition = stats["season_comparison"]["transition"]
-        self.assertEqual(stats["season_comparison"]["previous"]["id"], 13)
-        self.assertEqual([(transition[side]["tournaments"], transition[side]["commanders"], transition[side]["slots"])
-                          for side in ("previous", "current")], [(1, 1, 25), (1, 1, 25)])
-        self.assertEqual(transition["weapons"][0]["slots"]["current"], {"count": 5, "population": 25, "rate": 20.0})
-        self.assertEqual(transition["weapons"][0]["commanders"]["current"]["count"], 1)
-        league = stats["adoption_stages"]["league"]
-        self.assertEqual(league["weapons"]["weapons"][0]["slots"]["count"], 4)
-        self.assertEqual(league["weapons"]["unknown_slots"], 1)
-        beta_burst = self.summary(13)["adoption_stages"]["legacy"]["burst"]["groups"]
-        self.assertTrue(all(any(nikke["id"] == 100 for nikke in group) for group in beta_burst.values()))
+        self.assertNotIn("season_comparison", stats)
+        weapons = stats["weapon_adoption"]
+        league, championship, final = [weapons["by_stage"][stage] for stage in season_summary.STAGES]
+        self.assertEqual((league["slots"], championship["slots"], final["slots"]), (24, 25, 0))
+        self.assertEqual((league["counts"]["SG"], championship["counts"]["SG"]), (5, 6))
+        self.assertEqual((league["counts"]["unknown"], championship["counts"]["unknown"]), (1, 1))
+        self.assertEqual(sum(league["counts"].values()), league["slots"])
+        self.assertEqual(weapons["slots"], 49)
+        self.assertEqual(weapons["rankings"]["SG"], [
+            {"id": cid, "name": str(cid), "count": 2, "population": 49, "rate": 4.1}
+            for cid in range(101, 106)
+        ])
+        self.assertEqual(self.summary(12, "GLOBAL")["weapon_adoption"]["slots"], 25)
+
+        beta = self.summary(13)
+        self.assertEqual(list(beta["weapon_adoption"]["by_stage"]), ["legacy"])
+        self.assertEqual(beta["weapon_adoption"]["slots"], 25)
+        groups = beta["burst_rankings"]["legacy"]["groups"]
+        self.assertTrue(all(any(nikke["id"] == 100 for nikke in group) for group in groups.values()))
 
         with self.session.begin() as db:
-            db.get(models.Tournament, 210).publication_status = "draft"
-        unavailable = self.summary(12)["season_comparison"]["transition"]
-        self.assertEqual(unavailable["previous"]["reason"], "no_public_tournaments")
-        self.assertIsNone(unavailable["weapons"][0]["slots"]["change_pt"])
-        self.assertIsNone(unavailable["weapons"][0]["slots"]["previous"]["rate"])
-
-    def test_growth_uses_only_the_immediately_preceding_title_and_combines_reordered_teams(self):
-        with self.session.begin() as db:
-            for id, order in ((13, 40), (12, 41), (11, 42), (14, 43)):
-                db.get(models.Championship, id).display_order = order
-            db.get(models.Championship, 13).is_champion_arena = True
-            db.get(models.Championship, 11).debut_character_ids = [201]
-            previous_ids = list(range(100, 125))
-            new_team = list(range(200, 205))
-            db.add_all([models.Character(id=cid, name=str(cid), burst_phase="1", weapon="SG")
-                        for cid in previous_ids + new_team])
-            self.add_registration(db, 210, 101, previous_ids)
-            db.add(models.Championship(id=15, name="Earlier formal", display_order=39,
-                                       deck_registration_phases=True, include_in_statistics=True))
-            db.add(models.Tournament(id=212, championship_id=15, name="Older registration",
-                                     date=date(2026, 11, 1), created_by=1, publication_status="published"))
-            db.flush()
-            self.add_registration(db, 212, 501, previous_ids)
-            self.add_registration(db, 206, 201, previous_ids)
-            self.add_registration(db, 200, 301, new_team + previous_ids[5:])
-            self.add_registration(db, 200, 302, list(reversed(new_team)) + previous_ids[5:])
-
-        stats = self.summary(11)
-        self.assertEqual(stats["season_comparison"]["previous"]["id"], 12)
-        self.assertEqual(stats["rankings"]["league"]["population"], 2)
-        growth = stats["season_comparison"]["growth"]["league"]
-        self.assertEqual(growth["previous_population"], 1)
-        row, = growth["teams"]
-        self.assertEqual(row["character_ids"], new_team)
-        self.assertEqual(row["current"], {"count": 2, "population": 2, "rate": 100.0})
-        self.assertEqual(row["previous"], {"count": 0, "population": 1, "rate": 0.0})
-        self.assertEqual([row["id"] for row in growth["characters"]], [200, 202, 203, 204])
-        self.assertEqual(stats["debut"]["characters"][0]["id"], 201)
-
-        with self.session.begin() as db:
-            db.get(models.Tournament, 206).publication_status = "draft"
-        self.assertEqual(self.summary(15)["rankings"]["league"]["population"], 1)
-        stats = self.summary(11)
-        self.assertEqual(stats["season_comparison"]["previous"]["id"], 12)
-        growth = stats["season_comparison"]["growth"]["league"]
-        self.assertEqual((growth["previous_tournaments"], growth["previous_population"], growth["teams"]), (0, 0, []))
-
-        with self.session.begin() as db:
-            db.get(models.Championship, 13).display_order = 41
-        self.assertEqual(self.summary(11)["season_comparison"]["reason"], "order_unknown")
+            db.get(models.Tournament, 207).publication_status = "draft"
+        remaining = self.summary(12)["weapon_adoption"]
+        self.assertEqual(remaining["slots"], 24)
+        self.assertEqual(remaining["by_stage"]["championship"]["slots"], 0)
+        self.assertEqual(remaining["rankings"]["SG"][0]["count"], 1)
 
     def test_reference_capture_changes_only_on_explicit_capture_and_publication(self):
         body = {"kind": "season", "championship_id": 12, "title": "Note", "character_ids": [],

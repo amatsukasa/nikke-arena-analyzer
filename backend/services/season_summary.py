@@ -285,19 +285,10 @@ def statistics(db, title, rows, scope, trends, aggregate):
     initial = "final" if formal else "legacy"
     character_stage = "championship" if formal else "legacy"
     debut_ids = title.debut_character_ids or []
-    mode, previous, reason = season_adoption.previous_season(db, title, formal)
-    prior_rows = public_rows(db, previous.id, scope["play_server"]) if previous else []
-    prior_groups = stage_ids(prior_rows)
-    current_full64 = [row.id for row in rows if row.deck_registration_phases and row.registration_scope == "full_64"]
-    prior_full64 = [row.id for row in prior_rows if not row.deck_registration_phases and row.registration_scope == "full_64"]
-    prior_ids = prior_full64 if mode == "transition" else [row.id for row in prior_rows]
-    dependencies = [*ids, *prior_ids]
-    # Resolve chronology and the public scope on each request, including titles with no public tournaments.
-    cache_kind = repr(("season-summary-v4", title.id, scope["play_server"], debut_ids, ids, prior_ids,
-                       mode, reason, (previous.id, previous.name) if previous else None))
+    cache_kind = repr(("season-summary-v5", title.id, scope["play_server"], debut_ids))
 
     def compute():
-        with (arena_phases.analysis_scope(db, dependencies) if dependencies else nullcontext({})) as bulk:
+        with (arena_phases.analysis_scope(db, ids) if ids else nullcontext({})) as bulk:
             matches = arena_phases.effective_matches(db, ids) if ids else []
             legacy_decks = {}
             for deck in bulk.get("decks", []):
@@ -311,34 +302,18 @@ def statistics(db, title, rows, scope, trends, aggregate):
                 add_details_links(leaders, details["teams"]["all"])
             catalog = {row.id: row for row in db.execute(select(
                 models.Character.id, models.Character.name, models.Character.weapon, models.Character.burst_phase,
-            ))} if dependencies or debut_ids else {}
+            ))} if ids or debut_ids else {}
             names = {cid: row.name for cid, row in catalog.items()}
             stage_data = stage_trends(db, groups, stages, trends, matches)
-            adoption_stages = {
-                stage: {
-                    "weapons": season_adoption.stage_weapons(db, bulk, groups[stage], stage, catalog),
-                    "burst": season_adoption.burst_rankings(stats, catalog),
-                } for stage, stats in stage_data.items()
-            }
-            season_comparison = {"mode": mode or "unavailable", "reason": reason,
-                                 "previous": {"id": previous.id, "name": previous.name} if previous else None}
-            if mode == "transition":
-                season_comparison["transition"] = season_adoption.migration_weapons(
-                    db, bulk, current_full64, prior_full64, catalog,
-                )
-            elif mode == "growth":
-                season_comparison["growth"] = {
-                    stage: season_adoption.stage_growth(db, bulk, prior_groups[stage], stage, stats, catalog, set(debut_ids))
-                    for stage, stats in stage_data.items() if stage in STAGES
-                }
             return {
                 **sides,
                 "side_leaders": leaders,
                 "initial_stage": initial,
                 "rankings": ranking_sections(groups, stage_data),
-                "adoption_stages": adoption_stages,
-                "season_comparison": season_comparison,
+                "weapon_adoption": season_adoption.weapon_statistics(db, bulk, groups, stages, catalog),
+                "burst_rankings": {stage: season_adoption.burst_rankings(stats, catalog)
+                                   for stage, stats in stage_data.items()},
                 "debut": debut_statistics(db, debut_ids, groups, stages, character_stage, aggregate, bulk, names, counts, wins),
             }
 
-    return {**scope, **cross_analytics.cached(db, dependencies, "all", cache_kind, compute)}
+    return {**scope, **cross_analytics.cached(db, ids, "all", cache_kind, compute)}

@@ -32,32 +32,14 @@ export type RankedTeam = Adoption & {
 export type Ranking = { tournament_ids: number[]; population: number; teams: RankedTeam[] };
 type NamedNikke = { id: number; name: string };
 type Burst = "1" | "2" | "3";
-export type WeaponMetric = "slots" | "commanders";
-type Weapon = "SG" | "SR" | "AR" | "MG" | "RL" | "SMG";
-type WeaponScope = { commanders: number; slots: number; unknown_slots: number };
-export type StageAdoption = {
-  weapons: WeaponScope & { weapons: ({ weapon: Weapon } & Record<WeaponMetric, Adoption>)[] };
-  burst: { population: number; groups: Record<Burst, (NamedNikke & Adoption)[]> };
+export const summaryWeapons = ["SG", "SR", "AR", "MG", "RL", "SMG"] as const;
+export type Weapon = (typeof summaryWeapons)[number];
+export type BurstRanking = { population: number; groups: Record<Burst, (NamedNikke & Adoption)[]> };
+export type WeaponAdoption = {
+  by_stage: Partial<Record<SummaryStage, { slots: number; counts: Record<Weapon | "unknown", number> }>>;
+  slots: number;
+  rankings: Record<Weapon, (NamedNikke & Adoption)[]>;
 };
-export type AdoptionChange = { current: Adoption; previous: Adoption; change_pt: number | null };
-type TransitionScope = WeaponScope & { tournaments: number; public_tournaments: number;
-  reason: "no_public_tournaments" | "no_complete_registrations" | null };
-export type WeaponTransition = {
-  current: TransitionScope;
-  previous: TransitionScope;
-  weapons: ({ weapon: Weapon } & Record<WeaponMetric, AdoptionChange>)[];
-};
-export type StageGrowth = {
-  current_population: number;
-  previous_population: number;
-  previous_tournaments: number;
-  characters: (NamedNikke & AdoptionChange)[];
-  teams: ({ canonical_id: string; character_ids: number[] } & AdoptionChange)[];
-};
-type SeasonComparison =
-  | { mode: "transition"; previous: NamedNikke; reason: null; transition: WeaponTransition }
-  | { mode: "growth"; previous: NamedNikke; reason: null; growth: Partial<Record<SummaryStage, StageGrowth>> }
-  | { mode: "unavailable"; previous: null; reason: "order_unknown" | "format_unknown" | "no_previous_season" | null };
 export type BattleSide = "attack" | "defense";
 export type SideLeaders = { minimum_rounds: number } & Record<BattleSide, {
   canonical_id: string; character_ids: number[]; wins: number; losses: number;
@@ -75,8 +57,8 @@ export type SummaryStatistics = Scope & {
   side_leaders: SideLeaders;
   initial_stage: SummaryStage;
   rankings: Partial<Record<SummaryStage, Ranking>>;
-  adoption_stages: Partial<Record<SummaryStage, StageAdoption>>;
-  season_comparison: SeasonComparison;
+  weapon_adoption: WeaponAdoption;
+  burst_rankings: Partial<Record<SummaryStage, BurstRanking>>;
   debut: { stage: SummaryStage; tournament_ids: number[]; characters: DebutCharacter[];
     tournament_ids_by_stage: Partial<Record<SummaryStage, number[]>> } | null;
 };
