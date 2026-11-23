@@ -3,6 +3,7 @@
 import { useState } from "react";
 import LocalizedLink from "@/components/LocalizedLink";
 import TeamDisplay from "@/components/TeamDisplay";
+import { AdoptionPanel, TransitionPanel } from "./SeasonAdoption";
 import { useI18n } from "@/i18n/I18nProvider";
 import { getCharIconUrl } from "@/utils/charIcon";
 import {
@@ -150,10 +151,11 @@ function TeamRow({ team, stage, ids, scope, characters }: {
   );
 }
 
-function RankingPanel({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
+function RankingPanel({ data, characters, stage, setStage }: {
+  data: SummaryStatistics; characters: Character[]; stage: SummaryStage; setStage: (stage: SummaryStage) => void;
+}) {
   const { t } = useI18n();
   const fixedDecks = data.initial_stage === "legacy";
-  const [stage, setStage] = useState(data.initial_stage);
   const ranking = data.rankings[stage];
   if (!ranking) return null;
   const list = ranking.teams;
@@ -272,10 +274,13 @@ function DebutPanel({ debut, characters }: { debut: NonNullable<SummaryStatistic
 }
 
 export default function SeasonStatistics({ data, characters }: { data: SummaryStatistics; characters: Character[] }) {
+  const [stage, setStage] = useState(data.initial_stage);
   return (
     <div className="space-y-4">
+      <TransitionPanel data={data} />
       <SideResults data={data} characters={characters} />
-      <RankingPanel data={data} characters={characters} />
+      <RankingPanel data={data} characters={characters} stage={stage} setStage={setStage} />
+      <AdoptionPanel data={data} stage={stage} characters={characters} />
       {data.debut && <DebutPanel debut={data.debut} characters={characters} />}
     </div>
   );
