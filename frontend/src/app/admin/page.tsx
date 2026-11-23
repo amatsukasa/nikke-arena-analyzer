@@ -95,6 +95,7 @@ export default function AdminPage() {
   const [formChampOrder, setFormChampOrder] = useState('');
   const [formArenaResultsEnabled, setFormArenaResultsEnabled] = useState<boolean | null>(null);
   const [formArenaLegacyId, setFormArenaLegacyId] = useState("");
+  const [savingChampionship, setSavingChampionship] = useState(false);
   const [formTitleSettings,setFormTitleSettings]=useState<Record<TitleSetting,boolean|null>>({deck_registration_phases:false,is_champion_arena:false,include_in_statistics:true});
   const [editingTitleSettings,setEditingTitleSettings]=useState<any>(null);
   const [debutIds, setDebutIds] = useState<number[]>([]);
@@ -188,6 +189,7 @@ export default function AdminPage() {
 
   const handleChampSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingChampionship) return;
     setError('');
     setMessage('');
     setModalError('');
@@ -213,7 +215,17 @@ export default function AdminPage() {
       ...(editingTitleSettings?{settings_revision:editingTitleSettings.settings_revision}:{})
     };
 
+    setSavingChampionship(true);
     try {
+      const legacyId = payload.arena_result_legacy_tournament_ids?.[0];
+      if (legacyId !== undefined) {
+        const preview = await apiFetch(`${apiUrl}/api/admin/champion-arena-tournaments/${legacyId}/result-link-preview`, { cache: "no-store" });
+        if (!preview.ok) throw new Error(t("titleSettings.legacyResultLookupError", { id: legacyId }));
+        const master = await preview.json() as { id: number; title: string };
+        if (!window.confirm(t("titleSettings.confirmLegacyResultLink", {
+          title: payload.name, id: master.id, legacyTitle: master.title,
+        }))) return;
+      }
       let response;
       if (champModalMode === 'create') {
         response = await apiFetch(`${apiUrl}/api/championships`, {
@@ -245,6 +257,8 @@ export default function AdminPage() {
       fetchChampionships();
     } catch (err: any) {
       setModalError(err.message || 'エラーが発生しました。');
+    } finally {
+      setSavingChampionship(false);
     }
   };
 
@@ -1114,7 +1128,8 @@ export default function AdminPage() {
                 </button>
                 <button
                   type="submit"
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2 rounded-lg text-sm transition shadow-lg shadow-indigo-900/30"
+                  disabled={savingChampionship}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2 rounded-lg text-sm transition shadow-lg shadow-indigo-900/30 disabled:opacity-40"
                 >
                   保存する
                 </button>

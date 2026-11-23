@@ -127,4 +127,17 @@ class ChampionArenaMasterTest(unittest.TestCase):
             dependency=inspect.signature(endpoint).parameters[parameter].default
             self.assertIs(dependency.dependency,auth_module.require_admin)
 
+    def test_legacy_link_preview_requires_admin_and_returns_only_a_legacy_master(self):
+        dependency = inspect.signature(main.preview_arena_result_legacy_master).parameters["_"].default
+        self.assertIs(dependency.dependency, auth_module.require_admin)
+        legacy = models.Tournament(name="Legacy label", date=date.today(), legacy_is_champion_arena=True)
+        non_legacy = models.Tournament(name="Normal title", date=date.today())
+        self.db.add_all([legacy, non_legacy])
+        self.db.commit()
+        self.assertEqual(main.preview_arena_result_legacy_master(legacy.id, self.admin, self.db),
+                         {"id": legacy.id, "title": "Legacy label"})
+        with self.assertRaises(main.HTTPException) as error:
+            main.preview_arena_result_legacy_master(non_legacy.id, self.admin, self.db)
+        self.assertEqual(error.exception.status_code, 404)
+
 if __name__=="__main__": unittest.main()

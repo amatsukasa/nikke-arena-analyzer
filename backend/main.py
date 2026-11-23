@@ -1894,6 +1894,21 @@ def get_admin_champion_arena_tournaments(
     return [_champion_arena_master_payload(tournament) for tournament in tournaments]
 
 
+@app.get("/api/admin/champion-arena-tournaments/{tournament_id}/result-link-preview")
+def preview_arena_result_legacy_master(
+    tournament_id: int,
+    _: models.AppUser = Depends(auth_module.require_admin),
+    db: Session = Depends(get_db),
+):
+    tournament = models.Tournament
+    row = db.query(tournament.id, tournament.name).filter(
+        tournament.id == tournament_id, tournament.legacy_is_champion_arena.is_(True),
+    ).first()
+    if row is None:
+        raise HTTPException(404, "Legacy arena result master not found")
+    return {"id": row.id, "title": row.name}
+
+
 @app.post("/api/admin/champion-arena-tournaments", response_model=schemas.ChampionArenaTournament)
 def create_champion_arena_tournament(
     body: schemas.ChampionArenaTournamentBase,

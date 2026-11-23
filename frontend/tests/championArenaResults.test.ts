@@ -55,8 +55,59 @@ test("conflicts preserve all inputs until a choice and a saved clear cannot revi
   assert.equal(resolveArenaEntries([event], data({ [unlinked.id]: record("not_entered") }), old)[0].result, "not_entered");
 });
 
-test("missing or malformed stores safely return empty data", () => {
-  for (const value of [null, "broken", '{"version":1,"championArena":{"results":[]}}']) {
-    assert.deepEqual(loadUserData({ getItem: () => value }), emptyUserData());
+test("only an absent key starts a new result store", () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) };
+  assert.deepEqual(loadUserData(storage), emptyUserData());
+  const [entry] = resolveArenaEntries([event], data(), data());
+  saveArenaResult(storage, entry, "best8");
+  assert.equal(loadUserData(storage).championArena.results[event.id].result, "best8");
+});
+
+test("invalid and unsupported stored data remains byte-for-byte after a save attempt", () => {
+  const [entry] = resolveArenaEntries([event], data(), data());
+  const invalid = [
+    "  {broken JSON\n",
+    '  {"version":2,"championArena":{"results":{}}}\n',
+    '{"version":1,"championArena":{"results":[]}}',
+    '{"version":1,"championArena":{"results":{"championship:1":{"result":"future","titleSnapshot":"Title"}}}}',
+    "",
+  ];
+  for (const key of [CHAMPION_ARENA_STORAGE_KEY, LEGACY_ARENA_STORAGE_KEY]) {
+    for (const raw of invalid) {
+      const existing = JSON.stringify(data({ "championship:3": record("best32") }));
+      const values = new Map([[CHAMPION_ARENA_STORAGE_KEY, existing], [key, raw]]);
+      let writes = 0;
+      const storage = { getItem: (lookup: string) => values.get(lookup) ?? null, setItem: () => { writes += 1; } };
+      assert.throws(() => saveArenaResult(storage, entry, "best8"));
+      assert.equal(writes, 0);
+      assert.equal(values.get(key), raw);
+      assert.equal(values.get(CHAMPION_ARENA_STORAGE_KEY), key === CHAMPION_ARENA_STORAGE_KEY ? raw : existing);
+    }
   }
+});
+
+test("storage read exceptions prevent writes", () => {
+  const [entry] = resolveArenaEntries([event], data(), data());
+  for (const unreadable of [CHAMPION_ARENA_STORAGE_KEY, LEGACY_ARENA_STORAGE_KEY]) {
+    let writes = 0;
+    const storage = {
+      getItem(key: string) {
+        if (key === unreadable) throw new Error("Storage access denied");
+        return null;
+      },
+      setItem() { writes += 1; },
+    };
+    assert.throws(() => saveArenaResult(storage, entry, "best8"), /Storage access denied/);
+    assert.equal(writes, 0);
+  }
+});
+
+test("correcting a legacy link leaves edited title results under their original title ID", () => {
+  const current = data({ [event.id]: record("runner_up"), "legacy-tournament:123": record("best32") });
+  const corrected = [
+    { ...event, legacy_tournament_ids: [94] },
+    { ...newest, legacy_tournament_ids: [123] },
+  ];
+  assert.deepEqual(resolveArenaEntries(corrected, current, data()).map(entry => entry.result), ["runner_up", "best32"]);
 });

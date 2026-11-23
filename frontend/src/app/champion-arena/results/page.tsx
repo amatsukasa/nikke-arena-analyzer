@@ -36,12 +36,20 @@ export default function ChampionArenaResultsPage() {
   const [data,setData]=useState<UserDataV1|null>(null);
   const [oldData, setOldData] = useState(emptyUserData);
   const [loadError, setLoadError] = useState(false);
+  const [storageError, setStorageError] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [loading,setLoading]=useState(true);
   useEffect(() => {
     const refresh = () => {
-      setData(loadUserData(window.localStorage));
-      setOldData(loadUserData(window.localStorage, LEGACY_ARENA_STORAGE_KEY));
+      try {
+        const current = loadUserData(window.localStorage);
+        const legacy = loadUserData(window.localStorage, LEGACY_ARENA_STORAGE_KEY);
+        setData(current);
+        setOldData(legacy);
+        setStorageError(false);
+      } catch {
+        setStorageError(true);
+      }
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === CHAMPION_ARENA_STORAGE_KEY || event.key === LEGACY_ARENA_STORAGE_KEY || event.key === null) refresh();
@@ -75,12 +83,13 @@ export default function ChampionArenaResultsPage() {
   }
   return <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100"><div className="mx-auto max-w-4xl space-y-6">
     <header><h1 className="text-3xl font-black">{t("championArena.title")}</h1><p className="mt-2 text-sm text-slate-400">{t("championArena.description")}</p></header>
-    <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+    {!storageError && <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       <Stat label={t("championArena.appearanceCount")} value={t("championArena.appearanceCountValue",{count:stats.appearanceCount})}/><Stat label={t("championArena.bestResult")} value={stats.bestResult?t(resultKeys[stats.bestResult]):"－"}/>
       <Stat label={t("championArena.latestResult")} value={stats.latest?t("championArena.latestResultValue",{tournament:stats.latest.tournament.title,result:t(resultKeys[stats.latest.result])}):"－"}/>
       <Stat label={t("championArena.knownResults")} value={t("championArena.knownResultsValue",{known:stats.knownCount,total:stats.appearanceCount})}/><Stat label={t("championArena.unknownCount")} value={String(stats.unknownCount)}/>
-    </section>
-    {(loadError || saveError) && <p role="alert" className="rounded border border-red-700 p-3 text-red-300">{t(loadError ? "championArena.loadError" : "championArena.saveError")}</p>}
+    </section>}
+    {loadError && <p role="alert" className="rounded border border-red-700 p-3 text-red-300">{t("championArena.loadError")}</p>}
+    {(storageError || saveError) && <p role="alert" className="rounded border border-red-700 p-3 text-red-300">{t(storageError ? "championArena.storageError" : "championArena.saveError")}</p>}
     {loading&&<p className="text-slate-400">{t("common.loading")}</p>}
     {!loading&&!loadError&&tournaments.length===0&&<p className="rounded-xl border border-slate-800 bg-slate-900 p-4 text-slate-400">{t("championArena.noTournaments")}</p>}
     <section className="space-y-3">{entries.map(entry => {
@@ -96,7 +105,7 @@ export default function ChampionArenaResultsPage() {
           aria-label={t("championArena.resultAria", { tournament: tournament.title })}
           aria-describedby={descriptionId}
           value={descriptionId ? "" : result}
-          disabled={!data}
+          disabled={!data || storageError}
           onChange={event => update(entry, event.target.value as ArenaResult)}
           className="w-full rounded border border-slate-700 bg-slate-950 p-3"
         >

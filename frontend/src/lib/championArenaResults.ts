@@ -35,18 +35,35 @@ const participated = new Set<ArenaResult>(["unknown","league_loss","best64","bes
 const ranked: ArenaResult[] = ["league_loss","best64","best32","best16","best8","best4","runner_up","champion"];
 
 export function emptyUserData(): UserDataV1 { return { version:1, championArena:{ results:{} } }; }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isArenaResult(value: unknown): value is ArenaResult {
+  return typeof value === "string" && Object.hasOwn(arenaResultLabels, value);
+}
+
+function isStoredArenaResult(value: unknown): value is StoredArenaResult {
+  if (!isRecord(value) || !isArenaResult(value.result) || typeof value.titleSnapshot !== "string") return false;
+  const reviewed = value.reviewedLegacyResults;
+  return reviewed === undefined || (isRecord(reviewed) && Object.values(reviewed).every(isArenaResult));
+}
+
 export function loadUserData(storage: Pick<Storage, "getItem">, key = CHAMPION_ARENA_STORAGE_KEY): UserDataV1 {
-  try {
-    const parsed = JSON.parse(storage.getItem(key) || "null");
-    const results = parsed?.championArena?.results;
-    if (parsed?.version === 1 && results && typeof results === "object" && !Array.isArray(results)) return parsed;
-  } catch {}
-  return emptyUserData();
+  const raw = storage.getItem(key);
+  if (raw === null) return emptyUserData();
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.championArena)
+    || !isRecord(parsed.championArena.results) || !Object.values(parsed.championArena.results).every(isStoredArenaResult)) {
+    throw new Error("Unsupported Champion Arena result storage");
+  }
+  return parsed as UserDataV1;
 }
 
 function readResult(record: StoredArenaResult | undefined): ArenaResult | undefined {
   const value = record?.result;
-  return typeof value === "string" && Object.hasOwn(arenaResultLabels, value) ? value : undefined;
+  return isArenaResult(value) ? value : undefined;
 }
 
 function resolveArenaEntry(
@@ -94,6 +111,7 @@ export function resolveArenaEntries(tournaments: ArenaTournament[], current: Use
 
 export function saveArenaResult(storage: Pick<Storage, "getItem" | "setItem">, entry: ArenaResultEntry, result: ArenaResult) {
   const data = loadUserData(storage);
+  loadUserData(storage, LEGACY_ARENA_STORAGE_KEY);
   const updated: UserDataV1 = {
     ...data,
     championArena: {
