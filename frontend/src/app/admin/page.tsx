@@ -36,7 +36,7 @@ interface AdminCharacter {
 
 const TITLE_SETTINGS = ["deck_registration_phases", "is_champion_arena", "include_in_statistics"] as const;
 type TitleSetting = typeof TITLE_SETTINGS[number];
-const titleSettingLabels: Record<TitleSetting,string> = {deck_registration_phases:"arenaPhases.enable", is_champion_arena:"titleSettings.arenaTarget", include_in_statistics:"titleSettings.hasMatchData"};
+const titleSettingLabels: Record<TitleSetting,string> = {deck_registration_phases:"arenaPhases.enable", is_champion_arena:"titleSettings.arenaClassification", include_in_statistics:"titleSettings.hasMatchData"};
 const CHARACTER_PAGE_SIZE = 30;
 
 function AdminCharacterIcon({ character }: { character: AdminCharacter }) {
@@ -93,10 +93,17 @@ export default function AdminPage() {
   const [formChampName, setFormChampName] = useState('');
   const [formChampDate, setFormChampDate] = useState('');
   const [formChampOrder, setFormChampOrder] = useState('');
+  const [formArenaResultsEnabled, setFormArenaResultsEnabled] = useState<boolean | null>(null);
+  const [formArenaLegacyId, setFormArenaLegacyId] = useState("");
   const [formTitleSettings,setFormTitleSettings]=useState<Record<TitleSetting,boolean|null>>({deck_registration_phases:false,is_champion_arena:false,include_in_statistics:true});
   const [editingTitleSettings,setEditingTitleSettings]=useState<any>(null);
   const [debutIds, setDebutIds] = useState<number[]>([]);
   const [savingDebut, setSavingDebut] = useState(false);
+  const arenaResultInputEnabled = formArenaResultsEnabled ?? editingTitleSettings?.arena_results_enabled
+    ?? editingTitleSettings?.is_champion_arena
+    ?? (editingTitleSettings?.linked_tournaments ?? []).some((row: { is_champion_arena: boolean }) => row.is_champion_arena);
+  const resultOnlyTitle = arenaResultInputEnabled && formTitleSettings.include_in_statistics === false
+    && !editingTitleSettings?.linked_tournaments?.length;
 
   useEffect(() => {
     if (window.location.hash === '#championships') setActiveTab('championships');
@@ -186,18 +193,22 @@ export default function AdminPage() {
     setModalError('');
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-    if (TITLE_SETTINGS.some(key=>formTitleSettings[key]===null)) {
+    const personalSettingsChanged = champModalMode === "edit" && (formArenaResultsEnabled !== null || formArenaLegacyId !== "");
+    const saveAnalysisSettings = !personalSettingsChanged || TITLE_SETTINGS.some(key => formTitleSettings[key] !== editingTitleSettings?.[key]);
+    if (saveAnalysisSettings && TITLE_SETTINGS.some(key=>formTitleSettings[key]===null)) {
       setModalError(t("titleSettings.resolveConflict"));
       return;
     }
-    const requiresApply = (editingTitleSettings?.linked_tournaments??[]).some((row:any)=>TITLE_SETTINGS.some(key=>row[key]!==formTitleSettings[key]));
+    const requiresApply = saveAnalysisSettings && (editingTitleSettings?.linked_tournaments??[]).some((row:any)=>TITLE_SETTINGS.some(key=>row[key]!==formTitleSettings[key]));
     if (requiresApply && !window.confirm(t("titleSettings.confirmApply",{count:editingTitleSettings.linked_tournaments.length}))) return;
     const payload = {
       name: formChampName.trim(),
       date: formChampDate ? formChampDate : null,
       display_order: formChampOrder === "" ? null : Number(formChampOrder),
       debut_character_ids: debutIds,
-      ...formTitleSettings,
+      ...(saveAnalysisSettings ? formTitleSettings : {}),
+      ...(formArenaResultsEnabled !== null ? { arena_results_enabled: formArenaResultsEnabled } : {}),
+      ...(formArenaLegacyId ? { arena_result_legacy_tournament_ids: [Number(formArenaLegacyId)] } : {}),
       apply_to_existing: requiresApply,
       ...(editingTitleSettings?{settings_revision:editingTitleSettings.settings_revision}:{})
     };
@@ -291,6 +302,8 @@ export default function AdminPage() {
     setMessage('');
     setModalError('');
     setDebutIds(champ?.debut_character_ids ?? []);
+    setFormArenaResultsEnabled(mode === "create" ? false : null);
+    setFormArenaLegacyId("");
     if (mode === 'edit' && champ) {
       setEditingChampId(champ.id);
       setEditingTitleSettings(champ);
@@ -1040,10 +1053,10 @@ export default function AdminPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-300 mb-1.5">開催日 *</label>
+                <label className="block text-sm font-semibold text-slate-300 mb-1.5">開催日{resultOnlyTitle ? "" : " *"}</label>
                 <input
                   type="date"
-                  required
+                  required={!resultOnlyTitle}
                   value={formChampDate}
                   onChange={(e) => setFormChampDate(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
@@ -1057,6 +1070,21 @@ export default function AdminPage() {
               </label>
               <fieldset className="space-y-3 rounded-lg border border-slate-700 p-4">
                 <legend className="px-1 text-sm font-semibold">{t("titleSettings.heading")}</legend>
+                <label className="flex items-start gap-2 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={arenaResultInputEnabled}
+                    onChange={event => setFormArenaResultsEnabled(event.target.checked)}
+                  />
+                  {t("titleSettings.arenaTarget")}
+                </label>
+                <label className="block text-sm text-slate-300">
+                  {t("titleSettings.legacyResultId")}
+                  <input type="number" min="1" step="1" value={formArenaLegacyId} onChange={event => setFormArenaLegacyId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-800 bg-slate-950 px-3.5 py-2 text-sm" />
+                </label>
+                {editingTitleSettings?.arena_result_legacy_tournament_ids?.length > 0 && <p className="text-xs text-slate-400">
+                  {t("titleSettings.linkedResultIds", { ids: editingTitleSettings.arena_result_legacy_tournament_ids.join(", ") })}
+                </p>}
                 {TITLE_SETTINGS.map(key=><label key={key} className="flex items-start gap-2 text-sm text-slate-300">
                   <input type="checkbox" className="mt-1" checked={formTitleSettings[key]===true} ref={element=>{if(element)element.indeterminate=formTitleSettings[key]===null;}} onChange={event=>setFormTitleSettings(previous=>({...previous,[key]:event.target.checked}))}/>
                   <span>{t(titleSettingLabels[key])}{formTitleSettings[key]===null&&<span className="block text-amber-300">{t("titleSettings.resolveConflict")}</span>}</span>

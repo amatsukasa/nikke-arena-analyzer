@@ -1841,24 +1841,45 @@ def _champion_arena_master_payload(tournament: models.Tournament) -> dict:
 
 @app.get("/api/champion-arena/tournaments", response_model=List[schemas.ArenaResultEvent])
 def get_champion_arena_tournaments(db: Session = Depends(get_db)):
-    # One title per event; preserve unresolved legacy visibility using only the FK.
-    legacy_visible = db.query(models.Tournament.id).filter(
-        models.Tournament.championship_id == models.Championship.id,
-        models.Tournament.legacy_is_champion_arena.is_(True),
-    ).exists()
-    titles = db.query(models.Championship).filter(or_(
-        models.Championship.is_champion_arena.is_(True),
-        models.Championship.is_champion_arena.is_(None) & legacy_visible,
-    )).order_by(models.Championship.date.desc().nullslast(), models.Championship.id.desc()).all()
-    events = [{"id": f"championship:{title.id}", "championship_id": title.id,
-               "source": "championship", "title": title.name, "event_date": title.date,
-               "display_order": title.display_order} for title in titles]
-    # Retain unlinked legacy targets without guessing associations from names/IDs.
-    linked_title = db.query(models.Championship.id).filter(models.Championship.id == models.Tournament.championship_id).exists()
-    legacy = db.query(models.Tournament.id, models.Tournament.name, models.Tournament.game_start_date, models.Tournament.display_order).filter(~linked_title, models.Tournament.legacy_is_champion_arena.is_(True)).all()
-    events.extend({"id": f"legacy-tournament:{row.id}", "tournament_id": row.id,
-                   "championship_id": None, "source": "legacy_tournament", "title": row.name,
-                   "event_date": row.game_start_date, "display_order": row.display_order} for row in legacy)
+    title = models.Championship
+    tournament = models.Tournament
+    link = models.ArenaResultLegacyLink
+    titles = {row.id: row for row in db.query(
+        title.id, title.name, title.date, title.display_order, title.is_champion_arena, title.arena_results_enabled,
+    )}
+    legacy = (db.query(
+        tournament.id, tournament.name, tournament.game_start_date, tournament.display_order,
+        tournament.legacy_is_champion_arena,
+        func.coalesce(link.championship_id, tournament.championship_id).label("result_title_id"),
+    ).outerjoin(link, link.tournament_id == tournament.id)
+      .filter(or_(tournament.legacy_is_champion_arena.is_(True), link.tournament_id.is_not(None)))
+      .order_by(tournament.id))
+    aliases: dict[int, list[int]] = {}
+    legacy_enabled_titles = set()
+    events = []
+    for row in legacy:
+        if row.result_title_id in titles:
+            aliases.setdefault(row.result_title_id, []).append(row.id)
+            if row.legacy_is_champion_arena:
+                legacy_enabled_titles.add(row.result_title_id)
+        else:
+            events.append({
+                "id": f"legacy-tournament:{row.id}", "tournament_id": row.id,
+                "championship_id": None, "source": "legacy_tournament", "title": row.name,
+                "event_date": row.game_start_date, "display_order": row.display_order,
+            })
+    for row in titles.values():
+        enabled = row.arena_results_enabled
+        if enabled is None:
+            enabled = row.is_champion_arena
+        if enabled is None:
+            enabled = row.id in legacy_enabled_titles
+        if enabled:
+            events.append({
+                "id": f"championship:{row.id}", "championship_id": row.id,
+                "source": "championship", "title": row.name, "event_date": row.date,
+                "display_order": row.display_order, "legacy_tournament_ids": aliases.get(row.id, []),
+            })
     events.sort(key=lambda row: (row["display_order"] if row["display_order"] is not None else float("-inf"), row["event_date"] or date_type.min, row.get("tournament_id") or row.get("championship_id") or 0, row["id"]), reverse=True)
     return events
 
@@ -2166,10 +2187,35 @@ def get_championship(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Championship not found")
     return db_championship
 
-def championship_admin_payload(title, tournaments):
+def championship_admin_payload(title, tournaments, result_legacy_ids):
     return {**schemas.ChampionshipResponse.model_validate(title).model_dump(),
             **championship_settings.describe(title, tournaments),
+            "arena_results_enabled": title.arena_results_enabled,
+            "arena_result_legacy_tournament_ids": result_legacy_ids,
             "debut_character_ids": title.debut_character_ids or []}
+
+
+def link_arena_result_tournaments(db, title, tournament_ids):
+    link = models.ArenaResultLegacyLink
+    existing = set(db.scalars(select(link.tournament_id).where(link.championship_id == title.id)))
+    pending = set(tournament_ids) - existing
+    if not pending:
+        return sorted(existing)
+    enabled = title.arena_results_enabled if title.arena_results_enabled is not None else title.is_champion_arena
+    if enabled is False:
+        raise HTTPException(422, "Enable personal results before linking a legacy master")
+    tournament = models.Tournament
+    rows = db.query(tournament.id, tournament.championship_id, tournament.legacy_is_champion_arena).filter(
+        tournament.id.in_(pending),
+    ).order_by(tournament.id).with_for_update().all()
+    if len(rows) != len(pending) or any(not row.legacy_is_champion_arena for row in rows):
+        raise HTTPException(422, "Select existing legacy arena result masters by tournament ID")
+    if any(row.championship_id not in (None, title.id) for row in rows) or db.query(link.tournament_id).filter(
+        link.tournament_id.in_(pending),
+    ).first():
+        raise HTTPException(409, "A legacy arena result master already belongs to another title")
+    db.add_all(link(tournament_id=tournament_id, championship_id=title.id) for tournament_id in pending)
+    return sorted(existing | pending)
 
 
 def validated_debut_characters(db, ids):
@@ -2187,7 +2233,10 @@ def get_admin_championships(db: Session = Depends(get_db), admin: models.AppUser
     grouped = {}
     for row in db.query(models.Tournament).order_by(models.Tournament.id).all():
         grouped.setdefault(row.championship_id, []).append(row)
-    return [championship_admin_payload(title, grouped.get(title.id, [])) for title in titles]
+    result_links = {}
+    for link in db.query(models.ArenaResultLegacyLink).order_by(models.ArenaResultLegacyLink.tournament_id):
+        result_links.setdefault(link.championship_id, []).append(link.tournament_id)
+    return [championship_admin_payload(title, grouped.get(title.id, []), result_links.get(title.id, [])) for title in titles]
 
 
 @app.post("/api/championships", response_model=schemas.ChampionshipAdminResponse)
@@ -2196,15 +2245,23 @@ def create_championship(
     db: Session = Depends(get_db),
     current_user: models.AppUser = Depends(auth_module.require_admin),
 ):
-    data = championship.model_dump(exclude=championship_settings.FIELDS | {"settings_revision", "apply_to_existing"})
+    data = championship.model_dump(exclude=championship_settings.FIELDS | {
+        "settings_revision", "apply_to_existing", "arena_result_legacy_tournament_ids",
+    })
     data.update({key: getattr(championship, key) if key in championship.model_fields_set else value for key, value in championship_settings.DEFAULTS.items()})
     data["created_by"] = current_user.id
     data["debut_character_ids"] = validated_debut_characters(db, championship.debut_character_ids)
     db_championship = models.Championship(**data)
     db.add(db_championship)
-    db.commit()
+    try:
+        db.flush()
+        result_legacy_ids = link_arena_result_tournaments(db, db_championship, championship.arena_result_legacy_tournament_ids)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(db_championship)
-    return championship_admin_payload(db_championship, [])
+    return championship_admin_payload(db_championship, [], result_legacy_ids)
 
 @app.put("/api/championships/{id}", response_model=schemas.ChampionshipAdminResponse)
 def update_championship(
@@ -2226,9 +2283,10 @@ def update_championship(
                 if championship.settings_revision != championship_settings.describe(title, tournaments)["settings_revision"]:
                     raise HTTPException(409, "Title or linked tournaments changed; reload before saving")
             title.debut_character_ids = validated_debut_characters(db, changes["debut_character_ids"])
-        for field in ("name", "date", "start_date", "owner_name", "display_order"):
+        for field in ("name", "date", "start_date", "owner_name", "display_order", "arena_results_enabled"):
             if field in changes:
                 setattr(title, field, changes[field])
+        result_legacy_ids = link_arena_result_tournaments(db, title, championship.arena_result_legacy_tournament_ids)
         if "date" in changes and championship.date is not None and championship.date != previous_date:
             for row in tournaments:
                 if row.date != championship.date:
@@ -2241,7 +2299,7 @@ def update_championship(
         raise
     for tournament_id in set(affected):
         invalidate_dashboard_cache(tournament_id)
-    return championship_admin_payload(title, tournaments)
+    return championship_admin_payload(title, tournaments, result_legacy_ids)
 
 @app.delete("/api/championships/{id}")
 def delete_championship(
@@ -2253,7 +2311,8 @@ def delete_championship(
     db_championship = db.query(models.Championship).filter(models.Championship.id == id).first()
     if not db_championship:
         raise HTTPException(status_code=404, detail="Championship not found")
-    if db.query(models.Tournament.id).filter_by(championship_id=id).first():
+    if (db.query(models.Tournament.id).filter_by(championship_id=id).first()
+            or db.query(models.ArenaResultLegacyLink.tournament_id).filter_by(championship_id=id).first()):
         raise HTTPException(409, "This title has linked tournaments; deleting it would lose settings and result identity")
     db.delete(db_championship)
     db.commit()

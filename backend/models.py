@@ -113,12 +113,22 @@ class Championship(Base):
 
     deck_registration_phases = Column(Boolean, nullable=True)
     is_champion_arena = Column(Boolean, nullable=True)
+    arena_results_enabled = Column(Boolean, nullable=True)
     include_in_statistics = Column(Boolean, nullable=True)
     display_order = Column(Integer, nullable=True)
     debut_character_ids = Column(JSON, nullable=False, default=list, server_default="[]")
 
     creator = relationship("AppUser", back_populates="championships")
     tournaments = relationship("Tournament", back_populates="championship")
+
+class ArenaResultLegacyLink(Base):
+    """Explicit link for personal results when the analysis title must stay unchanged."""
+
+    __tablename__ = "arena_result_legacy_links"
+
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"), primary_key=True)
+    championship_id = Column(Integer, ForeignKey("championships.id", ondelete="RESTRICT"), nullable=False, index=True)
+
 
 class Tournament(Base):
     __tablename__ = "tournaments"

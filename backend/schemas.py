@@ -31,6 +31,8 @@ class ChampionshipCreate(ChampionshipBase):
     display_order: Optional[int] = None
     deck_registration_phases: Optional[bool] = None
     is_champion_arena: Optional[bool] = None
+    arena_results_enabled: Optional[bool] = None
+    arena_result_legacy_tournament_ids: list[Annotated[int, Field(gt=0)]] = Field(default_factory=list, max_length=300)
     include_in_statistics: Optional[bool] = None
     settings_revision: Optional[str] = None
     apply_to_existing: bool = False
@@ -54,6 +56,8 @@ class ChampionshipAdminResponse(ChampionshipResponse):
     display_order: Optional[int] = None
     deck_registration_phases: Optional[bool] = None
     is_champion_arena: Optional[bool] = None
+    arena_results_enabled: Optional[bool] = None
+    arena_result_legacy_tournament_ids: list[int] = Field(default_factory=list)
     include_in_statistics: Optional[bool] = None
     configuration_conflicts: List[str] = Field(default_factory=list)
     inherited_settings: List[str] = Field(default_factory=list)
@@ -65,6 +69,7 @@ class ArenaResultEvent(BaseModel):
     id: str
     championship_id: Optional[int] = None
     tournament_id: Optional[int] = None
+    legacy_tournament_ids: list[int] = Field(default_factory=list)
     source: Literal["championship", "legacy_tournament"] = "championship"
     title: str
     display_order: Optional[int] = None
