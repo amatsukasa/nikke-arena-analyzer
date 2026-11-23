@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Cropper, { Area } from "react-easy-crop";
 import { Check, ImagePlus, Scissors, Trash2, X, ZoomIn } from "lucide-react";
 import { PlayerIconCropSettings } from "../lib/playerIconCrop";
@@ -50,7 +51,7 @@ export default function PlayerIconEditor({ iconUrl, disabled, busy, onUpload, on
       }
     };
     document.addEventListener("keydown", onKeyDown);
-    dialogRef.current?.focus();
+    dialogRef.current?.focus({ preventScroll: true });
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
@@ -82,6 +83,69 @@ export default function PlayerIconEditor({ iconUrl, disabled, busy, onUpload, on
       {iconUrl ? <img src={iconUrl} alt="現在のPlayer画像" className="h-20 w-20 rounded-full border-2 border-blue-500/40 object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-full bg-slate-800 text-slate-500">未登録</div>}
       {!disabled && <><label ref={chooserRef} tabIndex={0} className="cursor-pointer rounded-xl bg-slate-800 px-4 py-3 font-bold text-slate-200 hover:bg-slate-700"><ImagePlus className="mr-2 inline" size={18} />画像を選択<input className="hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { choose(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>{iconUrl && onDelete && <button type="button" disabled={busy||processing} onClick={() => void onDelete()} className="rounded-xl bg-red-950 px-4 py-3 font-bold text-red-300"><Trash2 className="mr-2 inline" size={18} />削除</button>}{onSkip&&<button type="button" onClick={onSkip} className="rounded-xl border border-slate-700 px-4 py-3 font-bold text-slate-300">次へ（編成登録）</button>}</>}
     </div>
-    {source && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md" onMouseDown={event=>{if(event.target===event.currentTarget)cancel();}}><div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="プロフィール画像の編集" className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl bg-slate-900 shadow-2xl ring-1 ring-white/10"><div className="flex items-center justify-between border-b border-white/5 p-6"><h3 className="flex items-center gap-2 text-xl font-black text-white"><Scissors className="text-blue-400" />プロフィール画像の編集</h3><button onClick={cancel} disabled={processing||busy} aria-label="キャンセル"><X /></button></div><div className="relative min-h-[400px] flex-1 bg-black"><Cropper image={source} crop={cropSettings.crop} zoom={cropSettings.zoom} maxZoom={10} aspect={1} cropShape="round" showGrid={false} onCropChange={crop=>onCropSettingsChange({...cropSettings,crop})} onZoomChange={zoom=>onCropSettingsChange({...cropSettings,zoom})} onCropComplete={(_, pixels) => setArea(pixels)} /></div><div className="space-y-5 p-6">{error&&<div role="alert" className="rounded-xl bg-red-950/50 p-3 text-red-300">{error}</div>}<div className="flex justify-between text-sm text-slate-400"><span><ZoomIn className="mr-1 inline" size={15} />ズーム調節</span><b className="text-blue-400">{Math.round(cropSettings.zoom * 100)}%</b></div><div className="grid grid-cols-3 gap-2">{[[1,"小 (1倍)"],[6,"中 (6倍)"],[10,"大 (10倍)"]].map(([value,label]) => <button key={value} disabled={processing||busy} onClick={() => onCropSettingsChange({...cropSettings,zoom:Number(value)})} className={`rounded-lg px-3 py-2 text-sm font-bold ${cropSettings.zoom === value ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-400"}`}>{label}</button>)}</div><div className="flex gap-4"><button onClick={cancel} disabled={processing||busy} className="flex-1 rounded-xl bg-slate-800 py-3 font-bold text-slate-300 disabled:opacity-50">キャンセル</button><button onClick={() => void confirm()} disabled={processing||busy||!area} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold text-white disabled:opacity-50"><Check className="mr-2 inline" size={18} />{processing||busy?"処理中...":"決定してアップロード"}</button></div></div></div></div>}
+    {source && createPortal(
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+        onMouseDown={event => { if (event.target === event.currentTarget) cancel(); }}
+      >
+        <div
+          ref={dialogRef}
+          tabIndex={-1}
+          role="dialog"
+          aria-modal="true"
+          aria-label="プロフィール画像の編集"
+          className="flex max-h-[min(90dvh,100%)] w-full max-w-lg flex-col overflow-y-auto rounded-3xl bg-slate-900 shadow-2xl ring-1 ring-white/10"
+        >
+          <div className="flex shrink-0 items-center justify-between border-b border-white/5 p-6">
+            <h3 className="flex items-center gap-2 text-xl font-black text-white">
+              <Scissors className="text-blue-400" />プロフィール画像の編集
+            </h3>
+            <button onClick={cancel} disabled={processing || busy} aria-label="キャンセル"><X /></button>
+          </div>
+          <div className="relative min-h-24 flex-[0_1_400px] bg-black">
+            <Cropper
+              image={source}
+              crop={cropSettings.crop}
+              zoom={cropSettings.zoom}
+              maxZoom={10}
+              aspect={1}
+              cropShape="round"
+              showGrid={false}
+              onCropChange={crop => onCropSettingsChange({ ...cropSettings, crop })}
+              onZoomChange={zoom => onCropSettingsChange({ ...cropSettings, zoom })}
+              onCropComplete={(_, pixels) => setArea(pixels)}
+            />
+          </div>
+          <div className="shrink-0 space-y-5 p-6">
+            {error && <div role="alert" className="rounded-xl bg-red-950/50 p-3 text-red-300">{error}</div>}
+            <div className="flex justify-between text-sm text-slate-400">
+              <span><ZoomIn className="mr-1 inline" size={15} />ズーム調節</span>
+              <b className="text-blue-400">{Math.round(cropSettings.zoom * 100)}%</b>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[[1, "小 (1倍)"], [6, "中 (6倍)"], [10, "大 (10倍)"]].map(([value, label]) => (
+                <button
+                  key={value}
+                  disabled={processing || busy}
+                  onClick={() => onCropSettingsChange({ ...cropSettings, zoom: Number(value) })}
+                  className={`rounded-lg px-3 py-2 text-sm font-bold ${cropSettings.zoom === value ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-400"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-4">
+              <button onClick={cancel} disabled={processing || busy} className="flex-1 rounded-xl bg-slate-800 py-3 font-bold text-slate-300 disabled:opacity-50">
+                キャンセル
+              </button>
+              <button onClick={() => void confirm()} disabled={processing || busy || !area} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold text-white disabled:opacity-50">
+                <Check className="mr-2 inline" size={18} />{processing || busy ? "処理中..." : "決定してアップロード"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    )}
   </section>;
 }
