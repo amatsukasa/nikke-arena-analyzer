@@ -4,19 +4,16 @@ import { useState } from "react";
 import { useI18n } from "@/i18n/I18nProvider";
 import { getCharIconUrl } from "@/utils/charIcon";
 import {
-  summaryStageLabel, summaryWeapons, type Adoption, type BurstRanking,
+  summaryStageLabel, summaryWeapons, type SummaryCharacter,
   type SummaryStage, type Weapon, type WeaponAdoption,
 } from "@/lib/seasonSummary";
 
-type Character = { id: number; name: string; is_template_available: boolean; template_filename?: string; icon_url?: string };
-
-const panel = "min-w-0 space-y-4 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:p-6";
+const panel = "min-w-0 space-y-4 rounded-2xl border border-white/10 bg-slate-950/60 p-4 text-slate-100 sm:p-6";
 const selector = "min-h-11 rounded-lg border border-white/15 px-3 text-sm text-slate-300 hover:bg-white/10 aria-pressed:border-sky-500 aria-pressed:bg-sky-900 aria-pressed:text-white";
 const officialStages = ["league", "championship", "final"] as const;
-const burstLabels = { "1": "Ⅰ", "2": "Ⅱ", "3": "Ⅲ" } as const;
 const colors = {
-  SG: "#34d9ce", SR: "#a9a4ff", AR: "#6ba7ff", MG: "#fb9d68",
-  RL: "#d888ea", SMG: "#d4ca6a", unknown: "#94a3b8",
+  AR: "#2484ff", MG: "#ff721f", RL: "#9f50ff", SG: "#00e1aa",
+  SMG: "#ffd31a", SR: "#ff3d88", unknown: "#94a3b8",
 };
 
 function useNumberFormats() {
@@ -27,14 +24,14 @@ function useNumberFormats() {
   };
 }
 
-export function NikkeBadge({ nikke, characters, iconOnly = false }: {
-  nikke: { id: number; name: string }; characters: Character[]; iconOnly?: boolean;
+export function NikkeBadge({ nikke, characters, iconOnly = false, portraitSize = "size-9 sm:size-10" }: {
+  nikke: { id: number; name: string }; characters: SummaryCharacter[]; iconOnly?: boolean; portraitSize?: string;
 }) {
   const [failedUrl, setFailedUrl] = useState("");
   const url = getCharIconUrl(characters.find(character => character.id === nikke.id));
   return (
     <span className="flex min-w-0 flex-col items-center gap-1 text-center" title={nikke.name}>
-      <span className="flex size-9 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-slate-800 sm:size-10">
+      <span className={"flex items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-slate-800 " + portraitSize}>
         {url && failedUrl !== url ? (
           <img src={url} alt="" loading="lazy" decoding="async" onError={() => setFailedUrl(url)} className="size-full object-cover" />
         ) : <span aria-hidden="true" className="text-[10px] text-slate-300">{nikke.name.slice(0, 3)}</span>}
@@ -55,14 +52,11 @@ function WeaponPie({ stage, data, selected }: {
   let pie = null;
   if (data && slots) {
     const categories = [...summaryWeapons, "unknown"] as const;
-    const highlight = categories.indexOf(selected);
-    const ordered = [...categories.slice(highlight), ...categories.slice(0, highlight)];
     let used = 0;
-    const segments = ordered.filter(weapon => data.counts[weapon] > 0).map(weapon => {
+    const segments = categories.filter(weapon => data.counts[weapon] > 0).map(weapon => {
       const start = used / slots * 100;
       used += data.counts[weapon];
-      const color = weapon === selected ? colors[weapon] : "color-mix(in srgb, " + colors[weapon] + " 63%, #111827)";
-      return color + " " + start + "% " + used / slots * 100 + "%";
+      return colors[weapon] + " " + start + "% " + used / slots * 100 + "%";
     });
     const breakdown = categories.map(weapon => {
       const name = weapon === "unknown" ? t("common.unknown") : weapon;
@@ -95,7 +89,7 @@ function WeaponPie({ stage, data, selected }: {
 }
 
 export function WeaponAdoptionPanel({ data, isBeta, characters }: {
-  data: WeaponAdoption; isBeta: boolean; characters: Character[];
+  data: WeaponAdoption; isBeta: boolean; characters: SummaryCharacter[];
 }) {
   const { t } = useI18n();
   const { count, percent } = useNumberFormats();
@@ -123,12 +117,13 @@ export function WeaponAdoptionPanel({ data, isBeta, characters }: {
       <h4 className="text-base font-bold">{t("seasonAdoption.weaponRanking")}</h4>
       {data.slots > 0 && <p className="text-xs text-slate-400">{t("seasonAdoption.weaponRankingScope", { total: count.format(data.slots) })}</p>}
       {unknown > 0 && <p className="text-xs text-slate-400">{t("seasonAdoption.unknownSlots", { count: count.format(unknown) })}</p>}
-      {ranked.length ? <ol data-testid="weapon-nikke-ranking" className="divide-y divide-white/10">
-        {ranked.map((row, index) => <li key={row.id} className="flex items-center gap-2 py-1.5 text-sm">
-          <span className="w-4 shrink-0 text-center text-xs tabular-nums text-slate-400">{index + 1}</span>
-          <span aria-hidden="true"><NikkeBadge nikke={row} characters={characters} iconOnly /></span>
-          <span className="min-w-0 flex-1 break-words">{row.name}</span>
-          <strong className="shrink-0 tabular-nums" style={{ color: colors[selected] }}
+      {ranked.length ? <ol data-testid="weapon-nikke-ranking" className="grid grid-cols-5 gap-2 sm:gap-3">
+        {ranked.map(row => <li key={row.id} className="flex min-w-0 flex-col items-center gap-1 text-center">
+          <span aria-hidden="true" className="w-full">
+            <NikkeBadge nikke={row} characters={characters} iconOnly portraitSize="aspect-square w-full max-w-12 sm:max-w-14" />
+          </span>
+          <span className="line-clamp-2 min-h-7 break-words text-[10px] leading-3.5 sm:text-xs" title={row.name}>{row.name}</span>
+          <strong className="text-xs tabular-nums sm:text-sm" style={{ color: colors[selected] }}
             title={t("seasonAdoption.slotFraction", { count: count.format(row.count), total: count.format(row.population) })}>
             {row.rate === null ? "—" : percent.format(row.rate / 100)}
           </strong>
@@ -136,38 +131,4 @@ export function WeaponAdoptionPanel({ data, isBeta, characters }: {
       </ol> : <p className="text-sm text-slate-400">{t(data.slots ? "seasonAdoption.noWeaponAdoption" : "seasonSummary.noRegistrations")}</p>}
     </div>
   </section>;
-}
-
-function Counts({ value }: { value: Adoption }) {
-  const { count, percent } = useNumberFormats();
-  if (value.rate === null) return <span className="text-slate-400">—</span>;
-  return <span className="tabular-nums">
-    <strong className="block text-sky-200">{percent.format(value.rate / 100)}</strong>
-    <span className="text-slate-300">{count.format(value.count)} / {count.format(value.population)}</span>
-  </span>;
-}
-
-export function BurstPanel({ data, stage }: { data: BurstRanking; stage: SummaryStage }) {
-  const { t } = useI18n();
-  const [burst, setBurst] = useState<keyof typeof burstLabels>("1");
-  const groups = Object.keys(burstLabels) as (keyof typeof burstLabels)[];
-  const rows = data.groups[burst];
-  return <details className="min-w-0 rounded-2xl border border-white/10 bg-slate-950/60 px-4 sm:px-6">
-    <summary className="min-h-11 cursor-pointer py-3 font-bold">
-      {t("seasonAdoption.burst")} <span className="ml-1 text-sm font-normal text-slate-400">{t(summaryStageLabel(stage))}</span>
-    </summary>
-    <div className="space-y-3 pb-4">
-      <div role="group" aria-label={t("seasonAdoption.burst")} className="flex flex-wrap gap-2">
-        {groups.map(key => <button key={key} type="button" aria-pressed={burst === key}
-          onClick={() => setBurst(key)} className={selector}>{t("seasonAdoption.burstLabel", { burst: burstLabels[key] })}</button>)}
-      </div>
-      <p className="text-xs text-slate-400">{t("seasonAdoption.burstNotes")}</p>
-      {!data.population ? <p className="text-sm text-slate-400">{t("seasonSummary.noRegistrations")}</p> :
-        rows.length ? <ol className="grid gap-1.5">{rows.map(row =>
-          <li key={row.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 px-3 py-2 text-sm">
-            <span className="min-w-0 break-words">{row.name}</span><Counts value={row} />
-          </li>,
-        )}</ol> : <p className="text-sm text-slate-400">{t("seasonAdoption.noBurstAdoption")}</p>}
-    </div>
-  </details>;
 }

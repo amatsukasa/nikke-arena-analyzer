@@ -1823,8 +1823,11 @@ def get_dashboard_summary(
     tournament_id: int,
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+    highlights_only: bool = False,
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if highlights_only:
+        return season_summary.tournament_highlights(db, tournament)
     return get_dashboard_summary_data(tournament, db)
 
 def _champion_arena_master_payload(tournament: models.Tournament) -> dict:

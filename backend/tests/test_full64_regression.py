@@ -299,6 +299,15 @@ class Full64RegressionTest(unittest.TestCase):
         self.assertEqual(summary["players_without_decks"], [])
         self.assertEqual(summary["players_with_incomplete_decks"], [])
 
+        highlights = main.get_dashboard_summary(self.tournament.id, self.db, self.user, highlights_only=True)
+        self.assertEqual(highlights["rounds"], {"attack": 63, "defense": 0, "total": 63})
+        self.assertEqual(highlights["weapon_adoption"]["slots"], 1600)
+        for side, wins in (("attack", 63), ("defense", 0)):
+            featured, = highlights["side_leaders"][side]
+            self.assertEqual(featured["character_ids"], [1, 2, 3, 4, 5])
+            self.assertEqual((featured["rounds"], featured["wins"]), (63, wins))
+            self.assertTrue(featured["has_details"])
+
         stats = main._compute_dashboard_stats(self.tournament.id, self.db, self.user)
         self.assertEqual((stats["total_players"], stats["total_matches"]), (64, 63))
         self.assertEqual(len(stats["character_stats"]), 25)

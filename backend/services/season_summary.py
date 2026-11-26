@@ -48,7 +48,7 @@ def public_rows(db, championship_id, play_server):
 
 
 EMPTY_NIKKE = 9999
-MIN_SIDE_ROUNDS = 5
+MIN_SIDE_ROUNDS = 50
 BATTLE_SIDES = ("attack", "defense")
 
 
@@ -114,13 +114,16 @@ def side_results(matches, legacy_decks):
 def side_leaders(counts, wins):
     leaders = {}
     for side in BATTLE_SIDES:
-        eligible = [(key, total) for key, total in counts[side].items() if total >= MIN_SIDE_ROUNDS]
-        eligible.sort(key=lambda row: (-Fraction(wins[side][row[0]], row[1]), -row[1], row[0]))
-        leaders[side] = [{
-            "canonical_id": key, "character_ids": [int(cid) for cid in key.split(",")],
-            "wins": wins[side][key], "losses": total - wins[side][key], "rounds": total,
-            "win_rate": rate(wins[side][key], total),
-        } for key, total in eligible[:5]]
+        eligible = ((key, total) for key, total in counts[side].items() if total >= MIN_SIDE_ROUNDS)
+        best = min(eligible, key=lambda row: (-Fraction(wins[side][row[0]], row[1]), -row[1], row[0]), default=None)
+        leaders[side] = []
+        if best:
+            key, total = best
+            leaders[side].append({
+                "canonical_id": key, "character_ids": [int(cid) for cid in key.split(",")],
+                "wins": wins[side][key], "losses": total - wins[side][key], "rounds": total,
+                "win_rate": rate(wins[side][key], total),
+            })
     return {"minimum_rounds": MIN_SIDE_ROUNDS, **leaders}
 
 
@@ -277,42 +280,61 @@ def debut_statistics(db, character_ids, groups, stages, initial, aggregate, bulk
     }
 
 
+def character_catalog(db):
+    return {row.id: row for row in db.execute(select(models.Character.id, models.Character.name, models.Character.weapon))}
+
+
+def highlights(db, bulk, ids, groups, stages, matches, catalog):
+    legacy_decks = {}
+    for deck in bulk.get("decks", []):
+        legacy_decks.setdefault(deck.player_id, deck)
+    sides, counts, wins, team_counts, team_wins = side_results(matches, legacy_decks)
+    leaders = side_leaders(team_counts, team_wins)
+    if any(leaders[side] for side in BATTLE_SIDES):
+        # Link only if Details can display the same recorded wins and rounds.
+        details = composition_analytics.build(db, bulk, ids, None, matches=matches)
+        add_details_links(leaders, details["teams"]["all"])
+    return {
+        **sides,
+        "side_leaders": leaders,
+        "initial_stage": "legacy" if stages == ("legacy",) else "final",
+        "weapon_adoption": season_adoption.weapon_statistics(db, bulk, groups, stages, catalog),
+    }, counts, wins
+
+
+def tournament_highlights(db, tournament):
+    ids = [tournament.id]
+    groups = stage_ids([tournament])
+    stages = STAGES if arena_phases.supported(tournament) else ("legacy",)
+
+    def compute():
+        with arena_phases.analysis_scope(db, ids) as bulk:
+            data, _, _ = highlights(db, bulk, ids, groups, stages,
+                                    arena_phases.effective_matches(db, ids), character_catalog(db))
+            return data
+
+    return cross_analytics.cached(db, ids, "all", "tournament-summary-highlights-v1", compute)
+
+
 def statistics(db, title, rows, scope, trends, aggregate):
     ids = scope["tournament_ids"]
     groups = stage_ids(rows)
     formal = any(row.deck_registration_phases for row in rows) if rows else bool(title.deck_registration_phases)
     stages = [*STAGES, "legacy"] if formal and groups["legacy"] else STAGES if formal else ("legacy",)
-    initial = "final" if formal else "legacy"
     character_stage = "championship" if formal else "legacy"
     debut_ids = title.debut_character_ids or []
-    cache_kind = repr(("season-summary-v5", title.id, scope["play_server"], debut_ids))
+    cache_kind = repr(("season-summary-v6", title.id, scope["play_server"], debut_ids))
 
     def compute():
         with (arena_phases.analysis_scope(db, ids) if ids else nullcontext({})) as bulk:
             matches = arena_phases.effective_matches(db, ids) if ids else []
-            legacy_decks = {}
-            for deck in bulk.get("decks", []):
-                legacy_decks.setdefault(deck.player_id, deck)
-            sides, counts, wins, team_counts, team_wins = side_results(matches, legacy_decks)
-            leaders = side_leaders(team_counts, team_wins)
-            if any(leaders[side] for side in BATTLE_SIDES):
-                # Some recorded teams have no Details card, and malformed rounds can differ.
-                # Verify the actual Details totals once over the shared analysis scope.
-                details = composition_analytics.build(db, bulk, ids, None, matches=matches)
-                add_details_links(leaders, details["teams"]["all"])
-            catalog = {row.id: row for row in db.execute(select(
-                models.Character.id, models.Character.name, models.Character.weapon, models.Character.burst_phase,
-            ))} if ids or debut_ids else {}
+            catalog = character_catalog(db) if ids or debut_ids else {}
+            data, counts, wins = highlights(db, bulk, ids, groups, stages, matches, catalog)
             names = {cid: row.name for cid, row in catalog.items()}
             stage_data = stage_trends(db, groups, stages, trends, matches)
             return {
-                **sides,
-                "side_leaders": leaders,
-                "initial_stage": initial,
+                **data,
                 "rankings": ranking_sections(groups, stage_data),
-                "weapon_adoption": season_adoption.weapon_statistics(db, bulk, groups, stages, catalog),
-                "burst_rankings": {stage: season_adoption.burst_rankings(stats, catalog)
-                                   for stage, stats in stage_data.items()},
                 "debut": debut_statistics(db, debut_ids, groups, stages, character_stage, aggregate, bulk, names, counts, wins),
             }
 

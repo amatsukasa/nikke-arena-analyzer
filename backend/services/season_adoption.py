@@ -1,12 +1,11 @@
-"""Weapon slot shares and Burst rankings for the public Summary."""
+"""Weapon slot shares and rankings for Summary."""
 
 from collections import Counter
 
 from services import arena_phases, registration_adoption
 
 
-WEAPONS = ("SG", "SR", "AR", "MG", "RL", "SMG")
-BURSTS = ("1", "2", "3")
+WEAPONS = ("AR", "MG", "RL", "SG", "SMG", "SR")
 
 
 def measure(count, population):
@@ -48,16 +47,3 @@ def weapon_statistics(db, bulk, groups, stages, catalog):
         if weapon and len(rankings[weapon]) < 5:
             rankings[weapon].append({"id": cid, "name": catalog[cid].name, **measure(count, total)})
     return {"by_stage": by_stage, "slots": total, "rankings": rankings}
-
-
-def burst_rankings(trends, catalog):
-    adoption = trends.get("character_usage_by_result", {}).get("all", {})
-    population = trends["total_players"]
-    ranked = {burst: [] for burst in BURSTS}
-    for row in adoption.get("characters", ()):
-        character = catalog.get(row["id"])
-        burst = character.burst_phase if character else None
-        for group in BURSTS if burst == "A" else (burst,):
-            if group in ranked and len(ranked[group]) < 5:
-                ranked[group].append({"id": row["id"], "name": row["name"], **measure(row["count"], population)})
-    return {"population": population, "groups": ranked}

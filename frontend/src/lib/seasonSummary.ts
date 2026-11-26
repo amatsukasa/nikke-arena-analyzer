@@ -31,10 +31,8 @@ export type RankedTeam = Adoption & {
 };
 export type Ranking = { tournament_ids: number[]; population: number; teams: RankedTeam[] };
 type NamedNikke = { id: number; name: string };
-type Burst = "1" | "2" | "3";
-export const summaryWeapons = ["SG", "SR", "AR", "MG", "RL", "SMG"] as const;
+export const summaryWeapons = ["AR", "MG", "RL", "SG", "SMG", "SR"] as const;
 export type Weapon = (typeof summaryWeapons)[number];
-export type BurstRanking = { population: number; groups: Record<Burst, (NamedNikke & Adoption)[]> };
 export type WeaponAdoption = {
   by_stage: Partial<Record<SummaryStage, { slots: number; counts: Record<Weapon | "unknown", number> }>>;
   slots: number;
@@ -51,14 +49,17 @@ export type DebutResults = Adoption & {
 };
 type DebutCharacter = NamedNikke & { sections: { all: DebutResults } & Partial<Record<SummaryStage, DebutResults>> };
 
-export type SummaryStatistics = Scope & {
+export type SummaryCharacter = NamedNikke & { is_template_available: boolean; template_filename?: string; icon_url?: string };
+export type SummaryHighlightsData = {
   rounds: Result;
   matches: Result;
   side_leaders: SideLeaders;
   initial_stage: SummaryStage;
-  rankings: Partial<Record<SummaryStage, Ranking>>;
   weapon_adoption: WeaponAdoption;
-  burst_rankings: Partial<Record<SummaryStage, BurstRanking>>;
+};
+
+export type SummaryStatistics = Scope & SummaryHighlightsData & {
+  rankings: Partial<Record<SummaryStage, Ranking>>;
   debut: { stage: SummaryStage; tournament_ids: number[]; characters: DebutCharacter[];
     tournament_ids_by_stage: Partial<Record<SummaryStage, number[]>> } | null;
 };
