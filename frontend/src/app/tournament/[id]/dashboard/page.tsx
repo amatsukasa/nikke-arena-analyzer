@@ -2,6 +2,8 @@
 import { TeamSearchPanel, TeamWinRatePanel, useTeamSearchFilters, useTeamWinRateFilters } from "@/components/TeamAnalysisPanels";
 import CompositionDetails from "@/components/CompositionDetails";
 import TrendsRankings from "@/components/TrendsRankings";
+import TournamentSummary from "@/components/TournamentSummary";
+import type { SummaryHighlightsData } from "@/lib/seasonSummary";
 import {useTeamSearchUsage} from "@/hooks/useTeamSearchUsage";
 import { useTeamDetailsUrl } from "@/hooks/useTeamDetailsUrl";
 import { TeamRegistrationUsage, CommanderResultBadge, TeamBestResults } from "@/components/TeamStatisticsMeaning";
@@ -21,9 +23,10 @@ import { getCharIconUrl } from "@/utils/charIcon";
 import { useI18n } from "@/i18n/I18nProvider";
 import { localizedTournamentResult } from "@/lib/tournamentResult";
 
-type DashboardTab = "review" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
+type DashboardTab = "review" | "summary" | "my_dashboard" | "overview" | "winrate" | "team_winrate" | "matchups" | "search" | "best8";
 const TOURNAMENT_TABS = new Set<DashboardTab>([
   "review",
+  "summary",
   "team_winrate",
   "matchups",
   "search",
@@ -66,6 +69,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
   const [myPlayerDetails, setMyPlayerDetails] = useState<any>(null);
   const [best8Data, setBest8Data] = useState<any[]>([]);
   const [dashboardSummary, setDashboardSummary] = useState<any>(null);
+  const [summaryHighlights, setSummaryHighlights] = useState<SummaryHighlightsData | null>(null);
   const [isPrivateTournament, setIsPrivateTournament] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -189,6 +193,7 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
     const controller = new AbortController();
     setStats(null);
     setDashboardSummary(null);
+    setSummaryHighlights(null);
     setBracketData(null);
     setMyPlayerDetails(null);
     const fetchData = async () => {
@@ -212,14 +217,15 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
         setTournament(tournData);
         setIsPrivateTournament(true);
 
+        const summaryQuery = activeTab === "summary" ? "highlights_only=true" : `t=${timestamp}`;
         const urls = [
-          `/api/tournaments/${tournamentId}/dashboard/summary?t=${timestamp}`,
+          `/api/tournaments/${tournamentId}/dashboard/summary?${summaryQuery}`,
           `/api/tournaments/${tournamentId}/bracket?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/player-stats?seed=${selectedSeed}&t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/best8-decks?t=${timestamp}`,
           `/api/tournaments/${tournamentId}/dashboard/stats?t=${timestamp}`
         ];
-        const requestedUrls = ["overview", "team_winrate", "search", "matchups"].includes(activeTab) ? urls.slice(0,2) : !embedded && registrationMode === "all" && tournData.deck_registration_phases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? urls.slice(0,2) : urls;
+        const requestedUrls = ["summary", "overview", "team_winrate", "search", "matchups"].includes(activeTab) ? urls.slice(0,2) : !embedded && registrationMode === "all" && tournData.deck_registration_phases && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? urls.slice(0,2) : urls;
         const responses = await Promise.all(requestedUrls.map(url => phaseFetch(url, { cache: 'no-store', headers: authHeaders, signal: controller.signal })));
 
         for (let i = 0; i < responses.length; i++) {
@@ -245,7 +251,8 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
           responses.map(res => res.json())
         );
 
-        setDashboardSummary(summaryData);
+        if (activeTab === "summary") setSummaryHighlights(summaryData);
+        else setDashboardSummary(summaryData);
         setBracketData(bracketDataRaw);
         setMyPlayerDetails(detailsData);
         setBest8Data(best8DataRaw);
@@ -633,6 +640,13 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
           <span>入力確認</span>
         </button>
         <button
+          onClick={() => setActiveTab("summary")}
+          className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "summary" ? "bg-blue-600 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
+        >
+          <Layers3 size={18} />
+          <span>Summary</span>
+        </button>
+        <button
           onClick={() => setActiveTab("team_winrate")}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all whitespace-nowrap ${activeTab === "team_winrate" ? "bg-pink-500 text-white shadow-lg" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"}`}
         >
@@ -797,7 +811,10 @@ function DashboardView({phaseOverride,embedded=false,activeTabOverride,selectedS
             )}
           </div>
         )}
-        {showAllPhases && activeTab !== "review" && !(["winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? <div className="space-y-10">
+        {!embedded && activeTab === "summary" && tournamentId && summaryHighlights && (
+          <TournamentSummary key={tournamentId} tournamentId={tournamentId} data={summaryHighlights} characters={allCharacters} />
+        )}
+        {showAllPhases && activeTab !== "review" && !(["summary","winrate","team_winrate","search","overview","matchups","best8","my_dashboard"].includes(activeTab)) ? <div className="space-y-10">
           <p className="text-sm text-slate-400">{t("arenaPhases.separateStatisticsNotice")}</p>
           {(tournament.registration_scope==="champion_8"?["championship","final"]:["league","championship","final"]).map(phase=><section key={phase} className="space-y-5 border-t border-white/10 pt-6">
             <h2 className="text-xl font-black text-blue-300">{t(`arenaPhases.${phase}`)}</h2>

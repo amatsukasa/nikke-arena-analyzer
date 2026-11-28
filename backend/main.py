@@ -252,7 +252,7 @@ from services.champion_result import normalize_champion_result
 from services import arena_phases
 from services.champion_publication import validate_champion_publication
 from copy import deepcopy
-from services import composition_analytics, cross_analytics, team_statistics_display
+from services import composition_analytics, cross_analytics, registration_adoption, team_statistics_display
 from services.champion_snapshot import enrich_champion_snapshot_stats
 from services.tournament_results import (
     RESULT_SCORES as TOURNAMENT_RESULT_SCORES,
@@ -1823,8 +1823,11 @@ def get_dashboard_summary(
     tournament_id: int,
     db: Session = Depends(get_db),
     current_user: models.AppUser | None = Depends(auth_module.get_current_user_optional),
+    highlights_only: bool = False,
 ):
     tournament = require_tournament_dashboard_viewer(tournament_id, db, current_user)
+    if highlights_only:
+        return season_summary.tournament_highlights(db, tournament)
     return get_dashboard_summary_data(tournament, db)
 
 def _champion_arena_master_payload(tournament: models.Tournament) -> dict:
@@ -5692,7 +5695,9 @@ def _trends_stats(ids, db, phase, finish, *, shared_matches=None):
         raise HTTPException(422, "Invalid Trends filter")
     def compute():
         with arena_phases.analysis_scope(db, ids) as scope:
-            tournaments = {tid:t for tid,t in scope["tournaments"].items() if arena_phases.analysis_applicable(t, phase)}
+            selected = set(ids)
+            tournaments = {tid: t for tid, t in scope["tournaments"].items()
+                           if tid in selected and arena_phases.analysis_applicable(t, phase)}
             players = [p for p in scope["players"] if p.tournament_id in tournaments]
             matches = (arena_phases.effective_matches(db, list(tournaments)) if shared_matches is None
                        else [match for match in shared_matches if match.tournament_id in tournaments])
@@ -5700,23 +5705,19 @@ def _trends_stats(ids, db, phase, finish, *, shared_matches=None):
             for tid,tournament in tournaments.items():
                 codes = calculate_player_results(tournament, [p for p in players if p.tournament_id==tid], [m for m in matches if m.tournament_id==tid])
                 results.update({pid:result_label(code) for pid,code in codes.items()})
-            decks = arena_phases.phase_deck_sets(db, [p.id for p in players], phase)
-            maximum = thresholds[finish] if phase=="legacy" else None
-            decks = [d for d in decks if len(d.teams)==5 and (maximum is None or RESULT_SCORES.get(results.get(d.player_id),999)<=maximum)]
+            decks = registration_adoption.trends_decks(db, players, phase)
+            maximum = thresholds[finish] if phase == "legacy" else None
+            if maximum is not None:
+                decks = [deck for deck in decks if RESULT_SCORES.get(results.get(deck.player_id), 999) <= maximum]
             eligible = {d.player_id for d in decks}
             denominator = len(eligible)
             characters = {c.id:c for c in db.query(models.Character).all()}
-            character_users, team_users, occurrences, rows = {}, {}, {}, {}
-            for deck in decks:
-                for team in deck.teams:
-                    key = team_statistics_display.canonical(team)
-                    if not key: continue
-                    ids_in_team = [getattr(team,f"char{i}_id") for i in range(1,6)]
-                    for cid in set(ids_in_team)-{EMPTY_SLOT_CHARACTER_ID}:
-                        if cid in characters: character_users.setdefault(cid,set()).add(deck.player_id)
-                    team_users.setdefault(key,set()).add(deck.player_id)
-                    occurrences[key] = occurrences.get(key,0)+1
-                    rows.setdefault(key,{"canonical_id":key,"character_ids":ids_in_team,"characters":[{"id":cid,"name":characters[cid].name} for cid in ids_in_team if cid in characters],"win_count":0,"total_matches":0})
+            character_users, team_users, occurrences, first_orders = registration_adoption.trends_usage(decks, characters)
+            rows = {key: {
+                "canonical_id": key, "character_ids": character_ids,
+                "characters": [{"id": cid, "name": characters[cid].name} for cid in character_ids if cid in characters],
+                "win_count": 0, "total_matches": 0,
+            } for key, character_ids in first_orders.items()}
             for match in matches:
                 if not arena_phases.matches_analysis_phase(db,match,phase): continue
                 for pid in (match.attacker_id,match.defender_id):
@@ -5736,7 +5737,7 @@ def _trends_stats(ids, db, phase, finish, *, shared_matches=None):
                 row.update(count=occurrences[key],player_count=count,adoption_rate=round(count/denominator*100,1) if denominator else 0,win_rate=round(row["win_count"]/total*100,1) if total else None)
             team_statistics_display.annotate(teams,team_statistics_display.metadata(decks,matches,results,phase,tournaments,players),phase)
             teams.sort(key=lambda row:(-row["player_count"],-row["count"],row["canonical_id"]))
-            chars=[{"id":cid,"name":characters[cid].name,"count":len(users),"usage_rate":round(len(users)/denominator*100,1) if denominator else 0} for cid,users in character_users.items()]
+            chars=[{"id":cid,"name":characters[cid].name,"count":len(users),"usage_rate":registration_adoption.trends_rate(len(users), denominator)} for cid,users in character_users.items()]
             chars.sort(key=lambda row:(-row["count"],row["id"]))
             return {"registration_phase":phase,"total_players":denominator,"team_usage":teams,"character_usage_by_result":{"all":{"denominator":denominator,"characters":chars}}}
     return cross_analytics.cached(db,ids,phase,"trends-population-v1:"+finish,compute)
@@ -5794,8 +5795,8 @@ def _cross_aggregate(ids, db, phase, *, shared_scope=None):
         if shared_scope is not None and db.info.get("arena_analysis_scope") is None:
             shared_scope.enter_context(arena_phases.analysis_scope(db, ids))
         with arena_phases.analysis_scope(db, ids) as scope:
-            applicable = [t.id for t in scope["tournaments"].values()
-                if arena_phases.analysis_applicable(t, phase)]
+            applicable = [tid for tid in ids
+                          if tid in scope["tournaments"] and arena_phases.analysis_applicable(scope["tournaments"][tid], phase)]
             if not applicable:
                 return {**empty_cross_tournament_stats(db), "registration_phase": phase}
             if phase == "legacy":

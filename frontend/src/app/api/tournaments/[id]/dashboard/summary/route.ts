@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { proxyBackend } from '@/lib/backendProxy';
 
 const BACKEND_URL = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    if (request.nextUrl.searchParams.get('highlights_only') === 'true') {
+      return proxyBackend(request, `/api/tournaments/${id}/dashboard/summary?highlights_only=true`);
+    }
     const token = request.cookies.get('auth_token')?.value;
     const res = await fetch(`${BACKEND_URL}/api/tournaments/${id}/dashboard/summary`, {
       method: 'GET',

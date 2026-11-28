@@ -55,36 +55,40 @@ class SeasonSummaryMathTest(TestCase):
                 round_results=[SimpleNamespace(round_number=i, winner_id=1 if i < 4 else 2) for i in range(1, 6)],
             )
 
-        mirror = match(1, {1: attack, 2: defense}, "initial")
-        other = match(2, {1: next_attack, 2: partial_defense}, "final")
-        totals, character_counts, _, counts, wins = season_summary.side_results([mirror, mirror, other], {})
-        self.assertEqual(totals["rounds"], {"attack": 6, "defense": 4, "total": 10})
+        mirrors = [match(i, {1: attack, 2: defense}, "initial") for i in range(1, 11)]
+        other = match(11, {1: next_attack, 2: partial_defense}, "final")
+        totals, character_counts, _, counts, wins = season_summary.side_results([*mirrors, mirrors[0], other], {})
+        self.assertEqual(totals["rounds"], {"attack": 33, "defense": 22, "total": 55})
         self.assertEqual(character_counts["defense"][22], 5)
         leaders = season_summary.side_leaders(counts, wins)
-        self.assertEqual([row["character_ids"] for row in leaders["attack"]], [list(complete), list(offense_only)])
-        self.assertEqual([row["character_ids"] for row in leaders["defense"]], [list(complete)])
-        attack_row, = leaders["attack"][:1]
+        self.assertEqual(leaders["minimum_rounds"], 50)
+        attack_row, = leaders["attack"]
         defense_row, = leaders["defense"]
-        self.assertEqual((attack_row["wins"], attack_row["losses"], attack_row["win_rate"]), (3, 2, 60.0))
-        self.assertEqual((defense_row["wins"], defense_row["losses"], defense_row["win_rate"]), (2, 3, 40.0))
+        self.assertEqual(attack_row["character_ids"], list(complete))
+        self.assertEqual(defense_row["character_ids"], list(complete))
+        self.assertEqual((attack_row["wins"], attack_row["losses"], attack_row["win_rate"]), (30, 20, 60.0))
+        self.assertEqual((defense_row["wins"], defense_row["losses"], defense_row["win_rate"]), (20, 30, 40.0))
 
         season_summary.add_details_links(leaders, [{
-            "canonical_id": "11,12,13,14,15", "attack_wins": 3, "attack_matches": 5,
-            "win_count": 6, "total_matches": 11,
+            "canonical_id": "11,12,13,14,15", "attack_wins": 30, "attack_matches": 50,
+            "win_count": 60, "total_matches": 101,
         }])
         self.assertTrue(attack_row["has_details"])
         self.assertFalse(defense_row["has_details"])
-        self.assertFalse(leaders["attack"][1]["has_details"])
 
     def test_composition_rates_are_sorted_before_rounding_with_stable_ties(self):
-        stages = ["1,2,3,4," + str(cid) for cid in range(5, 12)]
-        counts = {"attack": Counter(dict(zip(stages, [5, 10, 10, 10, 1000, 9998, 4]))), "defense": Counter()}
-        wins = {"attack": Counter(dict(zip(stages, [4, 8, 8, 8, 800, 7999, 4]))), "defense": Counter()}
+        fewer, boundary, longer, close, tied = ("1,2,3,4," + str(cid) for cid in range(5, 10))
+        counts = {"attack": Counter({fewer: 49, boundary: 50, longer: 1000, close: 9998}),
+                  "defense": Counter({boundary: 50, longer: 70, tied: 70})}
+        wins = {"attack": Counter({fewer: 49, boundary: 40, longer: 800, close: 7999}),
+                "defense": Counter({boundary: 40, longer: 56, tied: 56})}
         leaders = season_summary.side_leaders(counts, wins)
-        self.assertEqual([row["canonical_id"] for row in leaders["attack"]],
-                         [stages[i] for i in (5, 4, 1, 2, 3)])
-        self.assertEqual({row["win_rate"] for row in leaders["attack"]}, {80.0})
-        self.assertEqual(leaders["defense"], [])
+        selected, = leaders["attack"]
+        self.assertEqual((selected["canonical_id"], selected["win_rate"]), (close, 80.0))
+        selected, = leaders["defense"]
+        self.assertEqual((selected["canonical_id"], selected["rounds"]), (longer, 70))
+        self.assertEqual(season_summary.side_leaders(
+            {"attack": Counter({fewer: 49}), "defense": Counter()}, wins)["attack"], [])
 
     def test_partners_are_sorted_across_all_burst_types_using_team_registrations(self):
         usage = [
@@ -132,7 +136,8 @@ class SeasonSummaryMathTest(TestCase):
                 for id, adoption in rows
             ]}
 
-        answer = season_summary.ranking_sections(None, groups, season_summary.STAGES, trends, [])
+        data = season_summary.stage_trends(None, groups, season_summary.STAGES, trends, [])
+        answer = season_summary.ranking_sections(groups, data)
         self.assertEqual(answer["league"]["tournament_ids"], [])
         final = answer["final"]["teams"]
         self.assertEqual([row["rank"] for row in final], [1, 2, 3, 3, 5, 5])
@@ -227,6 +232,78 @@ class SeasonSummaryApiTest(TestCase):
         self.assertEqual(self.admin.put("/api/championships/13", json={"name": "Beta", "debut_character_ids": [47]}).status_code, 200)
         beta = self.summary(13)["debut"]["characters"][0]["sections"]
         self.assertEqual(beta["all"], beta["legacy"])
+
+    def add_registration(self, db, tournament_id, player_id, ids, *, revision=False):
+        if db.get(models.Player, player_id) is None:
+            db.add(models.Player(id=player_id, name=str(player_id), tournament_id=tournament_id,
+                                 seed_number=player_id % 100, champion_slot=player_id % 100 if tournament_id == 207 else None))
+            db.flush()
+        teams = [ids[offset:offset + 5] for offset in range(0, len(ids), 5)]
+        if revision:
+            db.add(models.ArenaDeckRegistration(
+                tournament_id=tournament_id, player_id=player_id, phase="initial", qualification="initial",
+                teams=[{"team_number": number, "characters": [{"id": cid} for cid in team]}
+                       for number, team in enumerate(teams, 1)],
+            ))
+        else:
+            db.add(models.DeckSet(player_id=player_id, teams=[
+                models.DeckTeam(team_number=number, **{f"char{slot}_id": cid for slot, cid in enumerate(team, 1)})
+                for number, team in enumerate(teams, 1)
+            ]))
+
+    def test_weapon_shares_use_current_filled_slots_and_rank_across_stages(self):
+        with self.session.begin() as db:
+            ids = list(range(100, 125))
+            db.add_all([models.Character(id=cid, name=str(cid), weapon="SG" if cid < 106 else None if cid == 124 else "SR")
+                        for cid in ids])
+            self.add_registration(db, 210, 101, ids)
+            self.add_registration(db, 206, 201, ids, revision=True)
+            self.add_registration(db, 207, 202, ids)
+            self.add_registration(db, 208, 203, ids)
+            self.add_registration(db, 209, 204, ids)
+            db.flush()
+            self.add_registration(db, 206, 201, [47, *ids[1:-2], 9999, 124], revision=True)
+            db.get(models.Character, 47).weapon = "SR"
+
+        stats = self.summary(12)
+        self.assertNotIn("burst_rankings", stats)
+        weapons = stats["weapon_adoption"]
+        league, championship, final = [weapons["by_stage"][stage] for stage in season_summary.STAGES]
+        self.assertEqual((league["slots"], championship["slots"], final["slots"]), (24, 25, 0))
+        self.assertEqual((league["counts"]["SG"], championship["counts"]["SG"]), (5, 6))
+        self.assertEqual((league["counts"]["unknown"], championship["counts"]["unknown"]), (1, 1))
+        self.assertEqual(sum(league["counts"].values()), league["slots"])
+        self.assertEqual(weapons["slots"], 49)
+        self.assertEqual(weapons["rankings"]["SG"], [
+            {"id": cid, "name": str(cid), "count": 2, "population": 49, "rate": 4.1}
+            for cid in range(101, 106)
+        ])
+        self.assertEqual(self.summary(12, "GLOBAL")["weapon_adoption"]["slots"], 25)
+
+        beta = self.summary(13)
+        self.assertEqual(list(beta["weapon_adoption"]["by_stage"]), ["legacy"])
+        self.assertEqual(beta["weapon_adoption"]["slots"], 25)
+        self.assertEqual(list(weapons["rankings"]), ["AR", "MG", "RL", "SG", "SMG", "SR"])
+
+        def tournament_highlights(tid):
+            return f"/api/tournaments/{tid}/dashboard/summary?highlights_only=true"
+
+        self.assertEqual(self.reader.get(tournament_highlights(206)).status_code, 404)
+        self.assertEqual(self.provider.get(tournament_highlights(206)).status_code, 404)
+        private = self.admin.get(tournament_highlights(206))
+        self.assertEqual(private.status_code, 200)
+        self.assertEqual(private.json()["weapon_adoption"]["by_stage"]["league"], league)
+        self.assertEqual(private.json()["weapon_adoption"]["slots"], 24)
+        self.assertNotIn("burst_rankings", private.json())
+        self.assertEqual(self.provider.get(tournament_highlights(208)).status_code, 200)
+        self.assertEqual(self.admin.get(tournament_highlights(209)).json()["weapon_adoption"]["slots"], 25)
+
+        with self.session.begin() as db:
+            db.get(models.Tournament, 207).publication_status = "draft"
+        remaining = self.summary(12)["weapon_adoption"]
+        self.assertEqual(remaining["slots"], 24)
+        self.assertEqual(remaining["by_stage"]["championship"]["slots"], 0)
+        self.assertEqual(remaining["rankings"]["SG"][0]["count"], 1)
 
     def test_reference_capture_changes_only_on_explicit_capture_and_publication(self):
         body = {"kind": "season", "championship_id": 12, "title": "Note", "character_ids": [],
